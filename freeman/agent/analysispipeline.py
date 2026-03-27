@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List
 
 import yaml
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
+from freeman.agent.proactiveemitter import ProactiveEmitter, ProactiveEvent
 
 from freeman.core.scorer import raw_outcome_scores
 from freeman.core.types import Policy
@@ -33,6 +34,7 @@ class AnalysisPipelineResult:
     knowledge_graph_path: str
     reconciliation: ReconciliationResult | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    proactive_events: List[ProactiveEvent] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +69,7 @@ class AnalysisPipeline:
         knowledge_graph: KnowledgeGraph | None = None,
         reconciler: Reconciler | None = None,
         forecast_registry: ForecastRegistry | None = None,
+        emitter: ProactiveEmitter | None = None,
         config: AnalysisPipelineConfig | None = None,
         config_path: str | Path | None = None,
     ) -> None:
@@ -77,7 +80,9 @@ class AnalysisPipeline:
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
         self.reconciler = reconciler or Reconciler()
         self.forecast_registry = forecast_registry
+        self.emitter = emitter
         self.config = config or AnalysisPipelineConfig.from_config(config_path)
+        self._previous_outcome_probs: Dict[str, Dict[str, float]] = {}
 
     def run(
         self,
@@ -139,7 +144,7 @@ class AnalysisPipeline:
         )
         reconciliation = self.reconciler.reconcile(self.knowledge_graph, session_log)
 
-        return AnalysisPipelineResult(
+        result = AnalysisPipelineResult(
             world=final_world,
             simulation=sim_result.snapshot(),
             verification=verification,
@@ -156,6 +161,15 @@ class AnalysisPipeline:
                 "fixed_point_iters": sim_result.metadata.get("fixed_point_iters"),
             },
         )
+        if self.emitter is not None:
+            prev_probs = self._previous_outcome_probs.get(final_world.domain_id)
+            result.proactive_events = self.emitter.evaluate(result, prev_probs=prev_probs)
+        if sim_result.final_outcome_probs:
+            self._previous_outcome_probs[final_world.domain_id] = {
+                outcome_id: float(prob)
+                for outcome_id, prob in sim_result.final_outcome_probs.items()
+            }
+        return result
 
     def _signal_text(self, world: WorldState, session_log: SessionLog | None) -> str:
         """Build a compact retrieval query from the incoming signal context."""
