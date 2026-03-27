@@ -12,6 +12,38 @@ from freeman.exceptions import HardStopException
 from freeman.utils import SIGN_EPSILON
 
 
+def _repair_targets(world: WorldState, edge: CausalEdge) -> List[str]:
+    """Return likely parameter paths that control the sign of ``edge``."""
+
+    if edge.target not in world.resources:
+        return []
+
+    resource = world.resources[edge.target]
+    params = resource.evolution_params
+    targets: List[str] = []
+
+    if edge.source in params.get("coupling_weights", {}):
+        targets.append(f"resources.{edge.target}.evolution_params.coupling_weights.{edge.source}")
+    if edge.source in params.get("phi_params", {}).get("coupling_weights", {}):
+        targets.append(f"resources.{edge.target}.evolution_params.phi_params.coupling_weights.{edge.source}")
+    for branch_name in ("low_params", "high_params"):
+        if edge.source in params.get(branch_name, {}).get("coupling_weights", {}):
+            targets.append(f"resources.{edge.target}.evolution_params.{branch_name}.coupling_weights.{edge.source}")
+    for index, component in enumerate(params.get("components", [])):
+        if edge.source in component.get("evolution_params", {}).get("coupling_weights", {}):
+            targets.append(
+                "resources."
+                f"{edge.target}.evolution_params.components.{index}.evolution_params.coupling_weights.{edge.source}"
+            )
+        if edge.source in component.get("evolution_params", {}).get("phi_params", {}).get("coupling_weights", {}):
+            targets.append(
+                "resources."
+                f"{edge.target}.evolution_params.components.{index}.evolution_params.phi_params.coupling_weights.{edge.source}"
+            )
+
+    return targets
+
+
 def _compute_delta(world: WorldState, source_key: str, base_delta: float = 0.01) -> float:
     """Return a numerically meaningful shock size for ``source_key``."""
 
@@ -40,7 +72,12 @@ def level2_check(
                 check_name="sign_consistency_execution",
                 description="Base rollout for sign-consistency failed",
                 severity="hard",
-                details={"violations": [violation.snapshot() for violation in exc.violations]},
+                details={
+                    "field": "sign_consistency.base_rollout",
+                    "observed": "hard_stop",
+                    "expected": "successful rollout",
+                    "violations": [violation.snapshot() for violation in exc.violations],
+                },
             )
         ]
 
@@ -57,7 +94,11 @@ def level2_check(
                     description=f"Shocked rollout for edge {edge.source}->{edge.target} failed",
                     severity="hard",
                     details={
+                        "field": f"causal_dag.{edge.source}->{edge.target}",
                         "edge": edge.snapshot(),
+                        "observed": "hard_stop",
+                        "expected": "successful shocked rollout",
+                        "repair_targets": _repair_targets(world, edge),
                         "violations": [violation.snapshot() for violation in exc.violations],
                     },
                 )
@@ -80,9 +121,13 @@ def level2_check(
                     ),
                     severity="soft" if edge.strength == "weak" else "hard",
                     details={
+                        "field": f"causal_dag.{edge.source}->{edge.target}",
                         "edge": edge.snapshot(),
+                        "observed": observed_sign,
+                        "expected": edge.expected_sign,
                         "observed_delta": observed_delta,
                         "shock_delta": shock_delta,
+                        "repair_targets": _repair_targets(world, edge),
                     },
                 )
             )

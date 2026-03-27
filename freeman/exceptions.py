@@ -18,3 +18,7 @@ class HardStopException(RuntimeError):
 
 class ValidationError(ValueError):
     """Raised when a domain schema is invalid."""
+
+
+class SchemaRepairFailed(RuntimeError):
+    """Raised when the automated LLM repair loop cannot produce a valid schema."""

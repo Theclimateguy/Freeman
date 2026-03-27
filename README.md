@@ -39,8 +39,8 @@ Freeman includes a minimal DeepSeek orchestration layer in:
 The intended loop is:
 
 1. DeepSeek converts a natural-language domain brief into a compact structured package.
-2. Freeman validates and compiles the package into an executable world.
-3. Freeman runs the simulation and returns trajectory and verifier outputs.
+2. Freeman runs an automated repair loop over level-1 structure checks, a short level-0 trial rollout, and level-2 sign checks.
+3. Freeman compiles the verifier-clean package into an executable world and runs the simulation.
 4. DeepSeek interprets the result and proposes the next policy or scenario revision.
 
 Run a local DeepSeek-driven simulation with:
@@ -56,7 +56,7 @@ Notes:
 
 - Provide the DeepSeek credential via `DEEPSEEK_API_KEY`.
 - `runs/` is a local artifact directory and is ignored by git.
-- The current LLM workflow is pragmatic rather than fully autonomous: the most robust path is a compact concept, validation, repair, and then execution.
+- The orchestrator now performs autonomous schema repair from structured verifier feedback; compact schemas still produce the most reliable results.
 
 ## Test
 

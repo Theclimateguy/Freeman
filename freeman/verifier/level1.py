@@ -45,24 +45,26 @@ def spectral_radius(jacobian: np.ndarray) -> float:
     return float(np.max(np.abs(eigvals(jacobian))))
 
 
-def check_shock_decay(world: WorldState, resource_id: str, config: Any) -> bool:
-    """Return ``True`` when a unit shock on a resource decays within ``K`` steps."""
+def check_shock_decay(world: WorldState, resource_id: str, config: Any) -> tuple[bool, float]:
+    """Return decay status and final shocked-vs-baseline distance for one resource."""
 
     null_policies = [Policy(actor_id=actor_id, actions={}) for actor_id in world.actors]
     baseline = world.clone()
     shocked = world.clone()
     shocked.resources[resource_id].value = np.float64(shocked.resources[resource_id].value + np.float64(1.0))
+    distance = state_distance(baseline, shocked)
 
     try:
         for _ in range(int(config.convergence_check_steps)):
             baseline, _ = step_world(baseline, null_policies, dt=float(config.dt))
             shocked, _ = step_world(shocked, null_policies, dt=float(config.dt))
-            if state_distance(baseline, shocked) < float(config.convergence_epsilon):
-                return True
+            distance = state_distance(baseline, shocked)
+            if distance < float(config.convergence_epsilon):
+                return True, float(distance)
     except HardStopException:
-        return False
+        return False, float("inf")
 
-    return False
+    return False, float(distance)
 
 
 def level1_check(world: WorldState, config: Any) -> List[Violation]:
@@ -72,12 +74,14 @@ def level1_check(world: WorldState, config: Any) -> List[Violation]:
     null_world = world.clone()
     null_policies = [Policy(actor_id=actor_id, actions={}) for actor_id in world.actors]
     prev_state = null_world.snapshot()
+    last_distance = state_distance(prev_state, prev_state)
 
     try:
         for _ in range(int(config.convergence_check_steps)):
             null_world, _ = step_world(null_world, null_policies, dt=float(config.dt))
             curr_state = null_world.snapshot()
-            if state_distance(prev_state, curr_state) < float(config.convergence_epsilon):
+            last_distance = state_distance(prev_state, curr_state)
+            if last_distance < float(config.convergence_epsilon):
                 break
             prev_state = curr_state
         else:
@@ -90,6 +94,12 @@ def level1_check(world: WorldState, config: Any) -> List[Violation]:
                         "under the null policy"
                     ),
                     severity="soft",
+                    details={
+                        "field": "null_policy_rollout",
+                        "observed": float(last_distance),
+                        "expected_max": float(config.convergence_epsilon),
+                        "steps": int(config.convergence_check_steps),
+                    },
                 )
             )
     except HardStopException as exc:
@@ -99,7 +109,12 @@ def level1_check(world: WorldState, config: Any) -> List[Violation]:
                 check_name="null_action_convergence",
                 description="Null-policy rollout triggered a hard stop",
                 severity="soft",
-                details={"violations": [violation.snapshot() for violation in exc.violations]},
+                details={
+                    "field": "null_policy_rollout",
+                    "observed": "hard_stop",
+                    "expected": "stable rollout",
+                    "violations": [violation.snapshot() for violation in exc.violations],
+                },
             )
         )
 
@@ -113,7 +128,12 @@ def level1_check(world: WorldState, config: Any) -> List[Violation]:
                     check_name="spectral_radius",
                     description=f"Jacobian spectral radius = {rho:.6f} >= 1.0",
                     severity="soft",
-                    details={"spectral_radius": rho},
+                    details={
+                        "field": "jacobian.spectral_radius",
+                        "spectral_radius": rho,
+                        "observed": rho,
+                        "expected_max": 1.0,
+                    },
                 )
             )
     except HardStopException as exc:
@@ -123,19 +143,31 @@ def level1_check(world: WorldState, config: Any) -> List[Violation]:
                 check_name="spectral_radius",
                 description="Jacobian evaluation triggered a hard stop",
                 severity="soft",
-                details={"violations": [violation.snapshot() for violation in exc.violations]},
+                details={
+                    "field": "jacobian.spectral_radius",
+                    "observed": "hard_stop",
+                    "expected": "< 1.0",
+                    "violations": [violation.snapshot() for violation in exc.violations],
+                },
             )
         )
 
     for resource_id in list(sorted(world.resources))[:3]:
-        if not check_shock_decay(world, resource_id, config):
+        decayed, final_distance = check_shock_decay(world, resource_id, config)
+        if not decayed:
             violations.append(
                 Violation(
                     level=1,
                     check_name="shock_decay",
                     description=f"Shock on resource {resource_id} does not decay",
                     severity="soft",
-                    details={"resource_id": resource_id},
+                    details={
+                        "field": f"resources.{resource_id}.shock_decay",
+                        "resource_id": resource_id,
+                        "observed": float(final_distance),
+                        "expected_max": float(config.convergence_epsilon),
+                        "steps": int(config.convergence_check_steps),
+                    },
                 )
             )
 

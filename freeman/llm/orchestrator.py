@@ -13,8 +13,15 @@ from freeman.api.tool_api import (
     freeman_run_simulation,
     freeman_verify_domain,
 )
+from freeman.core.transition import step_world
+from freeman.core.types import Policy, Violation
+from freeman.domain.compiler import DomainCompiler
+from freeman.exceptions import HardStopException, SchemaRepairFailed
+from freeman.game.runner import SimConfig
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.utils import stable_json_dumps
+from freeman.verifier.level1 import level1_check
+from freeman.verifier.level2 import level2_check
 
 SYNTHESIS_SYSTEM_PROMPT = """You are designing compact, valid Freeman simulation packages from natural-language domain briefs.
 
@@ -90,10 +97,10 @@ class DeepSeekFreemanOrchestrator:
     def __init__(self, client: DeepSeekChatClient) -> None:
         self.client = client
 
-    def synthesize_package(self, domain_description: str, max_attempts: int = 3) -> tuple[Dict[str, Any], str, int]:
-        """Use DeepSeek to produce a valid Freeman schema and baseline policies."""
+    def _synthesis_messages(self, domain_description: str) -> List[Dict[str, str]]:
+        """Build the initial prompt sequence for Freeman package synthesis."""
 
-        messages: List[Dict[str, str]] = [
+        return [
             {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
             {
                 "role": "user",
@@ -106,32 +113,135 @@ class DeepSeekFreemanOrchestrator:
             },
         ]
 
-        last_error = None
-        for attempt in range(1, max_attempts + 1):
-            package = self.client.chat_json(messages, temperature=0.2, max_tokens=4000)
-            try:
-                compile_result = freeman_compile_domain(package["schema"])
-                world_id = compile_result["world_id"]
-                package.setdefault("policies", [])
-                package.setdefault("assumptions", [])
-                return package, world_id, attempt
-            except Exception as exc:  # noqa: BLE001
-                last_error = str(exc)
-                messages.extend(
-                    [
-                        {"role": "assistant", "content": json.dumps(package, ensure_ascii=False)},
-                        {
-                            "role": "user",
-                            "content": (
-                                "The package was invalid for Freeman.\n"
-                                f"Compiler/runtime error: {last_error}\n"
-                                "Repair the full package and return only the corrected JSON object."
-                            ),
-                        },
-                    ]
-                )
+    def _normalize_package(self, package: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure a package carries the standard top-level Freeman synthesis keys."""
 
-        raise RuntimeError(f"DeepSeek did not produce a valid Freeman package after {max_attempts} attempts: {last_error}")
+        normalized = json.loads(json.dumps(package, ensure_ascii=False))
+        normalized.setdefault("schema", {})
+        normalized.setdefault("policies", [])
+        normalized.setdefault("assumptions", [])
+        return normalized
+
+    def _coerce_policies(self, package: Dict[str, Any]) -> List[Policy]:
+        """Convert synthesized policy snapshots into ``Policy`` objects."""
+
+        return [policy if isinstance(policy, Policy) else Policy.from_snapshot(policy) for policy in package.get("policies", [])]
+
+    def _compiler_feedback(self, exc: Exception) -> List[Dict[str, Any]]:
+        """Convert a compile-time exception into structured repair feedback."""
+
+        return [
+            {
+                "phase": "compile",
+                "level": -1,
+                "check_name": "compile_error",
+                "description": str(exc),
+                "severity": "hard",
+                "details": {
+                    "field": "schema",
+                    "observed": str(exc),
+                    "expected": "valid Freeman domain schema",
+                    "error_type": exc.__class__.__name__,
+                },
+            }
+        ]
+
+    def _violation_feedback(self, phase: str, violations: List[Violation]) -> List[Dict[str, Any]]:
+        """Serialize verifier violations into structured repair feedback."""
+
+        return [{"phase": phase, **violation.snapshot()} for violation in violations]
+
+    def _trial_level0_violations(
+        self,
+        package: Dict[str, Any],
+        trial_steps: int,
+        dt: float,
+    ) -> List[Violation]:
+        """Run a short rollout to surface level-0 violations quickly."""
+
+        compiler = DomainCompiler()
+        current = compiler.compile(package["schema"])
+        policies = self._coerce_policies(package)
+        violations: List[Violation] = []
+
+        for _ in range(trial_steps):
+            try:
+                current, step_violations = step_world(current, policies, dt=dt)
+            except HardStopException as exc:
+                violations.extend(exc.violations)
+                break
+            violations.extend(step_violations)
+        return violations
+
+    def compile_and_repair(
+        self,
+        domain_description: str,
+        *,
+        max_retries: int = 5,
+        trial_steps: int = 3,
+        config: Optional[SimConfig] = None,
+    ) -> tuple[Dict[str, Any], str, int, List[Dict[str, Any]]]:
+        """Synthesize, verify, and iteratively repair a Freeman package until it compiles cleanly."""
+
+        sim_config = config or SimConfig(convergence_check_steps=250, convergence_epsilon=3.0e-2)
+        package = self._normalize_package(
+            self.client.chat_json(self._synthesis_messages(domain_description), temperature=0.2, max_tokens=4000)
+        )
+        repair_history: List[Dict[str, Any]] = []
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                world = DomainCompiler().compile(package["schema"])
+            except Exception as exc:  # noqa: BLE001
+                feedback = self._compiler_feedback(exc)
+                repair_history.append({"attempt": attempt, "phase": "compile", "feedback": feedback})
+                package = self._normalize_package(
+                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                )
+                continue
+
+            l1_violations = level1_check(world.clone(), sim_config)
+            if l1_violations:
+                feedback = self._violation_feedback("level1", l1_violations)
+                repair_history.append({"attempt": attempt, "phase": "level1", "feedback": feedback})
+                package = self._normalize_package(
+                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                )
+                continue
+
+            trial_violations = self._trial_level0_violations(package, trial_steps=trial_steps, dt=sim_config.dt)
+            if trial_violations:
+                feedback = self._violation_feedback("level0_trial", trial_violations)
+                repair_history.append({"attempt": attempt, "phase": "level0_trial", "feedback": feedback})
+                package = self._normalize_package(
+                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                )
+                continue
+
+            l2_violations = level2_check(
+                world.clone(),
+                world.causal_dag,
+                base_delta=sim_config.level2_shock_delta,
+                dt=sim_config.dt,
+            )
+            if l2_violations:
+                feedback = self._violation_feedback("level2", l2_violations)
+                repair_history.append({"attempt": attempt, "phase": "level2", "feedback": feedback})
+                package = self._normalize_package(
+                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                )
+                continue
+
+            compile_result = freeman_compile_domain(package["schema"])
+            return package, compile_result["world_id"], attempt, repair_history
+
+        raise SchemaRepairFailed(f"DeepSeek did not produce a verifier-clean Freeman package after {max_retries} attempts.")
+
+    def synthesize_package(self, domain_description: str, max_attempts: int = 3) -> tuple[Dict[str, Any], str, int]:
+        """Use DeepSeek to produce a verified Freeman schema and baseline policies."""
+
+        package, world_id, attempts, _ = self.compile_and_repair(domain_description, max_retries=max_attempts)
+        return package, world_id, attempts
 
     def interpret_run(
         self,
@@ -168,7 +278,12 @@ class DeepSeekFreemanOrchestrator:
     ) -> LLMDrivenSimulationRun:
         """Synthesize a domain from text, run Freeman, and return the full result bundle."""
 
-        package, world_id, attempts = self.synthesize_package(domain_description)
+        package, world_id, attempts, repair_history = self.compile_and_repair(
+            domain_description,
+            max_retries=5,
+            trial_steps=3,
+            config=SimConfig(seed=seed, convergence_check_steps=250, convergence_epsilon=3.0e-2),
+        )
         simulation = json.loads(
             freeman_run_simulation(
                 world_id,
@@ -189,7 +304,13 @@ class DeepSeekFreemanOrchestrator:
             interpretation=interpretation,
             latest_world_state=latest_world_state,
             synthesis_attempts=attempts,
-            metadata={"model": self.client.model, "seed": seed, "max_steps": max_steps},
+            metadata={
+                "model": self.client.model,
+                "seed": seed,
+                "max_steps": max_steps,
+                "repair_iterations": max(0, attempts - 1),
+                "repair_history": repair_history,
+            },
         )
 
     def save_run(self, run: LLMDrivenSimulationRun, output_path: str | Path) -> Path:

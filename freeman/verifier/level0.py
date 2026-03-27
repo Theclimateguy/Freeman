@@ -68,11 +68,16 @@ def level0_check(prev: WorldState, next: WorldState) -> List[Violation]:
                     ),
                     severity="hard",
                     details={
+                        "field": f"resources.{resource_id}.value",
                         "resource_id": resource_id,
                         "unit": next_resource.unit,
                         "prev_value": float(prev_resource.value),
                         "next_value": float(next_resource.value),
                         "external": float(external),
+                        "observed": float(next_resource.value),
+                        "expected_max": float(prev_resource.value + external + np.float64(EPSILON)),
+                        "observed_growth": float(next_resource.value - prev_resource.value),
+                        "expected_max_growth": float(external + np.float64(EPSILON)),
                     },
                 )
             )
@@ -85,7 +90,12 @@ def level0_check(prev: WorldState, next: WorldState) -> List[Violation]:
                     check_name="nonnegativity",
                     description=f"Resource {res_id}={float(resource.value):.6f} < min {float(resource.min_value):.6f}",
                     severity="hard",
-                    details={"resource_id": res_id},
+                    details={
+                        "field": f"resources.{res_id}.value",
+                        "resource_id": res_id,
+                        "observed": float(resource.value),
+                        "expected_min": float(resource.min_value),
+                    },
                 )
             )
 
@@ -98,7 +108,13 @@ def level0_check(prev: WorldState, next: WorldState) -> List[Violation]:
                 check_name="probability_simplex",
                 description=f"Outcome probabilities sum to {float(total_prob):.12f}",
                 severity="hard",
-                details={"sum": float(total_prob)},
+                details={
+                    "field": "outcome_probs.sum",
+                    "sum": float(total_prob),
+                    "observed": float(total_prob),
+                    "expected": 1.0,
+                    "tolerance": float(EPSILON),
+                },
             )
         )
 
@@ -110,7 +126,12 @@ def level0_check(prev: WorldState, next: WorldState) -> List[Violation]:
                     check_name="bounds",
                     description=f"Resource {res_id}={float(resource.value):.6f} > max {float(resource.max_value):.6f}",
                     severity="soft",
-                    details={"resource_id": res_id},
+                    details={
+                        "field": f"resources.{res_id}.value",
+                        "resource_id": res_id,
+                        "observed": float(resource.value),
+                        "expected_max": float(resource.max_value),
+                    },
                 )
             )
 
