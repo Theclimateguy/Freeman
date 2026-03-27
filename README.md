@@ -80,7 +80,6 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 - Architecture and workflows: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
 - Release notes: [CHANGELOG.md](CHANGELOG.md)
-- Implementation progress by phase: [PROGRESS.md](PROGRESS.md)
 
 ## Repository Layout
 
