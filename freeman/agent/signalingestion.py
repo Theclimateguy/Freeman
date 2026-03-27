@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from math import exp, log
 from typing import Any, Iterable, List, Sequence
 
 import numpy as np
@@ -11,6 +12,12 @@ import numpy as np
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _parse_timestamp(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).replace(microsecond=0)
+    return datetime.fromisoformat(value).astimezone(timezone.utc).replace(microsecond=0)
 
 
 @dataclass
@@ -25,6 +32,97 @@ class Signal:
     sentiment: float = 0.0
     timestamp: str = field(default_factory=_now_iso)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SignalRecord:
+    """One persisted signal observation across sessions."""
+
+    signal_id: str
+    topic: str
+    last_seen: datetime
+    times_seen: int = 1
+    last_trigger_mode: str = "WATCH"
+
+    def __post_init__(self) -> None:
+        self.last_seen = _parse_timestamp(self.last_seen)
+        self.times_seen = int(self.times_seen)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "signal_id": self.signal_id,
+            "topic": self.topic,
+            "last_seen": self.last_seen.isoformat(),
+            "times_seen": self.times_seen,
+            "last_trigger_mode": self.last_trigger_mode,
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: dict[str, Any]) -> "SignalRecord":
+        return cls(
+            signal_id=data["signal_id"],
+            topic=data["topic"],
+            last_seen=data["last_seen"],
+            times_seen=int(data.get("times_seen", 1)),
+            last_trigger_mode=data.get("last_trigger_mode", "WATCH"),
+        )
+
+
+class SignalMemory:
+    """Cross-session deduplication and exponential decay of signal weights."""
+
+    def __init__(self, decay_halflife_hours: float = 24.0) -> None:
+        self._records: dict[str, SignalRecord] = {}
+        self.decay_halflife_hours = float(decay_halflife_hours)
+
+    def see(self, signal: Signal, trigger_mode: str) -> SignalRecord:
+        seen_at = _parse_timestamp(signal.timestamp)
+        record = self._records.get(signal.signal_id)
+        if record is None:
+            record = SignalRecord(
+                signal_id=signal.signal_id,
+                topic=signal.topic,
+                last_seen=seen_at,
+                times_seen=1,
+                last_trigger_mode=trigger_mode,
+            )
+            self._records[signal.signal_id] = record
+            return SignalRecord.from_snapshot(record.snapshot())
+
+        record.topic = signal.topic
+        record.last_seen = seen_at
+        record.times_seen += 1
+        record.last_trigger_mode = trigger_mode
+        return SignalRecord.from_snapshot(record.snapshot())
+
+    def is_duplicate(self, signal: Signal, *, within_hours: float = 1.0) -> bool:
+        """Return True when the same signal was seen within the duplicate window."""
+
+        record = self._records.get(signal.signal_id)
+        if record is None:
+            return False
+        seen_at = _parse_timestamp(signal.timestamp)
+        elapsed_hours = max((seen_at - record.last_seen).total_seconds() / 3600.0, 0.0)
+        return elapsed_hours <= float(within_hours)
+
+    def effective_weight(self, signal_id: str, now: datetime | None = None) -> float:
+        """Return exponentially decayed signal weight."""
+
+        record = self._records.get(signal_id)
+        if record is None:
+            return 0.0
+        now_dt = _parse_timestamp(now or datetime.now(timezone.utc))
+        elapsed_hours = max((now_dt - record.last_seen).total_seconds() / 3600.0, 0.0)
+        return float(exp(-log(2.0) * elapsed_hours / max(self.decay_halflife_hours, 1.0e-8)))
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [record.snapshot() for record in self._records.values()]
+
+    def load_snapshot(self, records: list[dict[str, Any]]) -> None:
+        self._records = {
+            record["signal_id"]: SignalRecord.from_snapshot(record)
+            for record in records
+        }
 
 
 @dataclass
@@ -176,6 +274,8 @@ class SignalIngestionEngine:
         source: ManualSignalSource,
         *,
         classifier: Any | None = None,
+        signal_memory: SignalMemory | None = None,
+        skip_duplicates_within_hours: float = 1.0,
         anomaly_lambda: float = 3.0,
         semantic_threshold: float = 0.5,
     ) -> List[SignalTrigger]:
@@ -185,18 +285,26 @@ class SignalIngestionEngine:
         scores = self.mahalanobis_scores(signals)
         triggers: List[SignalTrigger] = []
         for signal, score in zip(signals, scores, strict=False):
+            if signal_memory is not None and signal_memory.is_duplicate(
+                signal,
+                within_hours=skip_duplicates_within_hours,
+            ):
+                continue
             classification = self.classify_shock(signal, classifier=classifier)
+            mode = self.trigger_mode(
+                score,
+                classification,
+                anomaly_lambda=anomaly_lambda,
+                semantic_threshold=semantic_threshold,
+            )
+            if signal_memory is not None:
+                signal_memory.see(signal, mode)
             triggers.append(
                 SignalTrigger(
                     signal_id=signal.signal_id,
                     mahalanobis_score=score,
                     classification=classification,
-                    mode=self.trigger_mode(
-                        score,
-                        classification,
-                        anomaly_lambda=anomaly_lambda,
-                        semantic_threshold=semantic_threshold,
-                    ),
+                    mode=mode,
                 )
             )
         return triggers
@@ -207,6 +315,8 @@ __all__ = [
     "RSSSignalSource",
     "ShockClassification",
     "Signal",
+    "SignalMemory",
+    "SignalRecord",
     "SignalIngestionEngine",
     "SignalTrigger",
     "TavilySignalSource",
