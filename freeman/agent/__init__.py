@@ -12,6 +12,7 @@ from freeman.agent.attentionscheduler import (
 )
 from freeman.agent.costmodel import BudgetDecision, BudgetPolicy, CostEstimate, CostModel
 from freeman.agent.domainregistry import DomainTemplate, DomainTemplateRegistry, MultiDomainWorld, SharedResourceBus
+from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.signalingestion import (
     ManualSignalSource,
     RSSSignalSource,
@@ -38,6 +39,8 @@ __all__ = [
     "DomainTemplateRegistry",
     "ConflictDebt",
     "ForecastDebt",
+    "Forecast",
+    "ForecastRegistry",
     "ManualSignalSource",
     "MultiDomainWorld",
     "ObligationQueue",

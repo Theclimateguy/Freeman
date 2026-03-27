@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import yaml
+from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 
 from freeman.core.scorer import raw_outcome_scores
 from freeman.core.types import Policy
@@ -64,6 +66,7 @@ class AnalysisPipeline:
         verifier_config: VerifierConfig | None = None,
         knowledge_graph: KnowledgeGraph | None = None,
         reconciler: Reconciler | None = None,
+        forecast_registry: ForecastRegistry | None = None,
         config: AnalysisPipelineConfig | None = None,
         config_path: str | Path | None = None,
     ) -> None:
@@ -73,6 +76,7 @@ class AnalysisPipeline:
         self.runner = GameRunner(self.sim_config)
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
         self.reconciler = reconciler or Reconciler()
+        self.forecast_registry = forecast_registry
         self.config = config or AnalysisPipelineConfig.from_config(config_path)
 
     def run(
@@ -93,9 +97,12 @@ class AnalysisPipeline:
         sim_result = self.runner.run(world.clone(), policy_objects)
         final_world = WorldState.from_snapshot(sim_result.trajectory[-1])
         raw_scores = raw_outcome_scores(final_world)
+        if session_log is None:
+            session_log = SessionLog(session_id=f"analysis:{final_world.domain_id}:{final_world.t}")
         dominant_outcome = None
         if sim_result.final_outcome_probs:
             dominant_outcome = max(sim_result.final_outcome_probs, key=sim_result.final_outcome_probs.get)
+        recorded_forecasts = self._record_forecasts(final_world, sim_result.final_outcome_probs, session_log)
         signal_text = self._signal_text(final_world, session_log)
         context_nodes = self._get_context_nodes(signal_text)
 
@@ -115,13 +122,12 @@ class AnalysisPipeline:
                 "final_outcome_probs": sim_result.final_outcome_probs,
                 "context_node_ids": [node.id for node in context_nodes],
                 "context_node_count": len(context_nodes),
+                "forecast_ids": [forecast.forecast_id for forecast in recorded_forecasts],
                 "verification": verification,
             },
         )
         self.knowledge_graph.add_node(summary_node)
 
-        if session_log is None:
-            session_log = SessionLog(session_id=f"analysis:{final_world.domain_id}:{final_world.t}")
         session_log.add_kg_delta(
             KGDelta(
                 operation="add_node",
@@ -144,6 +150,8 @@ class AnalysisPipeline:
             metadata={
                 "context_node_ids": [node.id for node in context_nodes],
                 "context_node_count": len(context_nodes),
+                "forecast_ids": [forecast.forecast_id for forecast in recorded_forecasts],
+                "forecast_count": len(recorded_forecasts),
                 "steps_run": sim_result.steps_run,
                 "fixed_point_iters": sim_result.metadata.get("fixed_point_iters"),
             },
@@ -170,6 +178,32 @@ class AnalysisPipeline:
         else:
             nodes = [node for node in self.knowledge_graph.nodes() if node.status != "archived"]
         return nodes[: self.config.max_context_nodes]
+
+    def _record_forecasts(
+        self,
+        final_world: WorldState,
+        final_outcome_probs: Dict[str, float],
+        session_log: SessionLog,
+    ) -> List[Forecast]:
+        """Record probabilistic outcome forecasts for later verification."""
+
+        if self.forecast_registry is None or not final_outcome_probs:
+            return []
+        recorded: List[Forecast] = []
+        for outcome_id, prob in final_outcome_probs.items():
+            forecast = Forecast(
+                forecast_id=f"{final_world.domain_id}:{final_world.t}:{outcome_id}",
+                domain_id=final_world.domain_id,
+                outcome_id=outcome_id,
+                predicted_prob=prob,
+                session_id=session_log.session_id,
+                horizon_steps=self.sim_config.max_steps,
+                created_at=datetime.now(timezone.utc).replace(microsecond=0),
+                created_step=int(final_world.t),
+            )
+            self.forecast_registry.record(forecast)
+            recorded.append(forecast)
+        return recorded
 
 
 __all__ = ["AnalysisPipeline", "AnalysisPipelineConfig", "AnalysisPipelineResult"]
