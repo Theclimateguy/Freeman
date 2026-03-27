@@ -18,6 +18,74 @@ ALLOWED_TRANSITIONS = {
 
 
 @dataclass
+class ForecastDebt:
+    """Open forecast awaiting verification at a finite horizon."""
+
+    task_id: str
+    domain_id: str
+    horizon_remaining: int
+    urgency: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.horizon_remaining = int(self.horizon_remaining)
+        self.urgency = float(1.0 / max(self.horizon_remaining, 1))
+
+
+@dataclass
+class ConflictDebt:
+    """Open review/conflict node that has aged in the KG."""
+
+    task_id: str
+    node_id: str
+    age_steps: int
+    urgency: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.age_steps = int(self.age_steps)
+        self.urgency = float(min(self.age_steps / 10.0, 1.0))
+
+
+@dataclass
+class AnomalyDebt:
+    """Open anomaly signal that has not been analyzed yet."""
+
+    task_id: str
+    signal_id: str
+    age_hours: float
+    urgency: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.age_hours = float(self.age_hours)
+        self.urgency = float(min(self.age_hours / 24.0, 1.0))
+
+
+@dataclass
+class ObligationQueue:
+    """Track unresolved obligations and expose their aggregate pressure."""
+
+    forecast_debts: List[ForecastDebt] = field(default_factory=list)
+    conflict_debts: List[ConflictDebt] = field(default_factory=list)
+    anomaly_debts: List[AnomalyDebt] = field(default_factory=list)
+
+    def add_forecast_debt(self, debt: ForecastDebt) -> None:
+        self.forecast_debts.append(debt)
+
+    def add_conflict_debt(self, debt: ConflictDebt) -> None:
+        self.conflict_debts.append(debt)
+
+    def add_anomaly_debt(self, debt: AnomalyDebt) -> None:
+        self.anomaly_debts.append(debt)
+
+    def pressure(self, task_id: str) -> float:
+        """Return the cumulative obligation pressure for one task."""
+
+        forecast_pressure = sum(debt.urgency for debt in self.forecast_debts if debt.task_id == task_id)
+        conflict_pressure = sum(debt.urgency for debt in self.conflict_debts if debt.task_id == task_id)
+        anomaly_pressure = sum(debt.urgency for debt in self.anomaly_debts if debt.task_id == task_id)
+        return float(forecast_pressure + conflict_pressure + anomaly_pressure)
+
+
+@dataclass
 class AttentionTask:
     """Task competing for the finite attention budget."""
 
@@ -58,10 +126,16 @@ class AttentionDecision:
 class AttentionScheduler:
     """Finite-budget UCB scheduler over analysis tasks."""
 
-    def __init__(self, attention_budget: float, ucb_beta: float = 1.0) -> None:
+    def __init__(
+        self,
+        attention_budget: float,
+        ucb_beta: float = 1.0,
+        obligation_queue: ObligationQueue | None = None,
+    ) -> None:
         self.attention_budget = float(attention_budget)
         self.remaining_budget = float(attention_budget)
         self.ucb_beta = float(ucb_beta)
+        self.obligation_queue = obligation_queue
         self.t = 0
         self.tasks: Dict[str, AttentionTask] = {}
 
@@ -79,11 +153,13 @@ class AttentionScheduler:
     def interest_score(self, task: AttentionTask) -> float:
         """Expected information gain per cost with anomaly and semantic terms."""
 
+        obligation = self.obligation_queue.pressure(task.task_id) if self.obligation_queue is not None else 0.0
         score = (
             task.expected_information_gain
             + task.anomaly_score
             + task.semantic_gap
             + task.confidence_gap
+            + obligation
         ) / max(task.cost, 1.0e-8)
         task.last_interest_score = float(score)
         return float(score)
@@ -140,4 +216,12 @@ class AttentionScheduler:
         )
 
 
-__all__ = ["AttentionDecision", "AttentionScheduler", "AttentionTask"]
+__all__ = [
+    "AnomalyDebt",
+    "AttentionDecision",
+    "AttentionScheduler",
+    "AttentionTask",
+    "ConflictDebt",
+    "ForecastDebt",
+    "ObligationQueue",
+]
