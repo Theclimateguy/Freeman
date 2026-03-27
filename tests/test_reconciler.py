@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import json
 
+import pytest
+
+from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import KGDelta, SessionLog
@@ -171,3 +176,75 @@ def test_reconciler_merge_forces_reembed_when_vectorstore_present(tmp_path) -> N
     assert adapter.calls == ["Water stress is rising.", "Water stress is rising."]
     assert len(store.upserted) >= 2
     assert store.upserted[-1][0] == "claim_water"
+
+
+def test_reconciler_update_self_model_accumulates_mae_and_bias(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True)
+    registry = ForecastRegistry(auto_load=False, auto_save=False)
+    reconciler = Reconciler()
+    verified_forecasts = []
+    specs = [
+        ("f1", 0.70, 0.60),
+        ("f2", 0.40, 0.55),
+        ("f3", 0.90, 0.70),
+    ]
+    for forecast_id, predicted, actual in specs:
+        forecast = Forecast(
+            forecast_id=forecast_id,
+            domain_id="water",
+            outcome_id="cooperation",
+            predicted_prob=predicted,
+            session_id="s1",
+            horizon_steps=3,
+            created_at=datetime(2026, 3, 27, tzinfo=timezone.utc),
+            created_step=0,
+        )
+        registry.record(forecast)
+        verified_forecasts.append(
+            registry.verify(
+                forecast_id,
+                actual_prob=actual,
+                verified_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+            )
+        )
+
+    node = None
+    for forecast in verified_forecasts:
+        node = reconciler.update_self_model(kg, forecast)
+
+    assert node is not None
+    assert node.node_type == "self_observation"
+    assert node.metadata["n_forecasts"] == 3
+    assert node.metadata["mean_abs_error"] == pytest.approx((0.10 + 0.15 + 0.20) / 3.0)
+    assert node.metadata["bias"] == pytest.approx((0.10 - 0.15 + 0.20) / 3.0)
+
+
+def test_reconciler_update_self_model_trims_error_window_to_50(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True)
+    registry = ForecastRegistry(auto_load=False, auto_save=False)
+    reconciler = Reconciler()
+
+    for idx in range(55):
+        forecast = Forecast(
+            forecast_id=f"f{idx}",
+            domain_id="water",
+            outcome_id="crisis",
+            predicted_prob=0.5,
+            session_id="s1",
+            horizon_steps=3,
+            created_at=datetime(2026, 3, 27, tzinfo=timezone.utc),
+            created_step=0,
+        )
+        registry.record(forecast)
+        verified = registry.verify(
+            forecast.forecast_id,
+            actual_prob=max(0.0, 0.5 - 0.01 * (idx % 5)),
+            verified_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+        )
+        reconciler.update_self_model(kg, verified)
+
+    node = kg.get_node("self:forecast_error:water:crisis")
+
+    assert node is not None
+    assert node.metadata["n_forecasts"] == 50
+    assert len(json.loads(node.metadata["errors_json"])) == 50

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Dict, List
 
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
@@ -186,6 +187,41 @@ class Reconciler:
             metadata=metadata,
             created_at=existing.created_at,
         )
+
+    def update_self_model(self, knowledge_graph: KnowledgeGraph, forecast: "Forecast") -> KGNode:
+        """Accumulate verified forecast errors into a self-observation KG node."""
+
+        if forecast.status != "verified":
+            raise ValueError("Self-model updates require a verified forecast.")
+        if forecast.actual_prob is None:
+            raise ValueError("Verified forecast must include actual_prob.")
+
+        node_id = f"self:forecast_error:{forecast.domain_id}:{forecast.outcome_id}"
+        existing = knowledge_graph.get_node(node_id)
+        errors = json.loads(existing.metadata.get("errors_json", "[]")) if existing is not None else []
+        signed_error = float(forecast.predicted_prob - forecast.actual_prob)
+        errors.append(signed_error)
+        errors = errors[-50:]
+        mean_abs_error = sum(abs(error) for error in errors) / len(errors)
+        bias = sum(errors) / len(errors)
+        node = KGNode(
+            id=node_id,
+            label=f"Self-model: {forecast.domain_id}/{forecast.outcome_id}",
+            node_type="self_observation",
+            content=f"n={len(errors)} forecasts; MAE={mean_abs_error:.4f}; bias={bias:+.4f}",
+            confidence=0.9,
+            metadata={
+                "domain_id": forecast.domain_id,
+                "outcome_id": forecast.outcome_id,
+                "mean_abs_error": mean_abs_error,
+                "bias": bias,
+                "n_forecasts": len(errors),
+                "errors_json": json.dumps(errors),
+            },
+        )
+        knowledge_graph.add_node(node)
+        knowledge_graph.save()
+        return node
 
 
 __all__ = ["ConfidenceThresholds", "ReconciliationResult", "Reconciler"]
