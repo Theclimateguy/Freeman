@@ -1,19 +1,15 @@
 # Freeman
 
-Freeman is a domain-agnostic world simulator for LLM agents.
+Freeman is a domain-agnostic simulation and agent framework for structured reasoning over actors, resources, causal graphs, uncertainty, verification, and long-term memory. The current codebase implements the USIM-AGENT roadmap through v0.2, including the deterministic simulator, three-level verifier, knowledge graph, agent scheduling, uncertainty propagation, cost governance, human overrides, and end-to-end tests.
 
-It compiles a JSON domain schema into a deterministic simulation world, evolves the world through pluggable transition operators, verifies structural and stepwise consistency, and scores outcome probabilities.
+## What Is Implemented
 
-Freeman can now also sit inside an LLM-driven loop: a model proposes a compact domain package from a natural-language brief, Freeman compiles and simulates it, and the model interprets the resulting trajectory.
-
-## Scope
-
-- Universal simulation core for actors, resources, relations, outcomes, and causal graphs
-- Pluggable evolution operators: linear, stock-flow, logistic, threshold, coupled
-- Three-level verifier with hard stops on level 0 invariants
-- Multi-domain composition through shared resources
-- Tool API for compile, run, inspect, and verify workflows
-- DeepSeek-backed orchestration layer for brief -> domain package -> simulation -> interpretation
+- Core simulator: `WorldGraph` / `WorldState`, transition operators, outcome scoring, multi-domain shared-resource worlds.
+- Verifier: Level 0 invariants, Level 1 structural checks, Level 2 sign consistency, fixed-point repair, spectral-radius guard.
+- Memory: NetworkX + JSON knowledge graph, session logs, confidence reconciliation, export to HTML / JSON-LD / DOT.
+- Agent layer: domain template registry, analysis pipeline, signal ingestion, UCB attention scheduler, formal cost model.
+- Interface layer: CLI commands, minimal REST API, KG export, human override API, simulation diff.
+- v0.2 extensions: compile validation, historical fit scoring, ensemble sign consensus, Monte Carlo uncertainty, cost governance, override audit trail.
 
 ## Install
 
@@ -21,45 +17,84 @@ Freeman can now also sit inside an LLM-driven loop: a model proposes a compact d
 pip install -e .
 ```
 
-## Core Workflow
+## Quick Start
 
-1. Describe a domain in natural language or provide a Freeman JSON schema.
-2. Compile it into a `WorldState`.
-3. Run the simulation with policies.
-4. Inspect outcome probabilities, trajectory snapshots, and verifier output.
-
-## LLM-Driven Workflow
-
-Freeman includes a minimal DeepSeek orchestration layer in:
-
-- `freeman/llm/deepseek.py`
-- `freeman/llm/orchestrator.py`
-- `scripts/run_deepseek_simulation.py`
-
-The intended loop is:
-
-1. DeepSeek converts a natural-language domain brief into a compact structured package.
-2. Freeman runs an automated repair loop over level-1 structure checks, a short level-0 trial rollout, and level-2 sign checks.
-3. Freeman compiles the verifier-clean package into an executable world and runs the simulation.
-4. DeepSeek interprets the result and proposes the next policy or scenario revision.
-
-Run a local DeepSeek-driven simulation with:
+Run the full test suite:
 
 ```bash
-DEEPSEEK_API_KEY=your_key_here python3 scripts/run_deepseek_simulation.py \
-  --domain-brief "Describe the system you want to simulate" \
-  --max-steps 20 \
-  --output runs/demo.json
+pytest tests/
 ```
 
-Notes:
-
-- Provide the DeepSeek credential via `DEEPSEEK_API_KEY`.
-- `runs/` is a local artifact directory and is ignored by git.
-- The orchestrator now performs autonomous schema repair from structured verifier feedback; compact schemas still produce the most reliable results.
-
-## Test
+Inspect the current knowledge graph status:
 
 ```bash
-python3 -m pytest -q
+python -m freeman.interface.cli status
 ```
+
+Run a domain schema end-to-end:
+
+```bash
+python -m freeman.interface.cli run path/to/schema.json
+```
+
+Query the knowledge graph:
+
+```bash
+python -m freeman.interface.cli query --text "water stress"
+```
+
+Export the knowledge graph:
+
+```bash
+python -m freeman.interface.cli export-kg html runs/kg.html
+python -m freeman.interface.cli export-kg json-ld runs/kg.jsonld
+python -m freeman.interface.cli export-kg dot runs/kg.dot
+```
+
+Apply human overrides:
+
+```bash
+python -m freeman.interface.cli override-param world.json resources.x.value 12.0 --output-path world_override.json
+python -m freeman.interface.cli override-sign world.json x->y + --output-path world_override.json
+python -m freeman.interface.cli rerun-domain world_override.json --max-steps 10 --output-path rerun.json
+python -m freeman.interface.cli diff-domain world.json rerun.json --output-path diff.json
+```
+
+## Main Entry Points
+
+- Core Python API:
+  - `freeman.core`
+  - `freeman.verifier`
+  - `freeman.memory`
+  - `freeman.agent`
+  - `freeman.interface`
+- CLI:
+  - `python -m freeman.interface.cli`
+- Minimal REST server:
+  - `freeman.interface.api.run_server()`
+- LLM orchestration:
+  - `freeman.llm.orchestrator.DeepSeekFreemanOrchestrator`
+
+## Documentation
+
+- Architecture and workflows: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- API map: [docs/API_MAP.md](docs/API_MAP.md)
+- Release notes: [CHANGELOG.md](CHANGELOG.md)
+- Implementation progress by phase: [PROGRESS.md](PROGRESS.md)
+
+## Repository Layout
+
+- `freeman/core/` — simulator state, evolution operators, transition logic, scoring, compile validation, uncertainty.
+- `freeman/verifier/` — verifier levels, aggregate verifier, fixed-point correction.
+- `freeman/memory/` — knowledge graph, reconciliation, session logs.
+- `freeman/agent/` — analysis pipeline, scheduling, signal ingestion, cost governance.
+- `freeman/interface/` — CLI, REST API, export, override and diff helpers.
+- `freeman/domain/` — schema compiler and bundled profiles.
+- `freeman/llm/` — provider-facing LLM orchestration and repair loop.
+- `tests/` — unit and integration coverage.
+
+## Notes
+
+- Default long-term memory backend is NetworkX + JSON via `config.yaml -> memory.json_path`.
+- `pytest tests/` is the required validation command and is wired to work without manual `PYTHONPATH` changes.
+- The stdlib REST layer is intentionally minimal; the override and diff logic already exists as reusable Python API classes and can be mounted behind a richer HTTP framework later.

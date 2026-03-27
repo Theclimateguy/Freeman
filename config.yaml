@@ -18,3 +18,7 @@ sim:
 
 multiworld:
   sync_mode: "after_each_step"
+
+memory:
+  backend: "networkx-json"
+  json_path: "runs/memory/knowledge_graph.json"

@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from freeman.domain.compiler import DomainCompiler
 
@@ -174,5 +179,5 @@ def water_market_world(water_market_schema: dict):
 def gim15_schema() -> dict:
     """Load the bundled GIM15-compatible schema."""
 
-    profile_path = Path(__file__).resolve().parents[1] / "freeman" / "domain" / "profiles" / "gim15.json"
+    profile_path = ROOT / "freeman" / "domain" / "profiles" / "gim15.json"
     return json.loads(profile_path.read_text(encoding="utf-8"))

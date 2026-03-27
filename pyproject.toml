@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "freeman"
-version = "1.0.0"
+version = "1.1.0"
 description = "Domain-agnostic world simulator for LLM agents."
-readme = "Freeman_TZ_v1.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "networkx>=3.2",
     "numpy>=1.26",
+    "PyYAML>=6.0",
     "scipy>=1.11",
     "pytest>=8.0",
 ]

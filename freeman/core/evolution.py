@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Type
 
 import numpy as np
@@ -31,6 +32,18 @@ def _coupling_term(world: WorldState, weights: Dict[str, Any]) -> np.float64:
 
 class EvolutionOperator(ABC):
     """Abstract interface for all resource evolution operators."""
+
+    def delta(
+        self,
+        resource: Resource,
+        world: WorldState,
+        policy: Optional[Policy],
+        dt: float = 1.0,
+    ) -> float:
+        """Return the net increment F(D, S(t), t) implied by the operator."""
+
+        next_value = np.float64(self.step(resource, world, policy, dt))
+        return float(next_value - np.float64(resource.value))
 
     @abstractmethod
     def step(
@@ -244,6 +257,40 @@ class CoupledTransition(EvolutionOperator):
         return float(total)
 
 
+@dataclass
+class EvolutionRegistry:
+    """Factory/registry for named evolution operators."""
+
+    operators: Dict[str, Type[EvolutionOperator]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.operators:
+            self.operators = dict(EVOLUTION_REGISTRY)
+
+    def register(self, evolution_type: str, operator_cls: Type[EvolutionOperator]) -> None:
+        """Register a new operator class."""
+
+        self.operators[evolution_type] = operator_cls
+
+    def get(self, evolution_type: str) -> Type[EvolutionOperator]:
+        """Return the operator class registered under ``evolution_type``."""
+
+        if evolution_type not in self.operators:
+            raise KeyError(f"Unknown evolution_type: {evolution_type}")
+        return self.operators[evolution_type]
+
+    def create(self, evolution_type: str, params: Optional[Dict[str, Any]] = None) -> EvolutionOperator:
+        """Instantiate an operator from the registry."""
+
+        operator_cls = self.get(evolution_type)
+        return operator_cls(**(params or {}))
+
+    def available(self) -> tuple[str, ...]:
+        """Return registered operator names in deterministic order."""
+
+        return tuple(sorted(self.operators))
+
+
 EVOLUTION_REGISTRY: Dict[str, Type[EvolutionOperator]] = {
     "linear": LinearTransition,
     "stock_flow": StockFlowTransition,
@@ -251,10 +298,24 @@ EVOLUTION_REGISTRY: Dict[str, Type[EvolutionOperator]] = {
     "threshold": ThresholdTransition,
     "coupled": CoupledTransition,
 }
+DEFAULT_EVOLUTION_REGISTRY = EvolutionRegistry(operators=EVOLUTION_REGISTRY)
 
 
 def get_operator(evolution_type: str, params: Dict[str, Any]) -> EvolutionOperator:
     """Instantiate an evolution operator from the registry."""
 
-    operator_cls = EVOLUTION_REGISTRY[evolution_type]
-    return operator_cls(**params)
+    return DEFAULT_EVOLUTION_REGISTRY.create(evolution_type, params)
+
+
+__all__ = [
+    "CoupledTransition",
+    "DEFAULT_EVOLUTION_REGISTRY",
+    "EVOLUTION_REGISTRY",
+    "EvolutionOperator",
+    "EvolutionRegistry",
+    "LinearTransition",
+    "LogisticGrowthTransition",
+    "StockFlowTransition",
+    "ThresholdTransition",
+    "get_operator",
+]

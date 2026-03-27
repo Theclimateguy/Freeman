@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Mapping
 
 import numpy as np
 
@@ -11,11 +11,8 @@ from freeman.core.types import Violation
 from freeman.core.world import WorldState
 
 
-def score_outcomes(world: WorldState) -> Dict[str, float]:
-    """Score outcomes from world values and return a softmax distribution."""
-
-    if not world.outcomes:
-        return {}
+def raw_outcome_scores(world: WorldState) -> Dict[str, float]:
+    """Return weighted linear scores W · S(t) for each outcome."""
 
     raw_scores: Dict[str, np.float64] = {}
     for outcome_id, outcome in world.outcomes.items():
@@ -23,11 +20,25 @@ def score_outcomes(world: WorldState) -> Dict[str, float]:
         for key, weight in outcome.scoring_weights.items():
             score += np.float64(weight) * np.float64(get_world_value(world, key))
         raw_scores[outcome_id] = score
+    return {key: float(value) for key, value in raw_scores.items()}
 
-    max_score = max(raw_scores.values())
-    exp_scores = {key: np.exp(value - max_score) for key, value in raw_scores.items()}
+
+def softmax_distribution(scores: Mapping[str, float]) -> Dict[str, float]:
+    """Return a numerically stable softmax distribution."""
+
+    if not scores:
+        return {}
+
+    max_score = np.float64(max(scores.values()))
+    exp_scores = {key: np.exp(np.float64(value) - max_score) for key, value in scores.items()}
     total = np.sum(list(exp_scores.values()), dtype=np.float64)
     return {key: float(np.float64(value / total)) for key, value in exp_scores.items()}
+
+
+def score_outcomes(world: WorldState) -> Dict[str, float]:
+    """Score outcomes from world values and return a softmax distribution."""
+
+    return softmax_distribution(raw_outcome_scores(world))
 
 
 def compute_confidence(outcome_probs: Dict[str, float], violations: Iterable[Violation]) -> float:
@@ -43,3 +54,6 @@ def compute_confidence(outcome_probs: Dict[str, float], violations: Iterable[Vio
     soft_violations = sum(1 for violation in violations if violation.severity == "soft")
     violation_penalty = max(0.0, 1.0 - 0.05 * soft_violations)
     return float(np.round(entropy_factor * np.float64(violation_penalty), 4))
+
+
+__all__ = ["compute_confidence", "raw_outcome_scores", "score_outcomes", "softmax_distribution"]
