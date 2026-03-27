@@ -1,0 +1,18 @@
+freeman:
+  default_evolution: "stock_flow"
+  level0_hard_stop: true
+  epsilon: 1.0e-8
+  sign_epsilon: 1.0e-4
+
+sim:
+  max_steps: 50
+  dt: 1.0
+  level2_check_every: 5
+  convergence_check_steps: 20
+  convergence_epsilon: 1.0e-4
+  fixed_point_max_iter: 20
+  fixed_point_alpha: 0.1
+  seed: 42
+
+multiworld:
+  sync_mode: "after_each_step"

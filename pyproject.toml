@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "freeman"
+version = "1.0.0"
+description = "Domain-agnostic world simulator for LLM agents."
+readme = "Freeman_TZ_v1.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pytest>=8.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["freeman*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
