@@ -16,15 +16,13 @@ from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator
 
 
-def _load_api_key(path: str | None) -> str:
-    """Load the DeepSeek API key from env or a local file."""
+def _load_api_key() -> str:
+    """Load the DeepSeek API key from the environment."""
 
     env_key = os.getenv("DEEPSEEK_API_KEY")
     if env_key:
         return env_key.strip()
-    if path:
-        return Path(path).read_text(encoding="utf-8").strip()
-    raise RuntimeError("DeepSeek API key not found. Set DEEPSEEK_API_KEY or pass --key-file.")
+    raise RuntimeError("DeepSeek API key not found. Set DEEPSEEK_API_KEY in the shell environment.")
 
 
 def main() -> None:
@@ -32,13 +30,12 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--domain-brief", required=True, help="Natural-language description of the target domain.")
-    parser.add_argument("--key-file", default="DS.txt", help="Path to the DeepSeek API key file.")
     parser.add_argument("--max-steps", type=int, default=20, help="Number of Freeman simulation steps.")
     parser.add_argument("--seed", type=int, default=42, help="Deterministic Freeman seed.")
     parser.add_argument("--output", default="", help="Optional JSON output path for the full run artifact.")
     args = parser.parse_args()
 
-    client = DeepSeekChatClient(api_key=_load_api_key(args.key_file))
+    client = DeepSeekChatClient(api_key=_load_api_key())
     orchestrator = DeepSeekFreemanOrchestrator(client)
     run = orchestrator.run(args.domain_brief, max_steps=args.max_steps, seed=args.seed)
 

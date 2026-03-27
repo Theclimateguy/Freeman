@@ -46,16 +46,15 @@ The intended loop is:
 Run a local DeepSeek-driven simulation with:
 
 ```bash
-python3 scripts/run_deepseek_simulation.py \
+DEEPSEEK_API_KEY=your_key_here python3 scripts/run_deepseek_simulation.py \
   --domain-brief "Describe the system you want to simulate" \
-  --key-file DS.txt \
   --max-steps 20 \
   --output runs/demo.json
 ```
 
 Notes:
 
-- Set `DEEPSEEK_API_KEY`.
+- Provide the DeepSeek credential via `DEEPSEEK_API_KEY`.
 - `runs/` is a local artifact directory and is ignored by git.
 - The current LLM workflow is pragmatic rather than fully autonomous: the most robust path is a compact concept, validation, repair, and then execution.
 
