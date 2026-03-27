@@ -81,6 +81,7 @@ class Resource:
     max_value: float = float("inf")
     evolution_type: str = "stock_flow"
     evolution_params: Dict[str, Any] = field(default_factory=dict)
+    conserved: bool = False
 
     def __post_init__(self) -> None:
         self.value = np.float64(self.value)
@@ -101,6 +102,7 @@ class Resource:
             "max_value": _encode_float(self.max_value),
             "evolution_type": self.evolution_type,
             "evolution_params": json_ready(self.evolution_params),
+            "conserved": self.conserved,
         }
 
     @classmethod
@@ -117,6 +119,7 @@ class Resource:
             max_value=_decode_float(data.get("max_value", "inf")),
             evolution_type=data.get("evolution_type", "stock_flow"),
             evolution_params=deep_copy_jsonable(data.get("evolution_params", {})),
+            conserved=bool(data.get("conserved", False)),
         )
 
 

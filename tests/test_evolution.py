@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from freeman.core.evolution import LinearTransition, LogisticGrowthTransition, StockFlowTransition
+from freeman.core.evolution import (
+    LinearTransition,
+    LogisticGrowthTransition,
+    StockFlowTransition,
+    ThresholdTransition,
+)
 from freeman.core.types import Resource
 from freeman.core.world import WorldState
 
@@ -47,3 +52,13 @@ def test_linear_transition_is_stable_for_a_less_than_one() -> None:
         value = resource.value
 
     assert value < 2.0
+
+
+def test_threshold_stability_bound_respects_branch_modes() -> None:
+    operator = ThresholdTransition(
+        theta=1.0,
+        low_params={"mode": "stock_flow", "delta": 0.2},
+        high_params={"mode": "increment", "delta": 0.5},
+    )
+
+    assert operator.stability_bound() == 1.0

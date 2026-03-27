@@ -40,6 +40,7 @@ def build_water_market_schema(domain_id: str = "water_market") -> dict:
                 "unit": "km3",
                 "min_value": 0.0,
                 "max_value": 2000.0,
+                "conserved": True,
                 "evolution_type": "stock_flow",
                 "evolution_params": {
                     "delta": 0.03,

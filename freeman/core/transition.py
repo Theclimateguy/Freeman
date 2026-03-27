@@ -6,6 +6,7 @@ from typing import Dict, List
 
 import numpy as np
 
+from freeman.core.access import get_world_value
 from freeman.core.evolution import get_operator
 from freeman.core.types import Policy, Violation
 from freeman.core.world import WorldState
@@ -27,22 +28,29 @@ def _merge_policies(policies: List[Policy]) -> Dict[str, Policy]:
 def _update_actor_states(world: WorldState, next_world: WorldState, policy_map: Dict[str, Policy]) -> None:
     """Update actor state vectors from metadata-defined linear rules when present."""
 
-    rules = world.metadata.get("actor_state_update", {})
+    rules = world.actor_update_rules or world.metadata.get("actor_state_update", {})
     if not rules:
         return
 
+    if all(actor_id in world.actors for actor_id in rules):
+        actor_rule_map = rules
+    else:
+        actor_rule_map = {actor_id: rules for actor_id in world.actors}
+
     for actor_id, actor in world.actors.items():
+        state_rules = actor_rule_map.get(actor_id, {})
+        if not state_rules:
+            continue
         next_actor = next_world.actors[actor_id]
         actor_policy = policy_map.get(actor_id)
         action_sum = np.sum(list(actor_policy.actions.values()), dtype=np.float64) if actor_policy else np.float64(0.0)
-        for state_key, spec in rules.items():
+        for state_key, spec in state_rules.items():
             base = np.float64(spec.get("base", 0.0))
             decay = np.float64(spec.get("decay", 1.0))
             policy_scale = np.float64(spec.get("policy_scale", 0.0))
             value = decay * np.float64(actor.state.get(state_key, 0.0)) + base + policy_scale * action_sum
             for source_key, weight in spec.get("weights", {}).items():
-                if source_key in next_world.resources:
-                    value += np.float64(weight) * np.float64(next_world.resources[source_key].value)
+                value += np.float64(weight) * np.float64(get_world_value(next_world, source_key))
             if "min_value" in spec:
                 value = max(value, np.float64(spec["min_value"]))
             if "max_value" in spec:

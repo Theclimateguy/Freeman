@@ -45,12 +45,14 @@ def find_fixed_point(
     max_iter: int = 20,
     alpha: float = 0.1,
     tol: float = 1.0e-6,
+    base_delta: float = 0.01,
+    dt: float = 1.0,
 ) -> Tuple[WorldState, bool, int]:
     """Iteratively reduce sign violations by applying small state corrections."""
 
     current = world.clone()
     for iteration in range(max_iter):
-        violations = level2_check(current, causal_dag)
+        violations = level2_check(current, causal_dag, base_delta=base_delta, dt=dt)
         sign_violations = [violation for violation in violations if violation.check_name == "sign_consistency"]
         if not sign_violations:
             return current, True, iteration

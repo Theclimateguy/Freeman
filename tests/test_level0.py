@@ -34,6 +34,7 @@ def test_conservation_violation_raises_hard_stop() -> None:
             name="R",
             value=10.0,
             unit="u",
+            conserved=True,
             evolution_type="linear",
             evolution_params={"a": 1.0, "c": 5.0},
         )
@@ -43,6 +44,31 @@ def test_conservation_violation_raises_hard_stop() -> None:
         step_world(world, [])
 
     assert any(violation.check_name == "conservation" for violation in exc_info.value.violations)
+
+
+def test_conservation_ignores_nonconserved_resources() -> None:
+    prev = WorldState(
+        domain_id="units",
+        t=0,
+        actors={},
+        resources={
+            "water": Resource(id="water", name="Water", value=100.0, unit="km3", conserved=True),
+            "gdp": Resource(id="gdp", name="GDP", value=10.0, unit="usd", conserved=False),
+        },
+        relations=[],
+        outcomes={
+            "good": Outcome(id="good", label="Good", scoring_weights={"gdp": 1.0}),
+            "bad": Outcome(id="bad", label="Bad", scoring_weights={"gdp": -1.0}),
+        },
+        causal_dag=[],
+        metadata={"exogenous_inflows": {"water": 0.0}},
+    )
+    next_world = prev.clone()
+    next_world.resources["gdp"].value = 1000.0
+
+    violations = level0_check(prev, next_world)
+
+    assert not any(violation.check_name == "conservation" for violation in violations)
 
 
 def test_nonnegativity_violation_raises_hard_stop() -> None:

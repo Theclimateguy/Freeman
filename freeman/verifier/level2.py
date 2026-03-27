@@ -12,13 +12,27 @@ from freeman.exceptions import HardStopException
 from freeman.utils import SIGN_EPSILON
 
 
-def level2_check(world: WorldState, causal_dag: List[CausalEdge], delta: float = 0.01) -> List[Violation]:
+def _compute_delta(world: WorldState, source_key: str, base_delta: float = 0.01) -> float:
+    """Return a numerically meaningful shock size for ``source_key``."""
+
+    current_value = abs(get_world_value(world, source_key))
+    if current_value > 1.0:
+        return current_value * base_delta
+    return base_delta
+
+
+def level2_check(
+    world: WorldState,
+    causal_dag: List[CausalEdge],
+    base_delta: float = 0.01,
+    dt: float = 1.0,
+) -> List[Violation]:
     """Check whether local causal responses match the expected signs."""
 
     violations: List[Violation] = []
 
     try:
-        next_base, _ = step_world(world.clone(), [], dt=1.0)
+        next_base, _ = step_world(world.clone(), [], dt=dt)
     except HardStopException as exc:
         return [
             Violation(
@@ -31,9 +45,10 @@ def level2_check(world: WorldState, causal_dag: List[CausalEdge], delta: float =
         ]
 
     for edge in causal_dag:
-        shocked = apply_delta(world.clone(), edge.source, delta)
+        shock_delta = _compute_delta(world, edge.source, base_delta=base_delta)
+        shocked = apply_delta(world.clone(), edge.source, shock_delta)
         try:
-            next_shocked, _ = step_world(shocked, [], dt=1.0)
+            next_shocked, _ = step_world(shocked, [], dt=dt)
         except HardStopException as exc:
             violations.append(
                 Violation(
@@ -64,7 +79,11 @@ def level2_check(world: WorldState, causal_dag: List[CausalEdge], delta: float =
                         f"observed {observed_sign}"
                     ),
                     severity="soft" if edge.strength == "weak" else "hard",
-                    details={"edge": edge.snapshot(), "observed_delta": observed_delta},
+                    details={
+                        "edge": edge.snapshot(),
+                        "observed_delta": observed_delta,
+                        "shock_delta": shock_delta,
+                    },
                 )
             )
 

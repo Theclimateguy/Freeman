@@ -35,6 +35,7 @@ class DomainCompiler:
             relations=[Relation(**relation) for relation in schema.get("relations", [])],
             outcomes={outcome["id"]: Outcome(**outcome) for outcome in schema.get("outcomes", [])},
             causal_dag=[CausalEdge(**edge) for edge in schema.get("causal_dag", [])],
+            actor_update_rules=deep_copy_jsonable(schema.get("actor_update_rules", {})),
             seed=schema.get("seed", 42),
             metadata=metadata,
         )
@@ -43,6 +44,8 @@ class DomainCompiler:
         """Validate references, operator types, and score keys inside a domain schema."""
 
         validate_required_keys(schema)
+        if not schema.get("outcomes"):
+            raise ValidationError("Domain must define at least one outcome for scoring.")
         ensure_unique_ids(schema.get("actors", []), "actor")
         ensure_unique_ids(schema.get("resources", []), "resource")
         ensure_unique_ids(schema.get("outcomes", []), "outcome")
@@ -82,7 +85,44 @@ class DomainCompiler:
             if resource_id not in resource_ids:
                 raise ValidationError(f"Exogenous inflow references unknown resource {resource_id}")
 
+        self._validate_actor_update_rules(schema, actor_ids, valid_value_keys)
+
     def _collect_valid_value_keys(self, resource_ids: Set[str], actor_state_keys: Set[str]) -> Set[str]:
         """Return all keys that may legally reference world values."""
 
         return set(resource_ids) | set(actor_state_keys)
+
+    def _validate_actor_update_rules(
+        self,
+        schema: Dict[str, Any],
+        actor_ids: Set[str],
+        valid_value_keys: Set[str],
+    ) -> None:
+        """Validate explicit actor update rules declared in the schema."""
+
+        rules = schema.get("actor_update_rules", {})
+        if not rules:
+            return
+        if not isinstance(rules, dict):
+            raise ValidationError("actor_update_rules must be a mapping of actor_id -> state rules.")
+
+        actor_state_map = {actor["id"]: set(actor.get("state", {})) for actor in schema.get("actors", [])}
+        for actor_id, state_rules in rules.items():
+            if actor_id not in actor_ids:
+                raise ValidationError(f"actor_update_rules references unknown actor {actor_id}")
+            if not isinstance(state_rules, dict):
+                raise ValidationError(f"actor_update_rules[{actor_id}] must be a mapping of state keys.")
+            for state_key, spec in state_rules.items():
+                if state_key not in actor_state_map.get(actor_id, set()):
+                    raise ValidationError(
+                        f"actor_update_rules[{actor_id}] references unknown actor state {state_key}"
+                    )
+                if not isinstance(spec, dict):
+                    raise ValidationError(
+                        f"actor_update_rules[{actor_id}][{state_key}] must be a rule specification mapping."
+                    )
+                for source_key in spec.get("weights", {}):
+                    if source_key not in valid_value_keys:
+                        raise ValidationError(
+                            f"actor_update_rules[{actor_id}][{state_key}] references unknown source key {source_key}"
+                        )

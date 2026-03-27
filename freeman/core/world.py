@@ -20,12 +20,14 @@ class WorldState:
     relations: List[Relation]
     outcomes: Dict[str, Outcome]
     causal_dag: List[CausalEdge]
+    actor_update_rules: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     seed: int = 42
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.t = int(self.t)
         self.seed = int(self.seed)
+        self.actor_update_rules = normalize_numeric_tree(self.actor_update_rules)
         self.metadata = normalize_numeric_tree(self.metadata)
 
     def snapshot(self) -> Dict[str, Any]:
@@ -39,6 +41,7 @@ class WorldState:
             "relations": [relation.snapshot() for relation in self.relations],
             "outcomes": {outcome_id: outcome.snapshot() for outcome_id, outcome in self.outcomes.items()},
             "causal_dag": [edge.snapshot() for edge in self.causal_dag],
+            "actor_update_rules": json_ready(self.actor_update_rules),
             "seed": self.seed,
             "metadata": json_ready(self.metadata),
         }
@@ -61,6 +64,7 @@ class WorldState:
                 for outcome_id, outcome in data.get("outcomes", {}).items()
             },
             causal_dag=[CausalEdge.from_snapshot(edge) for edge in data.get("causal_dag", [])],
+            actor_update_rules=deep_copy_jsonable(data.get("actor_update_rules", {})),
             seed=data.get("seed", 42),
             metadata=deep_copy_jsonable(data.get("metadata", {})),
         )

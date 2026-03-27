@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 
@@ -12,58 +12,70 @@ from freeman.core.world import WorldState
 from freeman.utils import EPSILON
 
 
-def _infer_exogenous_inflow(world: WorldState) -> float:
-    """Infer exogenous inflow when it is not explicitly stored in metadata."""
+def _infer_resource_exogenous_inflow(resource) -> float:
+    """Infer resource-specific exogenous inflow when it is not explicitly configured."""
 
-    total = np.float64(0.0)
-    for resource in world.resources.values():
-        params = resource.evolution_params
-        if resource.evolution_type == "stock_flow":
-            total += np.float64(params.get("phi_params", {}).get("base_inflow", 0.0))
-        elif resource.evolution_type == "logistic":
-            total += max(np.float64(0.0), np.float64(params.get("external", 0.0)))
-        elif resource.evolution_type == "linear":
-            total += max(np.float64(0.0), np.float64(params.get("c", 0.0)))
-    return float(total)
+    params = resource.evolution_params
+    if resource.evolution_type == "stock_flow":
+        return float(np.float64(params.get("phi_params", {}).get("base_inflow", 0.0)))
+    if resource.evolution_type == "logistic":
+        return float(max(np.float64(0.0), np.float64(params.get("external", 0.0))))
+    if resource.evolution_type == "linear":
+        return float(max(np.float64(0.0), np.float64(params.get("c", 0.0))))
+    return 0.0
 
 
-def _total_exogenous_inflow(world: WorldState) -> float:
-    """Return the exogenous inflow budget used by the conservation check."""
+def _explicit_inflow_map(world: WorldState) -> Dict[str, float]:
+    """Return explicit per-resource exogenous inflow values from metadata."""
 
-    if "exogenous_inflow" in world.metadata or "exogenous_inflows" in world.metadata:
-        explicit_total = np.float64(world.metadata.get("exogenous_inflow", 0.0))
-        inflows = world.metadata.get("exogenous_inflows", {})
-        if isinstance(inflows, dict):
-            explicit_total += np.sum(list(inflows.values()), dtype=np.float64)
-        return float(explicit_total)
-    return _infer_exogenous_inflow(world)
+    inflows = world.metadata.get("exogenous_inflows", {})
+    if not isinstance(inflows, dict):
+        inflows = {}
+    explicit = {resource_id: float(np.float64(value)) for resource_id, value in inflows.items()}
+    conserved_ids = [resource_id for resource_id, resource in world.resources.items() if resource.conserved]
+    if "exogenous_inflow" in world.metadata and len(conserved_ids) == 1:
+        explicit.setdefault(conserved_ids[0], float(np.float64(world.metadata["exogenous_inflow"])))
+    return explicit
+
+
+def _resource_exogenous_inflow(world: WorldState, resource_id: str) -> float:
+    """Return the exogenous inflow allowance for a single resource."""
+
+    explicit = _explicit_inflow_map(world)
+    if resource_id in explicit:
+        return explicit[resource_id]
+    return _infer_resource_exogenous_inflow(world.resources[resource_id])
 
 
 def level0_check(prev: WorldState, next: WorldState) -> List[Violation]:
     """Run hard invariants that must hold on every simulation step."""
 
     violations: List[Violation] = []
-    total_prev = np.sum([resource.value for resource in prev.resources.values()], dtype=np.float64)
-    total_next = np.sum([resource.value for resource in next.resources.values()], dtype=np.float64)
-    external = np.float64(_total_exogenous_inflow(next))
-
-    if total_next > total_prev + external + np.float64(EPSILON):
-        violations.append(
-            Violation(
-                level=0,
-                check_name="conservation",
-                description=(
-                    f"Resource sum grew by {float(total_next - total_prev):.6f} "
-                    f"with exogenous allowance {float(external):.6f}"
-                ),
-                severity="hard",
-                details={
-                    "total_prev": float(total_prev),
-                    "total_next": float(total_next),
-                    "external": float(external),
-                },
+    for resource_id, next_resource in next.resources.items():
+        if not next_resource.conserved:
+            continue
+        prev_resource = prev.resources[resource_id]
+        external = np.float64(_resource_exogenous_inflow(next, resource_id))
+        if next_resource.value > prev_resource.value + external + np.float64(EPSILON):
+            violations.append(
+                Violation(
+                    level=0,
+                    check_name="conservation",
+                    description=(
+                        f"Conserved resource {resource_id} grew by "
+                        f"{float(next_resource.value - prev_resource.value):.6f} "
+                        f"with exogenous allowance {float(external):.6f}"
+                    ),
+                    severity="hard",
+                    details={
+                        "resource_id": resource_id,
+                        "unit": next_resource.unit,
+                        "prev_value": float(prev_resource.value),
+                        "next_value": float(next_resource.value),
+                        "external": float(external),
+                    },
+                )
             )
-        )
 
     for res_id, resource in next.resources.items():
         if resource.value < resource.min_value - np.float64(EPSILON):

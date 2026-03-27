@@ -200,9 +200,17 @@ class ThresholdTransition(EvolutionOperator):
     def stability_bound(self) -> float:
         """Return the larger of the branch-specific bounds."""
 
-        low_a = abs(float(self.low_params.get("a", self.low_params.get("delta", 0.0))))
-        high_a = abs(float(self.high_params.get("a", self.high_params.get("delta", 0.0))))
-        return float(max(low_a, high_a))
+        def _branch_bound(branch: Dict[str, Any]) -> float:
+            mode = branch.get("mode", "linear")
+            if mode == "linear":
+                return abs(float(branch.get("a", 1.0)))
+            if mode == "stock_flow":
+                return max(0.0, 1.0 - float(branch.get("delta", 0.0)))
+            if mode == "increment":
+                return 1.0
+            return 1.0
+
+        return float(max(_branch_bound(self.low_params), _branch_bound(self.high_params)))
 
 
 class CoupledTransition(EvolutionOperator):

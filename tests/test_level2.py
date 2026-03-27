@@ -78,3 +78,33 @@ def test_fixed_point_converges_on_simple_cycle() -> None:
     assert corrected.domain_id == world.domain_id
     assert converged is True
     assert iterations >= 0
+
+
+def test_level2_uses_relative_shock_for_large_resources() -> None:
+    world = WorldState(
+        domain_id="relative_shock",
+        t=0,
+        actors={},
+        resources={
+            "x": Resource(id="x", name="X", value=1000.0, unit="usd", evolution_type="linear", evolution_params={"a": 0.9}),
+            "y": Resource(
+                id="y",
+                name="Y",
+                value=1.0,
+                unit="u",
+                evolution_type="linear",
+                evolution_params={"a": 0.8, "coupling_weights": {"x": 0.1}},
+            ),
+        },
+        relations=[],
+        outcomes={
+            "good": Outcome(id="good", label="Good", scoring_weights={"x": 0.1, "y": 0.1}),
+            "bad": Outcome(id="bad", label="Bad", scoring_weights={"x": -0.1, "y": -0.1}),
+        },
+        causal_dag=[CausalEdge(source="x", target="y", expected_sign="-", strength="strong")],
+    )
+
+    violations = level2_check(world, world.causal_dag, base_delta=0.01)
+
+    sign_violation = next(violation for violation in violations if violation.check_name == "sign_consistency")
+    assert sign_violation.details["shock_delta"] == 10.0

@@ -8,6 +8,7 @@ from freeman.core.transition import step_world
 from freeman.core.types import Policy
 from freeman.core.world import WorldState
 from freeman.domain.compiler import DomainCompiler
+from freeman.exceptions import HardStopException
 from freeman.game.runner import GameRunner, SimConfig
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
@@ -131,17 +132,16 @@ def freeman_verify_domain(world_id: str, levels: Iterable[int] = (0, 1, 2)) -> D
         try:
             _, level0_violations = step_world(world.clone(), [])
             violations.extend(level0_violations)
-        except Exception as exc:  # noqa: BLE001
-            if hasattr(exc, "violations"):
-                violations.extend(exc.violations)
-            else:
-                raise
+        except HardStopException as exc:
+            violations.extend(exc.violations)
 
     if 1 in requested_levels:
         violations.extend(level1_check(world.clone(), SimConfig(seed=world.seed)))
 
     if 2 in requested_levels:
-        violations.extend(level2_check(world.clone(), world.causal_dag))
+        violations.extend(
+            level2_check(world.clone(), world.causal_dag, base_delta=SimConfig().level2_shock_delta)
+        )
 
     report = VerificationReport(
         world_id=world_id,

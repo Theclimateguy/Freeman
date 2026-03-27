@@ -23,6 +23,8 @@ class SimConfig:
     max_steps: int = 50
     dt: float = 1.0
     level2_check_every: int = 5
+    level2_shock_delta: float = 0.01
+    stop_on_hard_level2: bool = True
     convergence_check_steps: int = 20
     convergence_epsilon: float = 1.0e-4
     fixed_point_max_iter: int = 20
@@ -47,18 +49,22 @@ class GameRunner:
             current.causal_dag,
             max_iter=self.config.fixed_point_max_iter,
             alpha=self.config.fixed_point_alpha,
+            base_delta=self.config.level2_shock_delta,
+            dt=self.config.dt,
         )
 
         trajectory = [current.snapshot()]
         all_violations = list(l1_violations)
         outcome_probs_history = []
         steps_run = 0
+        stop_reason = None
 
         for step_idx in range(self.config.max_steps):
             try:
                 current, step_violations = step_world(current, policies, self.config.dt)
             except HardStopException as exc:
                 all_violations.extend(exc.violations)
+                stop_reason = "hard_level0_violation"
                 break
 
             all_violations.extend(step_violations)
@@ -68,7 +74,18 @@ class GameRunner:
             steps_run += 1
 
             if self.config.level2_check_every > 0 and (step_idx + 1) % self.config.level2_check_every == 0:
-                all_violations.extend(level2_check(current, current.causal_dag))
+                l2_violations = level2_check(
+                    current,
+                    current.causal_dag,
+                    base_delta=self.config.level2_shock_delta,
+                    dt=self.config.dt,
+                )
+                all_violations.extend(l2_violations)
+                if self.config.stop_on_hard_level2 and any(
+                    violation.severity == "hard" for violation in l2_violations
+                ):
+                    stop_reason = "hard_level2_violation"
+                    break
 
         final_outcome_probs = outcome_probs_history[-1] if outcome_probs_history else score_outcomes(current)
         confidence = compute_confidence(final_outcome_probs, all_violations)
@@ -81,5 +98,9 @@ class GameRunner:
             violations=all_violations,
             converged=fp_converged,
             steps_run=steps_run,
-            metadata={"fixed_point_iters": fp_iters, "seed": self.config.seed},
+            metadata={
+                "fixed_point_iters": fp_iters,
+                "seed": self.config.seed,
+                "stop_reason": stop_reason,
+            },
         )
