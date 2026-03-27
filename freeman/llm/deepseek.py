@@ -112,6 +112,12 @@ class DeepSeekChatClient:
         response = self.create_chat_completion(messages, temperature=temperature, max_tokens=max_tokens)
         return response["choices"][0]["message"]["content"].strip()
 
+    def embed(self, text: str) -> List[float]:
+        """Offline-safe embedding stub for adapters that only support chat."""
+
+        del text
+        return [0.0] * 1536
+
     def repair_schema(
         self,
         package: Dict[str, Any],

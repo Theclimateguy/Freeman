@@ -16,11 +16,13 @@ def test_costmodel_estimate_tracks_task_components() -> None:
         resources=4,
         domains=2,
         kg_updates=5,
+        embedding_tokens_used=250,
     )
 
     assert estimate.estimated_cost > 0.0
     assert estimate.domains == 2
     assert estimate.kg_updates == 5
+    assert estimate.embedding_tokens_used == 250
 
 
 def test_costmodel_downgrades_deep_dive_and_stops_on_hard_limits() -> None:

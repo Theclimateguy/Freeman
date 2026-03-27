@@ -125,13 +125,19 @@ The aggregate API lives in `freeman.verifier.verifier.Verifier`.
 sequenceDiagram
     participant P as Pipeline
     participant KG as KnowledgeGraph
+    participant VS as KGVectorStore
     participant SL as SessionLog
     participant R as Reconciler
 
+    P->>KG: semantic_query(signal, top-K)
+    KG->>VS: vector similarity search
+    VS-->>KG: seed node ids
     P->>KG: add analysis summary node
+    KG->>VS: upsert(summary embedding)
     P->>SL: append KGDelta
     SL->>R: reconcile(session)
     R->>KG: merge / split / archive
+    KG->>VS: delete/archive or re-upsert merge
     KG-->>P: persisted JSON + exportable graph
 ```
 
@@ -140,10 +146,32 @@ sequenceDiagram
 `freeman.memory.knowledgegraph` uses `networkx.MultiDiGraph` with JSON persistence. Supported operations:
 
 - query
+- semantic query with top-K retrieval plus 1-hop neighbors
 - add node / edge
 - split node
 - archive node
 - export HTML / JSON / DOT
+
+When semantic memory is enabled, each `KGNode` also stores an embedding vector and the graph is synchronized with `freeman.memory.vectorstore.KGVectorStore` backed by ChromaDB.
+
+### Semantic Retrieval
+
+```mermaid
+flowchart LR
+    A["Signal text"] --> B["EmbeddingAdapter.embed()"]
+    B --> C["KGVectorStore.query(top-K)"]
+    C --> D["Seed node ids"]
+    D --> E["KnowledgeGraph fetch"]
+    E --> F["1-hop predecessor/successor expansion"]
+    F --> G["Context nodes capped by max_context_nodes"]
+```
+
+Retrieval policy:
+
+- never send the full KG to downstream LLM-facing paths when semantic memory is enabled
+- retrieve top-K semantically similar nodes from ChromaDB
+- expand by one graph hop to preserve local structural context
+- apply a hard cap with `memory.max_context_nodes`
 
 Confidence status mapping:
 
@@ -181,6 +209,13 @@ Conflict handling:
 5. write summary node to KG
 6. append session deltas
 7. reconcile memory
+
+If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
+
+1. embed the incoming signal text
+2. retrieve semantically similar nodes from ChromaDB
+3. expand by one hop in the NetworkX graph
+4. cap the resulting context to the configured token budget
 
 ### Signal Ingestion
 
@@ -236,6 +271,7 @@ stateDiagram-v2
 `freeman.agent.costmodel` estimates explicit task cost from:
 
 - LLM calls
+- embedding tokens
 - simulation steps
 - number of actors
 - number of resources

@@ -21,4 +21,13 @@ multiworld:
 
 memory:
   backend: "networkx-json"
-  json_path: "runs/memory/knowledge_graph.json"
+  json_path: "./data/kg_state.json"
+  vector_store:
+    enabled: true
+    backend: "chroma"
+    path: "./data/chroma_db"
+    collection: "kg_nodes"
+  embedding_model: "text-embedding-3-small"
+  retrieval_top_k: 15
+  max_context_nodes: 30
+  session_log_path: "./data/sessions/"

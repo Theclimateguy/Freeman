@@ -73,6 +73,9 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `KGNode`
   - `KGEdge`
   - `KnowledgeGraph`
+  - `semantic_query()`
+- Semantic index:
+  - `KGVectorStore`
 - Session log:
   - `KGDelta`
   - `AttentionStep`
@@ -90,6 +93,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `DomainTemplateRegistry`
 - Pipeline:
   - `AnalysisPipeline`
+  - `AnalysisPipelineConfig`
   - `AnalysisPipelineResult`
 - Signals:
   - `Signal`
@@ -142,6 +146,9 @@ This is the implementation-facing map of modules, classes, and primary functions
 
 ### `freeman.llm`
 
+- `EmbeddingAdapter`
+- `DeterministicEmbeddingAdapter`
+- `OpenAIEmbeddingClient`
 - `DeepSeekChatClient`
 - `DeepSeekFreemanOrchestrator`
 - `LLMDrivenSimulationRun`
@@ -161,6 +168,8 @@ Command:
   - reconcile one saved session log into the KG
 - `python -m freeman.interface.cli kg-archive [--node-id <id>] [--reason <reason>]`
   - archive one node or auto-archive all low-confidence nodes
+- `freeman --config-path <config> kg-reindex [--batch-size <n>] [--use-stub-embeddings]`
+  - re-embed legacy nodes without vectors and sync them into ChromaDB
 - `python -m freeman.interface.cli override-param <world_path> <param_path> <value> [--output-path <path>]`
   - apply one parameter override to a world snapshot
 - `python -m freeman.interface.cli override-sign <world_path> <edge_id> <expected_sign> [--output-path <path>]`

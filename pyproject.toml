@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "freeman"
-version = "1.1.0"
+version = "1.2.0"
 description = "Domain-agnostic world simulator for LLM agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,12 @@ dependencies = [
     "scipy>=1.11",
     "pytest>=8.0",
 ]
+
+[project.optional-dependencies]
+semantic = ["chromadb>=0.5"]
+
+[project.scripts]
+freeman = "freeman.interface.cli:main"
 
 [tool.setuptools]
 include-package-data = true

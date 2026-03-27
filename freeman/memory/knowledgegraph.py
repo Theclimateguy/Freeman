@@ -6,12 +6,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Sequence
 
 import networkx as nx
 import yaml
 
 from freeman.utils import deep_copy_jsonable, json_ready
+
+if TYPE_CHECKING:
+    from freeman.memory.vectorstore import KGVectorStore
 
 ACTIVE_THRESHOLD = 0.60
 UNCERTAIN_THRESHOLD = 0.30
@@ -36,15 +39,21 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _default_json_path(config_path: str | Path | None = None) -> Path:
+def _memory_config(config_path: str | Path | None = None) -> Dict[str, Any]:
     config_file = Path(config_path) if config_path is not None else _repo_root() / "config.yaml"
     if config_file.exists():
         payload = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
-        memory_cfg = payload.get("memory", {})
-        json_path = memory_cfg.get("json_path")
-        if json_path:
-            candidate = Path(json_path)
-            return candidate if candidate.is_absolute() else (config_file.parent / candidate).resolve()
+        return payload.get("memory", {})
+    return {}
+
+
+def _default_json_path(config_path: str | Path | None = None) -> Path:
+    memory_cfg = _memory_config(config_path)
+    json_path = memory_cfg.get("json_path")
+    if json_path:
+        candidate = Path(json_path)
+        base = Path(config_path).resolve().parent if config_path is not None else _repo_root()
+        return candidate if candidate.is_absolute() else (base / candidate).resolve()
     return (_repo_root() / "runs" / "memory" / "knowledge_graph.json").resolve()
 
 
@@ -61,6 +70,7 @@ class KGNode:
     evidence: List[str] = field(default_factory=list)
     sources: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    embedding: List[float] = field(default_factory=list)
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
     archived_at: str | None = None
@@ -72,6 +82,7 @@ class KGNode:
         self.evidence = list(self.evidence)
         self.sources = list(self.sources)
         self.metadata = deep_copy_jsonable(self.metadata)
+        self.embedding = [float(value) for value in self.embedding]
 
     def snapshot(self) -> Dict[str, Any]:
         return json_ready(
@@ -85,6 +96,7 @@ class KGNode:
                 "evidence": self.evidence,
                 "sources": self.sources,
                 "metadata": self.metadata,
+                "embedding": self.embedding,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
                 "archived_at": self.archived_at,
@@ -103,6 +115,7 @@ class KGNode:
             evidence=list(data.get("evidence", [])),
             sources=list(data.get("sources", [])),
             metadata=deep_copy_jsonable(data.get("metadata", {})),
+            embedding=list(data.get("embedding", [])),
             created_at=data.get("created_at", _now_iso()),
             updated_at=data.get("updated_at", _now_iso()),
             archived_at=data.get("archived_at"),
@@ -159,7 +172,7 @@ class KGEdge:
 
 
 class KnowledgeGraph:
-    """NetworkX-backed knowledge graph with JSON persistence."""
+    """NetworkX-backed knowledge graph with optional semantic retrieval."""
 
     def __init__(
         self,
@@ -168,31 +181,53 @@ class KnowledgeGraph:
         config_path: str | Path | None = None,
         auto_load: bool = True,
         auto_save: bool = True,
+        llm_adapter: Any | None = None,
+        vectorstore: KGVectorStore | None = None,
     ) -> None:
         self.json_path = Path(json_path).resolve() if json_path is not None else _default_json_path(config_path)
         self.auto_save = auto_save
+        self.llm_adapter = llm_adapter
+        self.vectorstore = vectorstore
         self.graph = nx.MultiDiGraph()
         if auto_load and self.json_path.exists():
             self.load()
 
     def add_node(self, node: KGNode) -> None:
-        """Insert or replace a node."""
+        """Insert a node and embed it if an adapter is available."""
 
-        node.updated_at = _now_iso()
-        self.graph.add_node(node.id, **node.snapshot())
+        if node.id in self.graph:
+            self.update_node(node)
+            return
+        prepared = self._prepare_node(node, previous=None)
+        self.graph.add_node(prepared.id, **prepared.snapshot())
+        self._sync_vectorstore(prepared)
         self._maybe_save()
 
-    def get_node(self, node_id: str) -> KGNode | None:
-        """Return a node by id."""
+    def update_node(self, node: KGNode) -> None:
+        """Update an existing node and re-embed if content changed."""
+
+        previous = self.get_node(node.id, lazy_embed=False)
+        if previous is None:
+            self.add_node(node)
+            return
+        prepared = self._prepare_node(node, previous=previous)
+        node_store = self.graph.nodes[prepared.id]
+        node_store.clear()
+        node_store.update(prepared.snapshot())
+        self._sync_vectorstore(prepared)
+        self._maybe_save()
+
+    def get_node(self, node_id: str, *, lazy_embed: bool = True) -> KGNode | None:
+        """Return a node by id, lazily re-embedding legacy nodes if possible."""
 
         if node_id not in self.graph:
             return None
-        return KGNode.from_snapshot(dict(self.graph.nodes[node_id]))
+        return self._deserialize_node(dict(self.graph.nodes[node_id]), lazy_embed=lazy_embed)
 
-    def nodes(self) -> List[KGNode]:
+    def nodes(self, *, lazy_embed: bool = False) -> List[KGNode]:
         """Return all nodes."""
 
-        return [KGNode.from_snapshot(dict(attrs)) for _, attrs in self.graph.nodes(data=True)]
+        return [self._deserialize_node(dict(attrs), lazy_embed=lazy_embed) for _, attrs in self.graph.nodes(data=True)]
 
     def add_edge(self, edge: KGEdge) -> None:
         """Insert or replace an edge."""
@@ -206,10 +241,7 @@ class KnowledgeGraph:
     def edges(self) -> List[KGEdge]:
         """Return all edges."""
 
-        return [
-            KGEdge.from_snapshot(dict(attrs))
-            for _, _, _, attrs in self.graph.edges(keys=True, data=True)
-        ]
+        return [KGEdge.from_snapshot(dict(attrs)) for _, _, _, attrs in self.graph.edges(keys=True, data=True)]
 
     def query(
         self,
@@ -223,7 +255,7 @@ class KnowledgeGraph:
 
         text_query = text.lower() if text else None
         results: List[KGNode] = []
-        for node in self.nodes():
+        for node in self.nodes(lazy_embed=False):
             if status is not None and node.status != status:
                 continue
             if node_type is not None and node.node_type != node_type:
@@ -246,10 +278,43 @@ class KnowledgeGraph:
             results.append(node)
         return sorted(results, key=lambda item: (-item.confidence, item.id))
 
-    def archive(self, node_id: str, reason: str = "") -> KGNode:
-        """Archive a node in place."""
+    def semantic_query(self, query_text: str, top_k: int = 15) -> List[KGNode]:
+        """Return semantically relevant nodes plus 1-hop graph neighbors."""
 
-        node = self.get_node(node_id)
+        if self.vectorstore is None or self.llm_adapter is None:
+            return self.query(status="active")[:top_k]
+
+        query_embedding = [float(value) for value in self.llm_adapter.embed(query_text)]
+        node_ids = self.vectorstore.query(query_embedding, top_k=top_k)
+        ordered_ids: List[str] = []
+        seen = set()
+        for node_id in node_ids:
+            if node_id not in self.graph or node_id in seen:
+                continue
+            node = self.get_node(node_id)
+            if node is None or node.status == "archived":
+                continue
+            ordered_ids.append(node_id)
+            seen.add(node_id)
+            for neighbor_id in [*self.graph.predecessors(node_id), *self.graph.successors(node_id)]:
+                if neighbor_id in seen:
+                    continue
+                neighbor = self.get_node(neighbor_id)
+                if neighbor is None or neighbor.status == "archived":
+                    continue
+                ordered_ids.append(neighbor_id)
+                seen.add(neighbor_id)
+        nodes: List[KGNode] = []
+        for node_id in ordered_ids:
+            node = self.get_node(node_id)
+            if node is not None:
+                nodes.append(node)
+        return nodes
+
+    def archive(self, node_id: str, reason: str = "") -> KGNode:
+        """Archive a node in place and remove it from the vector store."""
+
+        node = self.get_node(node_id, lazy_embed=False)
         if node is None:
             raise KeyError(node_id)
         node.status = "archived"
@@ -257,9 +322,17 @@ class KnowledgeGraph:
         node.updated_at = node.archived_at
         if reason:
             node.metadata["archive_reason"] = reason
+        self.graph.nodes[node_id].clear()
         self.graph.nodes[node_id].update(node.snapshot())
+        if self.vectorstore is not None:
+            self.vectorstore.delete(node_id)
         self._maybe_save()
         return node
+
+    def archive_node(self, node_id: str, reason: str = "") -> KGNode:
+        """Alias for compatibility with the semantic layer requirements."""
+
+        return self.archive(node_id, reason=reason)
 
     def split_node(
         self,
@@ -270,7 +343,7 @@ class KnowledgeGraph:
     ) -> List[str]:
         """Archive one node and replace it by several more specific nodes."""
 
-        original = self.get_node(node_id)
+        original = self.get_node(node_id, lazy_embed=False)
         if original is None:
             raise KeyError(node_id)
 
@@ -301,18 +374,11 @@ class KnowledgeGraph:
                     evidence=list(original.evidence) + list(payload.get("evidence", [])),
                     sources=list(original.sources) + list(payload.get("sources", [])),
                     metadata={**original.metadata, **deep_copy_jsonable(payload.get("metadata", {}))},
+                    embedding=list(payload.get("embedding", [])),
                 )
             self.add_node(node)
             created_ids.append(node.id)
-            self.add_edge(
-                KGEdge(
-                    source=node_id,
-                    target=node.id,
-                    relation_type="split_into",
-                    confidence=1.0,
-                    weight=1.0,
-                )
-            )
+            self.add_edge(KGEdge(source=node_id, target=node.id, relation_type="split_into", confidence=1.0, weight=1.0))
             if redistribute_edges:
                 for edge in incoming_edges:
                     self.add_edge(
@@ -346,7 +412,7 @@ class KnowledgeGraph:
         return {
             "backend": "networkx-json",
             "json_path": str(self.json_path),
-            "nodes": [node.snapshot() for node in self.nodes()],
+            "nodes": [node.snapshot() for node in self.nodes(lazy_embed=False)],
             "edges": [edge.snapshot() for edge in self.edges()],
         }
 
@@ -370,6 +436,8 @@ class KnowledgeGraph:
         for edge_payload in payload.get("edges", []):
             edge = KGEdge.from_snapshot(edge_payload)
             self.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
+        if self.vectorstore is not None:
+            self.vectorstore.sync_from_kg(self)
 
     def export_json(self, path: str | Path | None = None) -> Path:
         """Export the graph as JSON."""
@@ -380,13 +448,11 @@ class KnowledgeGraph:
         """Export the graph as Graphviz DOT."""
 
         lines = ["digraph KnowledgeGraph {"]
-        for node in self.nodes():
+        for node in self.nodes(lazy_embed=False):
             label = f"{node.label}\\n[{node.status}, {node.confidence:.2f}]"
             lines.append(f'  "{node.id}" [label="{label}"];')
         for edge in self.edges():
-            lines.append(
-                f'  "{edge.source}" -> "{edge.target}" [label="{edge.relation_type} ({edge.confidence:.2f})"];'
-            )
+            lines.append(f'  "{edge.source}" -> "{edge.target}" [label="{edge.relation_type} ({edge.confidence:.2f})"];')
         lines.append("}")
         dot = "\n".join(lines)
         if path is None:
@@ -458,6 +524,38 @@ class KnowledgeGraph:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(html, encoding="utf-8")
         return target
+
+    def _prepare_node(self, node: KGNode, previous: KGNode | None) -> KGNode:
+        prepared = KGNode.from_snapshot(node.snapshot())
+        force_reembed = bool(prepared.metadata.pop("_force_reembed", False))
+        content_changed = previous is not None and previous.content != prepared.content
+        if previous is not None and not force_reembed and not content_changed and not prepared.embedding and previous.embedding:
+            prepared.embedding = list(previous.embedding)
+        if prepared.content and self.llm_adapter is not None and (force_reembed or not prepared.embedding or content_changed):
+            prepared.embedding = [float(value) for value in self.llm_adapter.embed(prepared.content)]
+        prepared.updated_at = _now_iso()
+        if previous is not None:
+            prepared.created_at = previous.created_at
+        return prepared
+
+    def _deserialize_node(self, attrs: Dict[str, Any], *, lazy_embed: bool) -> KGNode:
+        node = KGNode.from_snapshot(attrs)
+        if lazy_embed and self.llm_adapter is not None and node.content and not node.embedding:
+            node.embedding = [float(value) for value in self.llm_adapter.embed(node.content)]
+            node.updated_at = _now_iso()
+            self.graph.nodes[node.id].clear()
+            self.graph.nodes[node.id].update(node.snapshot())
+            self._sync_vectorstore(node)
+            self._maybe_save()
+        return node
+
+    def _sync_vectorstore(self, node: KGNode) -> None:
+        if self.vectorstore is None:
+            return
+        if node.status == "archived":
+            self.vectorstore.delete(node.id)
+            return
+        self.vectorstore.upsert(node)
 
     def _maybe_save(self) -> None:
         if self.auto_save:

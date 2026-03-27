@@ -17,6 +17,7 @@ class CostEstimate:
     resources: int
     domains: int
     kg_updates: int
+    embedding_tokens_used: int = 0
     actual_cost: float = 0.0
     budget_remaining: float = 0.0
     stop_reason: str | None = None
@@ -59,6 +60,7 @@ class CostModel:
         resources: int,
         domains: int = 1,
         kg_updates: int = 0,
+        embedding_tokens_used: int = 0,
     ) -> CostEstimate:
         estimated_cost = (
             8.0 * llm_calls
@@ -67,6 +69,7 @@ class CostModel:
             + 0.25 * resources
             + 6.0 * domains
             + 0.5 * kg_updates
+            + 0.00002 * embedding_tokens_used
         )
         return CostEstimate(
             task_id=task_id,
@@ -77,6 +80,7 @@ class CostModel:
             resources=resources,
             domains=domains,
             kg_updates=kg_updates,
+            embedding_tokens_used=embedding_tokens_used,
         )
 
     def precheck(

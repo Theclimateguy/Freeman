@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
+
+import yaml
 
 from freeman.core.scorer import raw_outcome_scores
 from freeman.core.types import Policy
@@ -30,6 +33,26 @@ class AnalysisPipelineResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class AnalysisPipelineConfig:
+    """Retrieval limits used by the analysis pipeline."""
+
+    retrieval_top_k: int = 15
+    max_context_nodes: int = 30
+
+    @classmethod
+    def from_config(cls, config_path: str | Path | None = None) -> "AnalysisPipelineConfig":
+        config_file = Path(config_path).resolve() if config_path is not None else Path(__file__).resolve().parents[2] / "config.yaml"
+        if not config_file.exists():
+            return cls()
+        payload = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        memory_cfg = payload.get("memory", {})
+        return cls(
+            retrieval_top_k=int(memory_cfg.get("retrieval_top_k", 15)),
+            max_context_nodes=int(memory_cfg.get("max_context_nodes", 30)),
+        )
+
+
 class AnalysisPipeline:
     """Orchestrate the main v0.1 agent analysis path."""
 
@@ -41,6 +64,8 @@ class AnalysisPipeline:
         verifier_config: VerifierConfig | None = None,
         knowledge_graph: KnowledgeGraph | None = None,
         reconciler: Reconciler | None = None,
+        config: AnalysisPipelineConfig | None = None,
+        config_path: str | Path | None = None,
     ) -> None:
         self.compiler = compiler or DomainCompiler()
         self.sim_config = sim_config or SimConfig()
@@ -48,6 +73,7 @@ class AnalysisPipeline:
         self.runner = GameRunner(self.sim_config)
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
         self.reconciler = reconciler or Reconciler()
+        self.config = config or AnalysisPipelineConfig.from_config(config_path)
 
     def run(
         self,
@@ -70,6 +96,8 @@ class AnalysisPipeline:
         dominant_outcome = None
         if sim_result.final_outcome_probs:
             dominant_outcome = max(sim_result.final_outcome_probs, key=sim_result.final_outcome_probs.get)
+        signal_text = self._signal_text(final_world, session_log)
+        context_nodes = self._get_context_nodes(signal_text)
 
         summary_node = KGNode(
             id=f"analysis:{final_world.domain_id}:{final_world.t}",
@@ -85,6 +113,8 @@ class AnalysisPipeline:
                 "domain_id": final_world.domain_id,
                 "dominant_outcome": dominant_outcome,
                 "final_outcome_probs": sim_result.final_outcome_probs,
+                "context_node_ids": [node.id for node in context_nodes],
+                "context_node_count": len(context_nodes),
                 "verification": verification,
             },
         )
@@ -112,10 +142,34 @@ class AnalysisPipeline:
             knowledge_graph_path=str(self.knowledge_graph.json_path),
             reconciliation=reconciliation,
             metadata={
+                "context_node_ids": [node.id for node in context_nodes],
+                "context_node_count": len(context_nodes),
                 "steps_run": sim_result.steps_run,
                 "fixed_point_iters": sim_result.metadata.get("fixed_point_iters"),
             },
         )
 
+    def _signal_text(self, world: WorldState, session_log: SessionLog | None) -> str:
+        """Build a compact retrieval query from the incoming signal context."""
 
-__all__ = ["AnalysisPipeline", "AnalysisPipelineResult"]
+        parts = [world.domain_id]
+        if session_log is not None:
+            for delta in session_log.kg_deltas:
+                if delta.operation not in {"add_node", "update_node"}:
+                    continue
+                payload = delta.payload.get("node", delta.payload)
+                node = payload if isinstance(payload, KGNode) else KGNode.from_snapshot(payload)
+                parts.extend([node.label, node.content])
+        return " ".join(part for part in parts if part).strip()
+
+    def _get_context_nodes(self, signal_text: str) -> List[KGNode]:
+        """Select retrieval context without exposing the full KG to downstream LLMs."""
+
+        if self.knowledge_graph.vectorstore is not None:
+            nodes = self.knowledge_graph.semantic_query(signal_text, top_k=self.config.retrieval_top_k)
+        else:
+            nodes = [node for node in self.knowledge_graph.nodes() if node.status != "archived"]
+        return nodes[: self.config.max_context_nodes]
+
+
+__all__ = ["AnalysisPipeline", "AnalysisPipelineConfig", "AnalysisPipelineResult"]

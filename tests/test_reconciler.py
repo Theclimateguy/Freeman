@@ -2,9 +2,41 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import KGDelta, SessionLog
+
+
+@dataclass
+class SpyVectorStore:
+    deleted_ids: list[str] = field(default_factory=list)
+    upserted: list[tuple[str, list[float]]] = field(default_factory=list)
+
+    def upsert(self, node: KGNode) -> None:
+        self.upserted.append((node.id, list(node.embedding)))
+
+    def delete(self, node_id: str) -> None:
+        self.deleted_ids.append(node_id)
+
+    def query(self, query_embedding: list[float], top_k: int = 15, min_confidence: float = 0.0) -> list[str]:
+        del query_embedding, top_k, min_confidence
+        return []
+
+    def sync_from_kg(self, kg: KnowledgeGraph) -> int:
+        del kg
+        return 0
+
+
+class MappingEmbeddingAdapter:
+    def __init__(self, mapping: dict[str, list[float]]) -> None:
+        self.mapping = {key: list(value) for key, value in mapping.items()}
+        self.calls: list[str] = []
+
+    def embed(self, text: str) -> list[float]:
+        self.calls.append(text)
+        return list(self.mapping[text])
 
 
 def test_reconciler_archives_low_confidence_nodes(tmp_path) -> None:
@@ -74,3 +106,68 @@ def test_reconciler_splits_conflicting_claims_and_exports_graph(tmp_path) -> Non
     assert "split_into" in dot
     assert html_path.exists()
     assert json_path.exists()
+
+
+def test_reconciler_archive_triggers_vectorstore_delete(tmp_path) -> None:
+    store = SpyVectorStore()
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True, vectorstore=store)
+    node = KGNode(
+        id="claim_archive",
+        label="Archive me",
+        content="Claim to archive.",
+        confidence=0.9,
+    )
+    kg.add_node(node)
+
+    session = SessionLog(session_id="archive-session")
+    session.add_kg_delta(
+        KGDelta(
+            operation="archive_node",
+            target_id=node.id,
+            payload={"id": node.id},
+        )
+    )
+
+    Reconciler().reconcile(kg, session)
+
+    assert store.deleted_ids == [node.id]
+
+
+def test_reconciler_merge_forces_reembed_when_vectorstore_present(tmp_path) -> None:
+    adapter = MappingEmbeddingAdapter(
+        {
+            "Water stress is rising.": [1.0, 0.0, 0.0],
+        }
+    )
+    store = SpyVectorStore()
+    kg = KnowledgeGraph(
+        json_path=tmp_path / "kg.json",
+        auto_load=False,
+        auto_save=True,
+        llm_adapter=adapter,
+        vectorstore=store,
+    )
+    existing = KGNode(
+        id="claim_water",
+        label="Water Stress",
+        content="Water stress is rising.",
+        confidence=0.7,
+        metadata={"claim_key": "water_stress"},
+    )
+    kg.add_node(existing)
+
+    incoming = KGNode(
+        id="claim_water_update",
+        label="Water Stress",
+        content="Water stress is rising.",
+        confidence=0.8,
+        metadata={"claim_key": "water_stress", "source": "new_feed"},
+    )
+    session = SessionLog(session_id="merge-session")
+    session.add_kg_delta(KGDelta(operation="add_node", payload={"node": incoming.snapshot()}))
+
+    Reconciler().reconcile(kg, session)
+
+    assert adapter.calls == ["Water stress is rising.", "Water stress is rising."]
+    assert len(store.upserted) >= 2
+    assert store.upserted[-1][0] == "claim_water"

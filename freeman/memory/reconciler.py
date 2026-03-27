@@ -104,6 +104,9 @@ class Reconciler:
                 merged = self._merge_nodes(candidate, incoming)
                 merged.confidence = self.beta_update(merged.confidence, delta.support, delta.contradiction)
                 merged.status = self.classify_status(merged.confidence)
+                if knowledge_graph.vectorstore is not None and knowledge_graph.llm_adapter is not None:
+                    merged.embedding = []
+                    merged.metadata["_force_reembed"] = True
                 knowledge_graph.add_node(merged)
                 result.merged_node_ids.append(merged.id)
                 return

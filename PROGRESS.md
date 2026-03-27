@@ -1,5 +1,25 @@
 # USIM-AGENT Progress
 
+## Semantic Memory Layer (v1.2.0)
+
+- Added semantic retrieval over the knowledge graph with optional ChromaDB persistence in `freeman/memory/vectorstore.py`.
+- Extended `KGNode` and `KnowledgeGraph` to persist embeddings, lazy-reembed legacy JSON nodes, auto-sync semantic state on add/update/archive, and expose `semantic_query()` with top-K + 1-hop neighbor expansion.
+- Updated the reconciler to force re-embedding on merged nodes when semantic indexing is active, so vector state stays aligned with merged claims.
+- Updated the analysis pipeline to use retrieval-bounded context selection instead of exposing the full active KG to downstream LLM-facing paths.
+- Extended the LLM layer with an embedding interface, a minimal OpenAI embedding client, and an offline deterministic embedding stub used for tests and local reindexing when no API key is available.
+- Added `freeman kg-reindex`, config support for `memory.vector_store`, and embedding token tracking in the cost model.
+- Added semantic-memory tests in `tests/test_vectorstore.py` and expanded reconciler/cost tests to cover archive/delete, merge/re-embed, lazy embedding, CLI reindex, and retrieval fallback behavior.
+
+### Deviations from spec
+
+- When `OPENAI_API_KEY` is not present, CLI reindexing falls back to a deterministic stub embedding adapter so offline validation still works; real semantic quality requires a real embedding backend.
+- ChromaDB remains optional at runtime and is only constructed when `memory.vector_store.enabled: true`.
+
+### Validation
+
+- `pytest tests/` -> 54 passed
+- `freeman --config-path <temp-config> kg-reindex --use-stub-embeddings` -> created `chroma_db/` and indexed 1 node
+
 ## Phase 1
 
 - Completed the core API foundation in `freeman/core/`.
