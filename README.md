@@ -55,7 +55,7 @@ python3 scripts/run_deepseek_simulation.py \
 
 Notes:
 
-- Set `DEEPSEEK_API_KEY` or keep the key in `DS.txt`.
+- Set `DEEPSEEK_API_KEY`.
 - `runs/` is a local artifact directory and is ignored by git.
 - The current LLM workflow is pragmatic rather than fully autonomous: the most robust path is a compact concept, validation, repair, and then execution.
 
