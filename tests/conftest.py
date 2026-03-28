@@ -10,8 +10,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+TESTS = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if str(TESTS) not in sys.path:
+    sys.path.insert(0, str(TESTS))
 
 from freeman.domain.compiler import DomainCompiler
 
@@ -161,11 +164,31 @@ def build_water_market_schema(domain_id: str = "water_market") -> dict:
     }
 
 
+def _load_jsonl_fixture(name: str) -> list[dict]:
+    path = TESTS / "fixtures" / "signals" / name
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 @pytest.fixture
 def water_market_schema() -> dict:
     """Return the default water-market schema."""
 
     return copy.deepcopy(build_water_market_schema())
+
+
+@pytest.fixture
+def water_shock_stream() -> list[dict]:
+    return _load_jsonl_fixture("water_shock.jsonl")
+
+
+@pytest.fixture
+def japan_debt_shock_stream() -> list[dict]:
+    return _load_jsonl_fixture("japan_debt_shock.jsonl")
+
+
+@pytest.fixture
+def null_stream() -> list[dict]:
+    return _load_jsonl_fixture("null_stream.jsonl")
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-# Integration Benchmarks
+# Integration and Behavior Benchmarks
 
 ## Japan Debt Scenario
 
@@ -17,3 +17,27 @@ The assertions are chosen to match the expected GIM-style qualitative outcome:
 - no hard verifier violations occur
 
 This repository does not vendor the original GIM implementation, so the benchmark is documented as a directional compatibility contract rather than a byte-for-byte trajectory match.
+
+## Replay-Driven Agent Harness
+
+`tests/harness.py` provides a deterministic `AgentHarness` that replays signal streams through:
+
+- `SignalIngestionEngine`
+- `SignalMemory`
+- `AttentionScheduler` with `ObligationQueue`
+- `AnalysisPipeline`
+- optional `ProactiveEmitter`
+
+The replay fixtures live in `tests/fixtures/signals/`:
+
+- `water_shock.jsonl`
+- `japan_debt_shock.jsonl`
+- `null_stream.jsonl`
+
+`tests/test_agent_behavior.py` asserts the current behavioral contracts:
+
+- severe shock streams trigger at least one analysis decision
+- KG state grows after a real shock cycle
+- null streams stay in `WATCH`
+- unresolved obligations can dominate a fresher task
+- hard verifier violations produce proactive `alert` events

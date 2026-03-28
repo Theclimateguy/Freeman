@@ -1,20 +1,27 @@
 # Freeman
 
-Freeman is a domain-agnostic simulation and agent framework for structured reasoning over actors, resources, causal graphs, uncertainty, verification, and long-term memory. The current codebase implements the USIM-AGENT roadmap through v0.2, including the deterministic simulator, three-level verifier, knowledge graph, agent scheduling, uncertainty propagation, cost governance, human overrides, and end-to-end tests.
+Freeman is a domain-agnostic simulation and agent framework for structured reasoning over actors, resources, causal graphs, uncertainty, semantic memory, forecast verification, and proactive agent behavior. The current codebase implements the USIM-AGENT roadmap through v0.2, plus semantic KG retrieval, obligation-driven scheduling, forecast tracking, self-model updates, and replay-based behavioral tests.
 
 ## What Is Implemented
 
 - Core simulator: `WorldGraph` / `WorldState`, transition operators, outcome scoring, multi-domain shared-resource worlds.
 - Verifier: Level 0 invariants, Level 1 structural checks, Level 2 sign consistency, fixed-point repair, spectral-radius guard.
-- Memory: NetworkX + JSON knowledge graph, session logs, confidence reconciliation, export to HTML / JSON-LD / DOT.
-- Agent layer: domain template registry, analysis pipeline, signal ingestion, UCB attention scheduler, formal cost model.
+- Memory: NetworkX + JSON knowledge graph, ChromaDB semantic retrieval, session logs, confidence reconciliation, self-model nodes, export to HTML / JSON-LD / DOT.
+- Agent layer: domain template registry, analysis pipeline, signal ingestion, signal memory, UCB attention scheduler, obligation queue, forecast registry, proactive emitter, formal cost model.
 - Interface layer: CLI commands, minimal REST API, KG export, human override API, simulation diff.
 - v0.2 extensions: compile validation, historical fit scoring, ensemble sign consensus, Monte Carlo uncertainty, cost governance, override audit trail.
+- Behavioral validation: deterministic `AgentHarness`, replay fixtures, and end-to-end stimulus tests for watch/analyze/escalation behavior.
 
 ## Install
 
 ```bash
 pip install -e .
+```
+
+Optional semantic-memory extras:
+
+```bash
+pip install -e ".[semantic]"
 ```
 
 ## Quick Start
@@ -23,6 +30,12 @@ Run the full test suite:
 
 ```bash
 pytest tests/
+```
+
+Run the replay-driven behavioral suite only:
+
+```bash
+pytest tests/test_agent_behavior.py
 ```
 
 Inspect the current knowledge graph status:
@@ -41,6 +54,12 @@ Query the knowledge graph:
 
 ```bash
 python -m freeman.interface.cli query --text "water stress"
+```
+
+Reindex legacy KG nodes into the semantic vector store:
+
+```bash
+python -m freeman.interface.cli kg-reindex --batch-size 100
 ```
 
 Export the knowledge graph:
@@ -74,6 +93,8 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
   - `freeman.interface.api.run_server()`
 - LLM orchestration:
   - `freeman.llm.orchestrator.DeepSeekFreemanOrchestrator`
+- Deterministic replay harness:
+  - `tests/harness.py::AgentHarness`
 
 ## Documentation
 
@@ -85,15 +106,17 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 
 - `freeman/core/` — simulator state, evolution operators, transition logic, scoring, compile validation, uncertainty.
 - `freeman/verifier/` — verifier levels, aggregate verifier, fixed-point correction.
-- `freeman/memory/` — knowledge graph, reconciliation, session logs.
-- `freeman/agent/` — analysis pipeline, scheduling, signal ingestion, cost governance.
+- `freeman/memory/` — knowledge graph, semantic vector store, reconciliation, session logs.
+- `freeman/agent/` — analysis pipeline, scheduling, signal ingestion, forecast tracking, proactive emission, cost governance.
 - `freeman/interface/` — CLI, REST API, export, override and diff helpers.
 - `freeman/domain/` — schema compiler and bundled profiles.
 - `freeman/llm/` — provider-facing LLM orchestration and repair loop.
-- `tests/` — unit and integration coverage.
+- `tests/` — unit, integration, replay fixtures, and behavioral agent harness coverage.
 
 ## Notes
 
 - Default long-term memory backend is NetworkX + JSON via `config.yaml -> memory.json_path`.
+- Semantic retrieval is optional and uses ChromaDB when installed with the `semantic` extra.
+- Signal replay fixtures live under `tests/fixtures/signals/` and are used by `tests/test_agent_behavior.py`.
 - `pytest tests/` is the required validation command and is wired to work without manual `PYTHONPATH` changes.
 - The stdlib REST layer is intentionally minimal; the override and diff logic already exists as reusable Python API classes and can be mounted behind a richer HTTP framework later.

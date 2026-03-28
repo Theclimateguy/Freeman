@@ -8,22 +8,27 @@ Freeman is organized into five layers:
 
 1. `freeman.core`: deterministic world model, transition operators, scoring, uncertainty, compile validation.
 2. `freeman.verifier`: invariant checks, structural stability checks, sign consistency, fixed-point correction.
-3. `freeman.memory`: long-term knowledge graph, session log, confidence reconciliation.
-4. `freeman.agent`: end-to-end analysis pipeline, signal ingestion, attention scheduling, cost governance.
+3. `freeman.memory`: long-term knowledge graph, semantic vector store, session log, confidence reconciliation, self-model feedback.
+4. `freeman.agent`: signal ingestion, signal memory, obligation-driven attention scheduling, end-to-end analysis pipeline, forecast tracking, proactive emission, cost governance.
 5. `freeman.interface`: CLI, REST endpoints, export, override and diff utilities.
 
 ## High-Level Flow
 
 ```mermaid
 flowchart LR
-    A["Natural-language brief or domain schema"] --> B["DomainCompiler / CompileValidator"]
-    B --> C["WorldGraph / WorldState"]
-    C --> D["Verifier Level 1 + Level 2 precheck"]
-    D --> E["GameRunner"]
-    E --> F["Outcome scoring + confidence"]
-    F --> G["KnowledgeGraph update"]
-    G --> H["SessionLog + Reconciler"]
-    H --> I["CLI / REST / Human override / Export"]
+    A["Incoming signals or schema"] --> B["SignalIngestionEngine + SignalMemory"]
+    B --> C["AttentionScheduler + ObligationQueue"]
+    C --> D["DomainCompiler / CompileValidator"]
+    D --> E["WorldGraph / WorldState"]
+    E --> F["Verifier Level 1 + Level 2 precheck"]
+    F --> G["GameRunner"]
+    G --> H["Outcome scoring + confidence"]
+    H --> I["ForecastRegistry + ProactiveEmitter"]
+    H --> J["KnowledgeGraph update"]
+    J --> K["SessionLog + Reconciler"]
+    I --> L["Self-model updates after verification"]
+    K --> M["CLI / REST / Human override / Export"]
+    L --> M
 ```
 
 ## Core Simulation Layer
@@ -195,6 +200,7 @@ Conflict handling:
 - same `claim_key` + same content: merge
 - same `claim_key` + conflicting content: split the node and archive the previous aggregate
 - confidence below threshold: archive
+- verified forecast errors: update rolling `self_observation` nodes keyed by `(domain_id, outcome_id)`
 
 ## Agent Layer
 
@@ -229,12 +235,31 @@ Trigger logic combines:
 
 - Mahalanobis anomaly score
 - semantic shock classification
+- cross-session duplicate suppression through `SignalMemory`
+- exponentially decayed replay weight for repeated signals
 
 Modes:
 
 - `WATCH`
 - `ANALYZE`
 - `DEEP_DIVE`
+
+Signal decay uses a half-life \(h\):
+
+\[
+w_s(t) = 2^{-\Delta t / h}
+\]
+
+```mermaid
+flowchart LR
+    A["Signal source"] --> B["Normalize into Signal"]
+    B --> C{"Seen recently?"}
+    C -->|yes| D["Skip duplicate"]
+    C -->|no| E["Mahalanobis score"]
+    E --> F["Shock classification"]
+    F --> G["WATCH / ANALYZE / DEEP_DIVE"]
+    G --> H["Persist in SignalMemory"]
+```
 
 ### Attention Scheduler
 
@@ -248,8 +273,16 @@ Current interest term:
 
 \[
 \text{interest}_i(t) =
-\frac{\text{EIG}_i + \text{anomaly}_i + \text{semanticGap}_i + \text{confidenceGap}_i}{\text{cost}_i}
+\frac{
+\text{EIG}_i + \text{anomaly}_i + \text{semanticGap}_i + \text{confidenceGap}_i + \text{obligationPressure}_i(t)
+}{\text{cost}_i}
 \]
+
+where `obligationPressure` is the sum of urgency from:
+
+- `ForecastDebt`: open forecasts approaching their verification horizon
+- `ConflictDebt`: aged review conflicts in the KG
+- `AnomalyDebt`: unprocessed anomaly signals
 
 Task states:
 
@@ -284,6 +317,44 @@ It can:
 - downgrade `DEEP_DIVE -> ANALYZE -> WATCH`
 - stop when hard limits are exceeded
 
+### Forecast Registry and Self-Model
+
+`freeman.agent.forecastregistry` records each outcome forecast with a finite horizon and can attach `ForecastDebt` entries to the scheduler as soon as the forecast is created.
+
+```mermaid
+sequenceDiagram
+    participant P as AnalysisPipeline
+    participant F as ForecastRegistry
+    participant O as ObligationQueue
+    participant V as Verifier / Evaluator
+    participant R as Reconciler
+    participant KG as KnowledgeGraph
+
+    P->>F: record(forecast)
+    F->>O: add ForecastDebt
+    V->>F: due(current_step)
+    V->>F: verify(forecast_id, actual_prob)
+    F-->>R: verified forecast
+    R->>KG: update_self_model(forecast)
+```
+
+Self-model nodes store a rolling window of signed forecast errors:
+
+- node type: `self_observation`
+- identifier: `self:forecast_error:{domain_id}:{outcome_id}`
+- metrics: `mean_abs_error`, `bias`, `n_forecasts`
+- rolling window: last 50 verified errors
+
+### Proactive Events
+
+`freeman.agent.proactiveemitter.ProactiveEmitter` converts material pipeline changes into structured interface events:
+
+- `alert` for hard verifier violations
+- `forecast_update` for outcome shifts above the configured probability threshold
+- `question_to_human` when confidence falls below the review floor
+
+These events are attached to `AnalysisPipelineResult.proactive_events` and are designed for interface or notification layers rather than simulator internals.
+
 ## v0.2 Extensions
 
 ### Compile Validation
@@ -307,6 +378,27 @@ It can:
 - `ConfidenceReport`
 
 Monte Carlo produces probabilistic outcome distributions and confidence from variance stability.
+
+## Behavioral Harness
+
+`tests/harness.py` provides a deterministic replay loop for stimulus logic. It is intentionally separate from the production interface layer and is used to assert agent behavior over curated JSONL streams.
+
+```mermaid
+flowchart LR
+    A["Replay fixture JSONL"] --> B["ManualSignalSource"]
+    B --> C["SignalIngestionEngine + SignalMemory"]
+    C --> D["AttentionScheduler + ObligationQueue"]
+    D --> E["AnalysisPipeline"]
+    E --> F["ForecastRegistry / KG / ProactiveEmitter"]
+    F --> G["Behavioral assertions"]
+```
+
+Current behavioral contracts cover:
+
+- shock streams trigger at least one analysis action
+- null streams remain in `WATCH`
+- aged obligations force a return to unresolved tasks
+- verifier violations surface as proactive alerts
 
 ## Human Override Path
 
@@ -342,6 +434,7 @@ Implemented commands:
 - `status`
 - `reconcile`
 - `kg-archive`
+- `kg-reindex`
 - `override-param`
 - `override-sign`
 - `rerun-domain`

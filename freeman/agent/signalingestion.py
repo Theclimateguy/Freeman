@@ -20,6 +20,31 @@ def _parse_timestamp(value: str | datetime) -> datetime:
     return datetime.fromisoformat(value).astimezone(timezone.utc).replace(microsecond=0)
 
 
+def _signal_from_mapping(payload: dict[str, Any]) -> "Signal":
+    known = {
+        "signal_id",
+        "source_type",
+        "text",
+        "topic",
+        "entities",
+        "sentiment",
+        "timestamp",
+        "metadata",
+    }
+    metadata = dict(payload.get("metadata", {}))
+    metadata.update({key: value for key, value in payload.items() if key not in known})
+    return Signal(
+        signal_id=payload["signal_id"],
+        source_type=payload["source_type"],
+        text=payload["text"],
+        topic=payload["topic"],
+        entities=list(payload.get("entities", [])),
+        sentiment=float(payload.get("sentiment", 0.0)),
+        timestamp=payload.get("timestamp", _now_iso()),
+        metadata=metadata,
+    )
+
+
 @dataclass
 class Signal:
     """Normalized incoming signal."""
@@ -149,7 +174,7 @@ class ManualSignalSource:
     """Manual signals provided directly by the caller."""
 
     def __init__(self, signals: Iterable[Signal | dict[str, Any]]) -> None:
-        self.signals = [signal if isinstance(signal, Signal) else Signal(**signal) for signal in signals]
+        self.signals = [signal if isinstance(signal, Signal) else _signal_from_mapping(signal) for signal in signals]
 
     def fetch(self) -> List[Signal]:
         return list(self.signals)

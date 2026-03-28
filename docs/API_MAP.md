@@ -85,6 +85,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `ConfidenceThresholds`
   - `ReconciliationResult`
   - `Reconciler`
+  - `update_self_model()`
 
 ### `freeman.agent`
 
@@ -95,8 +96,13 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `AnalysisPipeline`
   - `AnalysisPipelineConfig`
   - `AnalysisPipelineResult`
+- Forecasts:
+  - `Forecast`
+  - `ForecastRegistry`
 - Signals:
   - `Signal`
+  - `SignalRecord`
+  - `SignalMemory`
   - `ShockClassification`
   - `SignalTrigger`
   - `ManualSignalSource`
@@ -104,9 +110,16 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `TavilySignalSource`
   - `SignalIngestionEngine`
 - Attention:
+  - `ForecastDebt`
+  - `ConflictDebt`
+  - `AnomalyDebt`
+  - `ObligationQueue`
   - `AttentionTask`
   - `AttentionDecision`
   - `AttentionScheduler`
+- Proactive interface:
+  - `ProactiveEvent`
+  - `ProactiveEmitter`
 - Cost governance:
   - `CostEstimate`
   - `BudgetPolicy`
@@ -152,6 +165,16 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `DeepSeekChatClient`
 - `DeepSeekFreemanOrchestrator`
 - `LLMDrivenSimulationRun`
+
+### `tests`
+
+- Behavioral harness:
+  - `AgentHarness`
+  - `CycleResult`
+- Replay fixtures:
+  - `tests/fixtures/signals/water_shock.jsonl`
+  - `tests/fixtures/signals/japan_debt_shock.jsonl`
+  - `tests/fixtures/signals/null_stream.jsonl`
 
 ## CLI Map
 
@@ -256,6 +279,39 @@ from freeman.memory.sessionlog import SessionLog
 kg = KnowledgeGraph()
 session = SessionLog(session_id="demo")
 result = Reconciler().reconcile(kg, session)
+```
+
+### Forecast tracking
+
+```python
+from datetime import datetime, timezone
+
+from freeman.agent.forecastregistry import Forecast, ForecastRegistry
+
+registry = ForecastRegistry(auto_load=False, auto_save=False)
+registry.record(
+    Forecast(
+        forecast_id="water:5:scarcity",
+        domain_id="water",
+        outcome_id="scarcity",
+        predicted_prob=0.62,
+        session_id="session-1",
+        horizon_steps=5,
+        created_at=datetime.now(timezone.utc),
+        created_step=5,
+    )
+)
+due = registry.due(current_step=10)
+verified = registry.verify("water:5:scarcity", actual_prob=0.55, verified_at=datetime.now(timezone.utc))
+```
+
+### Replay-driven agent cycle
+
+```python
+from harness import AgentHarness
+
+result = AgentHarness(schema, replay_signals, enable_emitter=True).run_cycle()
+print(result.decisions, result.proactive_events)
 ```
 
 ### End-to-end pipeline
