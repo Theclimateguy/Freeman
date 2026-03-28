@@ -1,0 +1,179 @@
+{
+  "case": {
+    "case_id": "macro_trade_to_recession",
+    "domain": "macroeconomy",
+    "ground_truth_t2": {
+      "dominant_outcome": "recession_spiral",
+      "key_metric": 24.0,
+      "key_metric_name": "business_demand"
+    },
+    "t0_signal": "Freight costs and new tariffs pushed import prices sharply higher, while households report renewed inflation anxiety.",
+    "t1_signal": "Three months later, manufacturers announced layoffs, bank credit standards tightened, and new orders fell again despite the central bank staying hawkish."
+  },
+  "created_at": "2026-03-28T17:03:24+00:00",
+  "errors": [],
+  "kg_snapshot_path": "/Users/theclimateguy/Documents/science/Freeman/runs/faab_real_regime_v1/kg_snapshots/macro_trade_to_recession__mode_c_hash__t1.json",
+  "llm_calls": [
+    {
+      "ended_at": "2026-03-28T17:03:28+00:00",
+      "label": "t0_classifier",
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "FAAB_CLASSIFIER\nYou classify one benchmark signal for Freeman.\n\nReturn exactly one JSON object with:\n- shock_type: short label\n- severity: float in [0,1]\n- semantic_gap: float in [0,1]\n- rationale: one short sentence\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"signal_id\": \"macro_trade_to_recession:t0\", \"topic\": \"macroeconomy\", \"text\": \"Freight costs and new tariffs pushed import prices sharply higher, while households report renewed inflation anxiety.\", \"entities\": [\"macroeconomy\"], \"sentiment\": 0.0}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "rationale": "Import price surge from freight costs and tariffs indicates a supply-side inflationary shock.",
+        "semantic_gap": 0.3,
+        "severity": 0.7,
+        "shock_type": "supply shock"
+      },
+      "started_at": "2026-03-28T17:03:24+00:00",
+      "temperature": 0.0
+    },
+    {
+      "ended_at": "2026-03-28T17:19:42+00:00",
+      "label": "t0_state_inference",
+      "max_tokens": 1200,
+      "messages": [
+        {
+          "content": "FAAB_STATE_FORECAST\nYou update a compact Freeman world state from one benchmark signal and optional retrieved memory.\n\nAll resources are on a 0-100 scale. Use only the provided resource ids and outcome ids.\nReturn exactly one JSON object with:\n- overview: short paragraph\n- key_mechanisms: list of 3-5 concise points\n- resource_shocks: object mapping allowed resource ids to additive shocks in [-15, 15]\n- dominant_outcome_hypothesis: string\n- confidence: float in [0,1]\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"macro_trade_to_recession\", \"domain\": \"macroeconomy\", \"domain_description\": \"Trade-cost shocks, inflation pressure, monetary tightening, and recession risk.\", \"step\": \"t0\", \"signal_text\": \"Freight costs and new tariffs pushed import prices sharply higher, while households report renewed inflation anxiety.\", \"classification\": {\"shock_type\": \"supply shock\", \"severity\": 0.7, \"semantic_gap\": 0.3, \"rationale\": \"Import price surge from freight costs and tariffs indicates a supply-side inflationary shock.\"}, \"resources\": {\"trade_cost_pressure\": \"Trade Cost Pressure\", \"inflation_pressure\": \"Inflation Pressure\", \"business_demand\": \"Business Demand\", \"policy_rate\": \"Policy Rate Stance\", \"recession_risk\": \"Recession Risk\"}, \"outcomes\": [\"soft_landing\", \"inflation_persistence\", \"recession_spiral\"], \"retrieved_context\": []}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.65,
+        "dominant_outcome_hypothesis": "inflation_persistence",
+        "key_mechanisms": [
+          "Import price surge directly increases inflation pressure through cost-push channels",
+          "Higher trade costs reduce business profitability and may suppress investment demand",
+          "Household inflation expectations could become unanchored, creating second-round effects",
+          "Central bank faces dilemma between fighting inflation and supporting growth",
+          "Supply-side nature of shock limits effectiveness of demand-side policy tools"
+        ],
+        "overview": "A supply-side inflationary shock from rising freight costs and new tariffs has sharply increased import prices, triggering renewed household inflation anxiety. This creates immediate upward pressure on inflation while potentially dampening business demand through higher input costs, setting the stage for potential monetary policy responses and heightened recession risk.",
+        "resource_shocks": {
+          "business_demand": -8,
+          "inflation_pressure": 10,
+          "policy_rate": 5,
+          "recession_risk": 7,
+          "trade_cost_pressure": 12
+        }
+      },
+      "started_at": "2026-03-28T17:03:28+00:00",
+      "temperature": 0.1
+    },
+    {
+      "ended_at": "2026-03-28T17:19:46+00:00",
+      "label": "t1_classifier",
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "FAAB_CLASSIFIER\nYou classify one benchmark signal for Freeman.\n\nReturn exactly one JSON object with:\n- shock_type: short label\n- severity: float in [0,1]\n- semantic_gap: float in [0,1]\n- rationale: one short sentence\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"signal_id\": \"macro_trade_to_recession:t1\", \"topic\": \"macroeconomy\", \"text\": \"Three months later, manufacturers announced layoffs, bank credit standards tightened, and new orders fell again despite the central bank staying hawkish.\", \"entities\": [\"macroeconomy\"], \"sentiment\": 0.0}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "rationale": "The signal indicates declining economic activity with layoffs and falling orders, but lacks specific data on magnitude or duration.",
+        "semantic_gap": 0.3,
+        "severity": 0.7,
+        "shock_type": "demand shock"
+      },
+      "started_at": "2026-03-28T17:19:42+00:00",
+      "temperature": 0.0
+    },
+    {
+      "ended_at": "2026-03-28T17:19:56+00:00",
+      "label": "t1_state_inference",
+      "max_tokens": 1200,
+      "messages": [
+        {
+          "content": "FAAB_STATE_FORECAST\nYou update a compact Freeman world state from one benchmark signal and optional retrieved memory.\n\nAll resources are on a 0-100 scale. Use only the provided resource ids and outcome ids.\nReturn exactly one JSON object with:\n- overview: short paragraph\n- key_mechanisms: list of 3-5 concise points\n- resource_shocks: object mapping allowed resource ids to additive shocks in [-15, 15]\n- dominant_outcome_hypothesis: string\n- confidence: float in [0,1]\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"macro_trade_to_recession\", \"domain\": \"macroeconomy\", \"domain_description\": \"Trade-cost shocks, inflation pressure, monetary tightening, and recession risk.\", \"step\": \"t1\", \"signal_text\": \"Three months later, manufacturers announced layoffs, bank credit standards tightened, and new orders fell again despite the central bank staying hawkish.\", \"classification\": {\"shock_type\": \"demand shock\", \"severity\": 0.7, \"semantic_gap\": 0.3, \"rationale\": \"The signal indicates declining economic activity with layoffs and falling orders, but lacks specific data on magnitude or duration.\"}, \"resources\": {\"trade_cost_pressure\": \"Trade Cost Pressure\", \"inflation_pressure\": \"Inflation Pressure\", \"business_demand\": \"Business Demand\", \"policy_rate\": \"Policy Rate Stance\", \"recession_risk\": \"Recession Risk\"}, \"outcomes\": [\"soft_landing\", \"inflation_persistence\", \"recession_spiral\"], \"retrieved_context\": [{\"id\": \"analysis:macro_trade_to_recession:8\", \"label\": \"Analysis macro_trade_to_recession\", \"content\": \"Dominant outcome: inflation_persistence; confidence=0.3631; violations=0\", \"metadata\": {\"domain_id\": \"macro_trade_to_recession\", \"dominant_outcome\": \"inflation_persistence\", \"final_outcome_probs\": {\"soft_landing\": 0.002244397616957047, \"inflation_persistence\": 0.5612512153995798, \"recession_spiral\": 0.43650438698346306}, \"context_node_ids\": [\"macro_trade_to_recession:t0:inference\", \"macro_trade_to_recession:t0:signal\"], \"context_node_count\": 2, \"forecast_ids\": [\"macro_trade_to_recession:8:soft_landing\", \"macro_trade_to_recession:8:inflation_persistence\", \"macro_trade_to_recession:8:recession_spiral\"], \"verification\": {\"world_id\": \"macro_trade_to_recession:0\", \"domain_id\": \"macro_trade_to_recession\", \"levels_run\": [1, 2], \"violations\": [], \"passed\": true, \"metadata\": {\"level1\": {\"spectral_radius\": 0.9021522923360222, \"causal_edges_checked\": 6}, \"level2\": {\"dag_source\": \"world\", \"initial_sign_violations\": 0, \"correction_iterations_budget\": 0, \"correction_iterations_run\": 0, \"fixed_point_converged\": true, \"spectral_radius\": 0.9021522923360222}}}}}, {\"id\": \"macro_trade_to_recession:t0:signal\", \"label\": \"macroeconomy signal T0\", \"content\": \"Freight costs and new tariffs pushed import prices sharply higher, while households report renewed inflation anxiety.\", \"metadata\": {\"case_id\": \"macro_trade_to_recession\", \"domain\": \"macroeconomy\", \"step\": \"t0\", \"classification\": {\"shock_type\": \"supply shock\", \"severity\": 0.7, \"semantic_gap\": 0.3, \"rationale\": \"Import price surge from freight costs and tariffs indicates a supply-side inflationary shock.\"}}}, {\"id\": \"macro_trade_to_recession:t0:inference\", \"label\": \"macroeconomy inference T0\", \"content\": \"A supply-side inflationary shock from rising freight costs and new tariffs has sharply increased import prices, triggering renewed household inflation anxiety. This creates immediate upward pressure on inflation while potentially dampening business demand through higher input costs, setting the stage for potential monetary policy responses and heightened recession risk.\", \"metadata\": {\"case_id\": \"macro_trade_to_recession\", \"domain\": \"macroeconomy\", \"step\": \"t0\", \"dominant_outcome_hypothesis\": \"inflation_persistence\", \"resource_shocks\": {\"trade_cost_pressure\": 12.0, \"inflation_pressure\": 10.0, \"business_demand\": -8.0, \"policy_rate\": 5.0, \"recession_risk\": 7.0}, \"key_mechanisms\": [\"Import price surge directly increases inflation pressure through cost-push channels\", \"Higher trade costs reduce business profitability and may suppress investment demand\", \"Household inflation expectations could become unanchored, creating second-round effects\", \"Central bank faces dilemma between fighting inflation and supporting growth\", \"Supply-side nature of shock limits effectiveness of demand-side policy tools\"]}}]}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.65,
+        "dominant_outcome_hypothesis": "recession_spiral",
+        "key_mechanisms": [
+          "Manufacturing layoffs and falling new orders indicate weakening business demand and potential recessionary momentum",
+          "Tightening bank credit standards amplify the demand shock by restricting business and consumer borrowing",
+          "Central bank hawkishness despite weakening demand suggests inflation remains the primary policy concern",
+          "Initial supply-side shock has transitioned to demand-side deterioration through reduced business investment and employment",
+          "Negative feedback loop emerging between weak demand, credit tightening, and business retrenchment"
+        ],
+        "overview": "Three months after initial trade-cost shocks, the economy shows clear signs of deteriorating demand conditions. Manufacturers are announcing layoffs, bank credit standards are tightening, and new orders continue to fall despite the central bank maintaining a hawkish stance. This suggests the initial supply-side inflationary shock is now triggering demand destruction, creating a stagflationary environment with rising recession risks.",
+        "resource_shocks": {
+          "business_demand": -12.0,
+          "inflation_pressure": -5.0,
+          "policy_rate": 2.0,
+          "recession_risk": 10.0,
+          "trade_cost_pressure": -3.0
+        }
+      },
+      "started_at": "2026-03-28T17:19:46+00:00",
+      "temperature": 0.1
+    }
+  ],
+  "mode": "MODE_C_HASH",
+  "steps": {
+    "t0": {
+      "autonomy_flag": false,
+      "confidence": 0.3631,
+      "dominant_outcome": "inflation_persistence",
+      "interest_score": 1.0,
+      "key_metric_error": 11.950155355263817,
+      "key_metric_value": 12.049844644736183,
+      "outcome_probs": {
+        "inflation_persistence": 0.5612512153995798,
+        "recession_spiral": 0.43650438698346306,
+        "soft_landing": 0.002244397616957047
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1": {
+      "autonomy_flag": true,
+      "confidence": 0.6233,
+      "dominant_outcome": "inflation_persistence",
+      "interest_score": 1.0,
+      "key_metric_error": 12.489908041713889,
+      "key_metric_value": 11.510091958286111,
+      "outcome_probs": {
+        "inflation_persistence": 0.8686611604257357,
+        "recession_spiral": 0.12516761051692246,
+        "soft_landing": 0.006171229057341702
+      },
+      "retrieval_precision": 1.0,
+      "retrieved_node_count": 3,
+      "retrieved_node_ids": [
+        "analysis:macro_trade_to_recession:8",
+        "macro_trade_to_recession:t0:signal",
+        "macro_trade_to_recession:t0:inference"
+      ],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  }
+}

@@ -1,0 +1,177 @@
+{
+  "case": {
+    "case_id": "climate_drought_response",
+    "domain": "climate_risk",
+    "ground_truth_t2": {
+      "dominant_outcome": "water_shortage_spiral",
+      "key_metric": 28.0,
+      "key_metric_name": "reservoir_storage"
+    },
+    "t0_signal": "Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.",
+    "t1_signal": "A severe early heatwave arrived, emergency water restrictions were delayed, and orchard stress is rising as reservoir levels fall toward critical thresholds."
+  },
+  "created_at": "2026-03-28T17:02:57+00:00",
+  "errors": [],
+  "kg_snapshot_path": "/Users/theclimateguy/Documents/science/Freeman/runs/faab_real_regime_v1/kg_snapshots/climate_drought_response__mode_c_hash__t1.json",
+  "llm_calls": [
+    {
+      "ended_at": "2026-03-28T17:03:01+00:00",
+      "label": "t0_classifier",
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "FAAB_CLASSIFIER\nYou classify one benchmark signal for Freeman.\n\nReturn exactly one JSON object with:\n- shock_type: short label\n- severity: float in [0,1]\n- semantic_gap: float in [0,1]\n- rationale: one short sentence\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"signal_id\": \"climate_drought_response:t0\", \"topic\": \"climate_risk\", \"text\": \"Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.\", \"entities\": [\"climate risk\"], \"sentiment\": 0.0}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "rationale": "The signal describes depleted water resources with below-normal snowpack and soil moisture, indicating a significant but not extreme water shortage.",
+        "semantic_gap": 0.3,
+        "severity": 0.7,
+        "shock_type": "water_scarcity"
+      },
+      "started_at": "2026-03-28T17:02:57+00:00",
+      "temperature": 0.0
+    },
+    {
+      "ended_at": "2026-03-28T17:03:11+00:00",
+      "label": "t0_state_inference",
+      "max_tokens": 1200,
+      "messages": [
+        {
+          "content": "FAAB_STATE_FORECAST\nYou update a compact Freeman world state from one benchmark signal and optional retrieved memory.\n\nAll resources are on a 0-100 scale. Use only the provided resource ids and outcome ids.\nReturn exactly one JSON object with:\n- overview: short paragraph\n- key_mechanisms: list of 3-5 concise points\n- resource_shocks: object mapping allowed resource ids to additive shocks in [-15, 15]\n- dominant_outcome_hypothesis: string\n- confidence: float in [0,1]\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"climate_drought_response\", \"domain\": \"climate_risk\", \"domain_description\": \"Hydro-climate stress, reservoir management, crop losses, and adaptation under drought and heat.\", \"step\": \"t0\", \"signal_text\": \"Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.\", \"classification\": {\"shock_type\": \"water_scarcity\", \"severity\": 0.7, \"semantic_gap\": 0.3, \"rationale\": \"The signal describes depleted water resources with below-normal snowpack and soil moisture, indicating a significant but not extreme water shortage.\"}, \"resources\": {\"precipitation_deficit\": \"Precipitation Deficit\", \"reservoir_storage\": \"Reservoir Storage\", \"crop_stress\": \"Crop Stress\", \"policy_response\": \"Policy Response\", \"wildfire_risk\": \"Wildfire Risk\"}, \"outcomes\": [\"managed_adaptation\", \"water_shortage_spiral\", \"agricultural_loss_cycle\"], \"retrieved_context\": []}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.75,
+        "dominant_outcome_hypothesis": "water_shortage_spiral",
+        "key_mechanisms": [
+          "Reduced snowpack limits seasonal meltwater supply to reservoirs and streams",
+          "Low soil moisture decreases natural water retention and increases irrigation demand",
+          "Weaker reservoir storage reduces buffer capacity for drought mitigation",
+          "Multiple water deficits compound to create systemic stress across sectors"
+        ],
+        "overview": "The basin faces significant water scarcity entering the season, with depleted snowpack and soil moisture combined with weaker-than-expected reservoir carryover storage. This creates a challenging starting point for water management during the upcoming dry period, increasing vulnerability across agricultural and ecological systems.",
+        "resource_shocks": {
+          "crop_stress": 8,
+          "policy_response": 5,
+          "precipitation_deficit": 10,
+          "reservoir_storage": -12,
+          "wildfire_risk": 7
+        }
+      },
+      "started_at": "2026-03-28T17:03:01+00:00",
+      "temperature": 0.1
+    },
+    {
+      "ended_at": "2026-03-28T17:03:16+00:00",
+      "label": "t1_classifier",
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "FAAB_CLASSIFIER\nYou classify one benchmark signal for Freeman.\n\nReturn exactly one JSON object with:\n- shock_type: short label\n- severity: float in [0,1]\n- semantic_gap: float in [0,1]\n- rationale: one short sentence\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"signal_id\": \"climate_drought_response:t1\", \"topic\": \"climate_risk\", \"text\": \"A severe early heatwave arrived, emergency water restrictions were delayed, and orchard stress is rising as reservoir levels fall toward critical thresholds.\", \"entities\": [\"climate risk\"], \"sentiment\": 0.0}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "rationale": "The signal describes a heatwave, water restrictions, and falling reservoir levels indicating a climate-related drought event.",
+        "semantic_gap": 0.3,
+        "severity": 0.8,
+        "shock_type": "climate_drought"
+      },
+      "started_at": "2026-03-28T17:03:11+00:00",
+      "temperature": 0.0
+    },
+    {
+      "ended_at": "2026-03-28T17:03:24+00:00",
+      "label": "t1_state_inference",
+      "max_tokens": 1200,
+      "messages": [
+        {
+          "content": "FAAB_STATE_FORECAST\nYou update a compact Freeman world state from one benchmark signal and optional retrieved memory.\n\nAll resources are on a 0-100 scale. Use only the provided resource ids and outcome ids.\nReturn exactly one JSON object with:\n- overview: short paragraph\n- key_mechanisms: list of 3-5 concise points\n- resource_shocks: object mapping allowed resource ids to additive shocks in [-15, 15]\n- dominant_outcome_hypothesis: string\n- confidence: float in [0,1]\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"climate_drought_response\", \"domain\": \"climate_risk\", \"domain_description\": \"Hydro-climate stress, reservoir management, crop losses, and adaptation under drought and heat.\", \"step\": \"t1\", \"signal_text\": \"A severe early heatwave arrived, emergency water restrictions were delayed, and orchard stress is rising as reservoir levels fall toward critical thresholds.\", \"classification\": {\"shock_type\": \"climate_drought\", \"severity\": 0.8, \"semantic_gap\": 0.3, \"rationale\": \"The signal describes a heatwave, water restrictions, and falling reservoir levels indicating a climate-related drought event.\"}, \"resources\": {\"precipitation_deficit\": \"Precipitation Deficit\", \"reservoir_storage\": \"Reservoir Storage\", \"crop_stress\": \"Crop Stress\", \"policy_response\": \"Policy Response\", \"wildfire_risk\": \"Wildfire Risk\"}, \"outcomes\": [\"managed_adaptation\", \"water_shortage_spiral\", \"agricultural_loss_cycle\"], \"retrieved_context\": [{\"id\": \"climate_drought_response:t0:inference\", \"label\": \"climate_risk inference T0\", \"content\": \"The basin faces significant water scarcity entering the season, with depleted snowpack and soil moisture combined with weaker-than-expected reservoir carryover storage. This creates a challenging starting point for water management during the upcoming dry period, increasing vulnerability across agricultural and ecological systems.\", \"metadata\": {\"case_id\": \"climate_drought_response\", \"domain\": \"climate_risk\", \"step\": \"t0\", \"dominant_outcome_hypothesis\": \"water_shortage_spiral\", \"resource_shocks\": {\"precipitation_deficit\": 10.0, \"reservoir_storage\": -12.0, \"crop_stress\": 8.0, \"policy_response\": 5.0, \"wildfire_risk\": 7.0}, \"key_mechanisms\": [\"Reduced snowpack limits seasonal meltwater supply to reservoirs and streams\", \"Low soil moisture decreases natural water retention and increases irrigation demand\", \"Weaker reservoir storage reduces buffer capacity for drought mitigation\", \"Multiple water deficits compound to create systemic stress across sectors\"]}}, {\"id\": \"climate_drought_response:t0:signal\", \"label\": \"climate_risk signal T0\", \"content\": \"Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.\", \"metadata\": {\"case_id\": \"climate_drought_response\", \"domain\": \"climate_risk\", \"step\": \"t0\", \"classification\": {\"shock_type\": \"water_scarcity\", \"severity\": 0.7, \"semantic_gap\": 0.3, \"rationale\": \"The signal describes depleted water resources with below-normal snowpack and soil moisture, indicating a significant but not extreme water shortage.\"}}}, {\"id\": \"analysis:climate_drought_response:8\", \"label\": \"Analysis climate_drought_response\", \"content\": \"Dominant outcome: water_shortage_spiral; confidence=0.3011; violations=1\", \"metadata\": {\"domain_id\": \"climate_drought_response\", \"dominant_outcome\": \"water_shortage_spiral\", \"final_outcome_probs\": {\"managed_adaptation\": 0.2530740477590833, \"water_shortage_spiral\": 0.6964479896248418, \"agricultural_loss_cycle\": 0.050477962616074894}, \"context_node_ids\": [\"climate_drought_response:t0:inference\", \"climate_drought_response:t0:signal\"], \"context_node_count\": 2, \"forecast_ids\": [\"climate_drought_response:8:managed_adaptation\", \"climate_drought_response:8:water_shortage_spiral\", \"climate_drought_response:8:agricultural_loss_cycle\"], \"verification\": {\"world_id\": \"climate_drought_response:0\", \"domain_id\": \"climate_drought_response\", \"levels_run\": [1, 2], \"violations\": [{\"level\": 1, \"check_name\": \"null_action_convergence\", \"description\": \"Null-policy rollout triggered a hard stop\", \"severity\": \"soft\", \"details\": {\"field\": \"null_policy_rollout\", \"observed\": \"hard_stop\", \"expected\": \"stable rollout\", \"violations\": [{\"level\": 0.0, \"check_name\": \"nonnegativity\", \"description\": \"Resource reservoir_storage=-0.026066 < min 0.000000\", \"severity\": \"hard\", \"details\": {\"field\": \"resources.reservoir_storage.value\", \"resource_id\": \"reservoir_storage\", \"observed\": -0.026065644720770918, \"expected_min\": 0.0}}]}}], \"passed\": true, \"metadata\": {\"level1\": {\"spectral_radius\": 0.8975386324974499, \"causal_edges_checked\": 5}, \"level2\": {\"dag_source\": \"world\", \"initial_sign_violations\": 0, \"correction_iterations_budget\": 0, \"correction_iterations_run\": 0, \"fixed_point_converged\": true, \"spectral_radius\": 0.8975386324974499}}}}}]}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.75,
+        "dominant_outcome_hypothesis": "water_shortage_spiral",
+        "key_mechanisms": [
+          "Heatwave accelerates evaporation and water demand, worsening reservoir depletion",
+          "Delayed policy response reduces adaptive capacity as stress escalates",
+          "Orchard stress rises due to combined heat and water deficits",
+          "Multiple compounding stresses increase wildfire risk and agricultural vulnerability"
+        ],
+        "overview": "The early heatwave intensifies existing water scarcity, with delayed emergency restrictions failing to mitigate reservoir depletion and rising orchard stress, pushing the system toward critical thresholds.",
+        "resource_shocks": {
+          "crop_stress": 13.0,
+          "policy_response": -8.0,
+          "precipitation_deficit": 12.0,
+          "reservoir_storage": -14.0,
+          "wildfire_risk": 10.0
+        }
+      },
+      "started_at": "2026-03-28T17:03:16+00:00",
+      "temperature": 0.1
+    }
+  ],
+  "mode": "MODE_C_HASH",
+  "steps": {
+    "t0": {
+      "autonomy_flag": false,
+      "confidence": 0.3011,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 1.0,
+      "key_metric_error": 9.913497018914505,
+      "key_metric_value": 18.086502981085495,
+      "outcome_probs": {
+        "agricultural_loss_cycle": 0.050477962616074894,
+        "managed_adaptation": 0.2530740477590833,
+        "water_shortage_spiral": 0.6964479896248418
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1": {
+      "autonomy_flag": true,
+      "confidence": 0.724,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 1.1,
+      "key_metric_error": 16.915223443367726,
+      "key_metric_value": 11.084776556632274,
+      "outcome_probs": {
+        "agricultural_loss_cycle": 0.03628225857766422,
+        "managed_adaptation": 0.02212175695915912,
+        "water_shortage_spiral": 0.9415959844631767
+      },
+      "retrieval_precision": 1.0,
+      "retrieved_node_count": 3,
+      "retrieved_node_ids": [
+        "climate_drought_response:t0:inference",
+        "climate_drought_response:t0:signal",
+        "analysis:climate_drought_response:8"
+      ],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  }
+}

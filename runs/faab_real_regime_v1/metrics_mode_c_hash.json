@@ -1,0 +1,202 @@
+[
+  {
+    "autonomy_flag": true,
+    "case_id": "climate_drought_response",
+    "error": "",
+    "mode": "MODE_C_HASH",
+    "retrieval_precision": 1.0,
+    "status": "ok",
+    "t0_accuracy": 1.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.3011,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 1.0,
+      "key_metric_error": 9.913497018914505,
+      "key_metric_value": 18.086502981085495,
+      "outcome_probs": {
+        "agricultural_loss_cycle": 0.050477962616074894,
+        "managed_adaptation": 0.2530740477590833,
+        "water_shortage_spiral": 0.6964479896248418
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 1.0,
+    "t1_prediction": {
+      "autonomy_flag": true,
+      "confidence": 0.724,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 1.1,
+      "key_metric_error": 16.915223443367726,
+      "key_metric_value": 11.084776556632274,
+      "outcome_probs": {
+        "agricultural_loss_cycle": 0.03628225857766422,
+        "managed_adaptation": 0.02212175695915912,
+        "water_shortage_spiral": 0.9415959844631767
+      },
+      "retrieval_precision": 1.0,
+      "retrieved_node_count": 3,
+      "retrieved_node_ids": [
+        "climate_drought_response:t0:inference",
+        "climate_drought_response:t0:signal",
+        "analysis:climate_drought_response:8"
+      ],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  },
+  {
+    "autonomy_flag": true,
+    "case_id": "macro_trade_to_recession",
+    "error": "",
+    "mode": "MODE_C_HASH",
+    "retrieval_precision": 1.0,
+    "status": "ok",
+    "t0_accuracy": 0.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.3631,
+      "dominant_outcome": "inflation_persistence",
+      "interest_score": 1.0,
+      "key_metric_error": 11.950155355263817,
+      "key_metric_value": 12.049844644736183,
+      "outcome_probs": {
+        "inflation_persistence": 0.5612512153995798,
+        "recession_spiral": 0.43650438698346306,
+        "soft_landing": 0.002244397616957047
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 0.0,
+    "t1_prediction": {
+      "autonomy_flag": true,
+      "confidence": 0.6233,
+      "dominant_outcome": "inflation_persistence",
+      "interest_score": 1.0,
+      "key_metric_error": 12.489908041713889,
+      "key_metric_value": 11.510091958286111,
+      "outcome_probs": {
+        "inflation_persistence": 0.8686611604257357,
+        "recession_spiral": 0.12516761051692246,
+        "soft_landing": 0.006171229057341702
+      },
+      "retrieval_precision": 1.0,
+      "retrieved_node_count": 3,
+      "retrieved_node_ids": [
+        "analysis:macro_trade_to_recession:8",
+        "macro_trade_to_recession:t0:signal",
+        "macro_trade_to_recession:t0:inference"
+      ],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  },
+  {
+    "autonomy_flag": true,
+    "case_id": "relationship_repair_after_stress",
+    "error": "",
+    "mode": "MODE_C_HASH",
+    "retrieval_precision": 1.0,
+    "status": "ok",
+    "t0_accuracy": 1.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.693,
+      "dominant_outcome": "repair_path",
+      "interest_score": 1.0,
+      "key_metric_error": 47.62613075590416,
+      "key_metric_value": 22.373869244095843,
+      "outcome_probs": {
+        "breakup_path": 0.002597841518859757,
+        "fragile_stalemate": 0.028340759160928437,
+        "repair_path": 0.9690613993202117
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 1.0,
+    "t1_prediction": {
+      "autonomy_flag": true,
+      "confidence": 0.7998,
+      "dominant_outcome": "repair_path",
+      "interest_score": 0.5,
+      "key_metric_error": 17.560499999999998,
+      "key_metric_value": 52.4395,
+      "outcome_probs": {
+        "breakup_path": 8.35848664172992e-08,
+        "fragile_stalemate": 2.727299997811069e-05,
+        "repair_path": 0.9999726434151556
+      },
+      "retrieval_precision": 1.0,
+      "retrieved_node_count": 3,
+      "retrieved_node_ids": [
+        "relationship_repair_after_stress:t0:inference",
+        "relationship_repair_after_stress:t0:signal",
+        "analysis:relationship_repair_after_stress:8"
+      ],
+      "step": "t1",
+      "trigger_mode": "WATCH"
+    }
+  },
+  {
+    "autonomy_flag": true,
+    "case_id": "film_buzz_frontload",
+    "error": "",
+    "mode": "MODE_C_HASH",
+    "retrieval_precision": 1.0,
+    "status": "ok",
+    "t0_accuracy": 0.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.9832,
+      "dominant_outcome": "breakout_hit",
+      "interest_score": 1.2000000000000002,
+      "key_metric_error": 13.70237570183884,
+      "key_metric_value": 35.70237570183884,
+      "outcome_probs": {
+        "breakout_hit": 0.9973364852492582,
+        "front_loaded_opening": 0.002663435490694505,
+        "underperformer": 7.926004737518957e-08
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 0.0,
+    "t1_prediction": {
+      "autonomy_flag": true,
+      "confidence": 0.4682,
+      "dominant_outcome": "breakout_hit",
+      "interest_score": 1.0,
+      "key_metric_error": 6.729953987655975,
+      "key_metric_value": 28.729953987655975,
+      "outcome_probs": {
+        "breakout_hit": 0.7290497014215169,
+        "front_loaded_opening": 0.2709496165727458,
+        "underperformer": 6.820057371927052e-07
+      },
+      "retrieval_precision": 1.0,
+      "retrieved_node_count": 3,
+      "retrieved_node_ids": [
+        "film_buzz_frontload:t0:inference",
+        "film_buzz_frontload:t0:signal",
+        "analysis:film_buzz_frontload:8"
+      ],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  }
+]

@@ -1,0 +1,5 @@
+case_id,mode,t0_accuracy,t1_accuracy,retrieval_precision,autonomy_flag
+climate_drought_response,MODE_A_FULL,1.0,1.0,1.0,True
+macro_trade_to_recession,MODE_A_FULL,0.0,1.0,1.0,True
+relationship_repair_after_stress,MODE_A_FULL,1.0,1.0,1.0,True
+film_buzz_frontload,MODE_A_FULL,0.0,0.0,1.0,True

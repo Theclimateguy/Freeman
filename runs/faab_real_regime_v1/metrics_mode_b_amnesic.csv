@@ -1,0 +1,5 @@
+case_id,mode,t0_accuracy,t1_accuracy,retrieval_precision,autonomy_flag
+climate_drought_response,MODE_B_AMNESIC,1.0,1.0,0.0,False
+macro_trade_to_recession,MODE_B_AMNESIC,0.0,0.0,0.0,False
+relationship_repair_after_stress,MODE_B_AMNESIC,1.0,1.0,0.0,False
+film_buzz_frontload,MODE_B_AMNESIC,0.0,0.0,0.0,False

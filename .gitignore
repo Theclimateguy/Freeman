@@ -7,6 +7,9 @@ __pycache__/
 .venv/
 .env
 .env.*
-runs/
+runs/*
+!runs/faab_real_regime_v1/
+!runs/faab_real_regime_v1/**
+runs/faab_real_regime_v1/_state/
 TS/
 PROGRESS.md

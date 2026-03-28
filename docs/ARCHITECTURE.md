@@ -64,6 +64,32 @@ Operationally, each resource uses one evolution operator:
 
 `EvolutionRegistry` provides the spec-facing factory over these operators.
 
+### Stateful Shock Update
+
+Longitudinal updates now keep an explicit baseline-relative shock state:
+
+\[
+d_{t+1} = \lambda d_t + \Delta_{t+1}, \qquad S_{t+1} = S_{\mathrm{base}} + d_{t+1}
+\]
+
+where:
+
+- \(d_t\) is the accumulated decayed deviation stored in `metadata["_shock_state"]`
+- \(\lambda\) is `time_decay`
+- \(\Delta_{t+1}\) is the newly inferred shock vector
+
+`WorldGraph.apply_shocks()` implements this in a deterministic way:
+
+```mermaid
+flowchart LR
+    A["Prior world"] --> B["Load baseline state"]
+    B --> C["Decay current deviations by time_decay"]
+    C --> D["Decay accumulated _shock_state"]
+    D --> E["Apply new shocks at full weight"]
+    E --> F["Clamp to resource bounds"]
+    F --> G["Updated world for T_(t+1)"]
+```
+
 ### Outcome Scoring
 
 For outcomes \(o\), the raw score is:
@@ -79,6 +105,21 @@ p(o_t) = \frac{\exp(z_o)}{\sum_j \exp(z_j)}
 \]
 
 implemented in `freeman.core.scorer`.
+
+### Regime Shifts
+
+Each `Outcome` may now define conditional multipliers:
+
+\[
+z_o \leftarrow m_o z_o \quad \text{if} \quad C_o(d_t)=\text{true}
+\]
+
+where `C_o` is a safe boolean expression over the accumulated shock context. Plain identifiers in regime-shift conditions are interpreted as decayed deviations, while `level_<name>` and `abs_<name>` expose absolute levels.
+
+Examples:
+
+- macro: `business_demand <= -5 AND policyrate >= 5`
+- film: `criticsentiment <= -5 AND boxofficelegs <= -5`
 
 ## Verification Layer
 
@@ -258,6 +299,33 @@ flowchart LR
     C -->|no| E["Mahalanobis score"]
     E --> F["Shock classification"]
     F --> G["WATCH / ANALYZE / DEEP_DIVE"]
+
+## FAAB Benchmark
+
+The repository now includes `scripts/benchmark_faab/` for longitudinal evaluation of whether memory, interest-driven attention, and the deterministic simulator improve `T_1` forecasting versus simpler baselines.
+
+```mermaid
+flowchart LR
+    A["Case with T0 and T1 signals"] --> B["MODE_A_FULL"]
+    A --> C["MODE_B_AMNESIC"]
+    A --> D["MODE_C_HASH"]
+    A --> E["MODE_D_LLMONLY"]
+    B --> F["metrics.csv / summary.json / traces"]
+    C --> F
+    D --> F
+    E --> F
+```
+
+Recorded run artifact:
+
+- `runs/faab_real_regime_v1/`
+
+Observed mean accuracies in the recorded run:
+
+- `MODE_A_FULL`: `t0_mean=0.50`, `t1_mean=0.75`
+- `MODE_B_AMNESIC`: `t0_mean=0.50`, `t1_mean=0.50`
+- `MODE_C_HASH`: `t0_mean=0.50`, `t1_mean=0.50`
+- `MODE_D_LLMONLY`: `t0_mean=0.50`, `t1_mean=1.00`
     G --> H["Persist in SignalMemory"]
 ```
 

@@ -1,0 +1,186 @@
+[
+  {
+    "autonomy_flag": false,
+    "case_id": "climate_drought_response",
+    "error": "",
+    "mode": "MODE_B_AMNESIC",
+    "retrieval_precision": 0.0,
+    "status": "ok",
+    "t0_accuracy": 1.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.3011,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 1.0,
+      "key_metric_error": 9.913497018914505,
+      "key_metric_value": 18.086502981085495,
+      "outcome_probs": {
+        "agricultural_loss_cycle": 0.050477962616074894,
+        "managed_adaptation": 0.2530740477590833,
+        "water_shortage_spiral": 0.6964479896248418
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 1.0,
+    "t1_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.4319,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 1.1,
+      "key_metric_error": 12.064679736377546,
+      "key_metric_value": 15.935320263622454,
+      "outcome_probs": {
+        "agricultural_loss_cycle": 0.05522022331425408,
+        "managed_adaptation": 0.13389027513541166,
+        "water_shortage_spiral": 0.8108895015503342
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  },
+  {
+    "autonomy_flag": false,
+    "case_id": "macro_trade_to_recession",
+    "error": "",
+    "mode": "MODE_B_AMNESIC",
+    "retrieval_precision": 0.0,
+    "status": "ok",
+    "t0_accuracy": 0.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.3631,
+      "dominant_outcome": "inflation_persistence",
+      "interest_score": 1.0,
+      "key_metric_error": 11.950155355263817,
+      "key_metric_value": 12.049844644736183,
+      "outcome_probs": {
+        "inflation_persistence": 0.5612512153995798,
+        "recession_spiral": 0.43650438698346306,
+        "soft_landing": 0.002244397616957047
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 0.0,
+    "t1_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.6382,
+      "dominant_outcome": "inflation_persistence",
+      "interest_score": 1.0,
+      "key_metric_error": 9.814132432455473,
+      "key_metric_value": 14.185867567544527,
+      "outcome_probs": {
+        "inflation_persistence": 0.8857052041666483,
+        "recession_spiral": 0.10052247052210411,
+        "soft_landing": 0.01377232531124755
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  },
+  {
+    "autonomy_flag": false,
+    "case_id": "relationship_repair_after_stress",
+    "error": "",
+    "mode": "MODE_B_AMNESIC",
+    "retrieval_precision": 0.0,
+    "status": "ok",
+    "t0_accuracy": 1.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.5928,
+      "dominant_outcome": "repair_path",
+      "interest_score": 1.0,
+      "key_metric_error": 49.890255669204265,
+      "key_metric_value": 20.109744330795735,
+      "outcome_probs": {
+        "breakup_path": 0.009272536302581126,
+        "fragile_stalemate": 0.06204513936445168,
+        "repair_path": 0.928682324332967
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 1.0,
+    "t1_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.7998,
+      "dominant_outcome": "repair_path",
+      "interest_score": 0.5,
+      "key_metric_error": 16.772400000000005,
+      "key_metric_value": 53.227599999999995,
+      "outcome_probs": {
+        "breakup_path": 8.546244495038174e-08,
+        "fragile_stalemate": 2.6712022904975836e-05,
+        "repair_path": 0.9999732025146499
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t1",
+      "trigger_mode": "WATCH"
+    }
+  },
+  {
+    "autonomy_flag": false,
+    "case_id": "film_buzz_frontload",
+    "error": "",
+    "mode": "MODE_B_AMNESIC",
+    "retrieval_precision": 0.0,
+    "status": "ok",
+    "t0_accuracy": 0.0,
+    "t0_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.9832,
+      "dominant_outcome": "breakout_hit",
+      "interest_score": 1.2000000000000002,
+      "key_metric_error": 13.70237570183884,
+      "key_metric_value": 35.70237570183884,
+      "outcome_probs": {
+        "breakout_hit": 0.9973364852492582,
+        "front_loaded_opening": 0.002663435490694505,
+        "underperformer": 7.926004737518957e-08
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1_accuracy": 0.0,
+    "t1_prediction": {
+      "autonomy_flag": false,
+      "confidence": 0.522,
+      "dominant_outcome": "breakout_hit",
+      "interest_score": 1.0,
+      "key_metric_error": 7.104202036655607,
+      "key_metric_value": 29.104202036655607,
+      "outcome_probs": {
+        "breakout_hit": 0.7813954618272919,
+        "front_loaded_opening": 0.2186039135905074,
+        "underperformer": 6.245822007744174e-07
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  }
+]

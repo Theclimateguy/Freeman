@@ -1,0 +1,5 @@
+{
+  "backend": "none",
+  "case_id": "film_buzz_frontload",
+  "mode": "MODE_D_LLMONLY"
+}

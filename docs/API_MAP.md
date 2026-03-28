@@ -10,6 +10,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `WorldGraph`
   - `WorldState`
   - `OutcomeRegistry`
+  - `WorldGraph.apply_shocks()`
 - Types:
   - `Actor`
   - `Resource`
@@ -29,6 +30,7 @@ This is the implementation-facing map of modules, classes, and primary functions
 - Transition/scoring:
   - `step_world()`
   - `raw_outcome_scores()`
+  - `regime_shift_matches()`
   - `softmax_distribution()`
   - `score_outcomes()`
   - `compute_confidence()`
@@ -176,6 +178,16 @@ This is the implementation-facing map of modules, classes, and primary functions
   - template shock inference
   - simulation interpretation
   - memory-only follow-up answers over KG retrieval
+- FAAB benchmark:
+  - `scripts/benchmark_faab/generate_dummy_dataset.py`
+  - `scripts/benchmark_faab/run_benchmark.py`
+  - `scripts/benchmark_faab/runner.py`
+  - `BenchmarkRunner`
+  - `RunnerConfig`
+  - `MODE_A_FULL`
+  - `MODE_B_AMNESIC`
+  - `MODE_C_HASH`
+  - `MODE_D_LLMONLY`
 
 ### `tests`
 
@@ -212,6 +224,24 @@ Command:
   - rerun a world snapshot after overrides
 - `python -m freeman.interface.cli diff-domain <baseline_path> <current_path> [--output-path <path>]`
   - export structured differences between two snapshots or simulation payloads
+
+## Benchmark Map
+
+Command:
+- `python scripts/benchmark_faab/run_benchmark.py --dataset <cases.jsonl> --output-dir <dir> [--state-time-decay 0.5]`
+  - run longitudinal FAAB evaluation across all benchmark modes
+- `python scripts/benchmark_faab/generate_dummy_dataset.py`
+  - emit the default four-case dummy benchmark dataset
+
+Outputs:
+- `metrics.csv`
+  - one row per `(case_id, mode)`
+- `summary.json`
+  - full serialized predictions and metadata
+- `traces/*.json`
+  - per-case / per-mode prompt and prediction traces
+- `kg_snapshots/*.json`
+  - persisted KG state after the `T1` step
 
 ## REST Map
 

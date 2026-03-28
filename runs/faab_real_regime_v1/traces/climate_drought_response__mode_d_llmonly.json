@@ -1,0 +1,93 @@
+{
+  "case": {
+    "case_id": "climate_drought_response",
+    "domain": "climate_risk",
+    "ground_truth_t2": {
+      "dominant_outcome": "water_shortage_spiral",
+      "key_metric": 28.0,
+      "key_metric_name": "reservoir_storage"
+    },
+    "t0_signal": "Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.",
+    "t1_signal": "A severe early heatwave arrived, emergency water restrictions were delayed, and orchard stress is rising as reservoir levels fall toward critical thresholds."
+  },
+  "created_at": "2026-03-28T17:34:55+00:00",
+  "errors": [],
+  "kg_snapshot_path": "/Users/theclimateguy/Documents/science/Freeman/runs/faab_real_regime_v1/kg_snapshots/climate_drought_response__mode_d_llmonly__t1.json",
+  "llm_calls": [
+    {
+      "ended_at": "2026-03-28T17:35:01+00:00",
+      "label": "t0_llm_only_forecast",
+      "max_tokens": 600,
+      "messages": [
+        {
+          "content": "FAAB_LLM_ONLY\nYou are the baseline advanced LLM forecaster for the Freeman Autonomous Analyst Benchmark.\n\nRead the domain description and available signals and return exactly one JSON object with:\n- dominant_outcome: string\n- confidence: float in [0,1]\n- rationale: short paragraph\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"climate_drought_response\", \"domain\": \"climate_risk\", \"domain_description\": \"Hydro-climate stress, reservoir management, crop losses, and adaptation under drought and heat.\", \"step\": \"t0\", \"prior_signal\": \"\", \"signal_text\": \"Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.\", \"allowed_outcomes\": [\"managed_adaptation\", \"water_shortage_spiral\", \"agricultural_loss_cycle\"]}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.75,
+        "dominant_outcome": "water_shortage_spiral",
+        "rationale": "The signal indicates critical water supply deficits with below-normal snowpack (reducing spring/summer meltwater), depleted soil moisture (limiting natural recharge), and weaker carryover storage than the previous year (reducing buffer capacity). These compounding factors suggest a high likelihood of escalating water shortages affecting multiple sectors, potentially triggering a spiral of rationing, economic stress, and conflict over dwindling resources, rather than a managed adaptation response or isolated agricultural losses."
+      },
+      "started_at": "2026-03-28T17:34:55+00:00",
+      "temperature": 0.1
+    },
+    {
+      "ended_at": "2026-03-28T17:40:17+00:00",
+      "label": "t1_llm_only_forecast",
+      "max_tokens": 600,
+      "messages": [
+        {
+          "content": "FAAB_LLM_ONLY\nYou are the baseline advanced LLM forecaster for the Freeman Autonomous Analyst Benchmark.\n\nRead the domain description and available signals and return exactly one JSON object with:\n- dominant_outcome: string\n- confidence: float in [0,1]\n- rationale: short paragraph\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"climate_drought_response\", \"domain\": \"climate_risk\", \"domain_description\": \"Hydro-climate stress, reservoir management, crop losses, and adaptation under drought and heat.\", \"step\": \"t1\", \"prior_signal\": \"Snowpack finished far below normal and soil moisture is already depleted across the basin. Reservoir operators say carryover storage is weaker than last year.\", \"signal_text\": \"A severe early heatwave arrived, emergency water restrictions were delayed, and orchard stress is rising as reservoir levels fall toward critical thresholds.\", \"allowed_outcomes\": [\"managed_adaptation\", \"water_shortage_spiral\", \"agricultural_loss_cycle\"]}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.75,
+        "dominant_outcome": "water_shortage_spiral",
+        "rationale": "The combination of depleted snowpack, low soil moisture, weak reservoir carryover, severe early heatwave, delayed emergency restrictions, and falling reservoir levels toward critical thresholds indicates a compounding water scarcity crisis. This scenario suggests escalating stress on water systems and agriculture, likely leading to a spiral of shortages rather than managed adaptation or isolated agricultural losses."
+      },
+      "started_at": "2026-03-28T17:35:01+00:00",
+      "temperature": 0.1
+    }
+  ],
+  "mode": "MODE_D_LLMONLY",
+  "steps": {
+    "t0": {
+      "autonomy_flag": false,
+      "confidence": 0.75,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 0.0,
+      "key_metric_error": null,
+      "key_metric_value": null,
+      "outcome_probs": {},
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "PROMPT_ONLY"
+    },
+    "t1": {
+      "autonomy_flag": false,
+      "confidence": 0.75,
+      "dominant_outcome": "water_shortage_spiral",
+      "interest_score": 0.0,
+      "key_metric_error": null,
+      "key_metric_value": null,
+      "outcome_probs": {},
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t1",
+      "trigger_mode": "PROMPT_ONLY"
+    }
+  }
+}

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
+import numpy as np
+
 from freeman.core.types import Actor, CausalEdge, Outcome, Relation, Resource
 from freeman.utils import deep_copy_jsonable, json_ready, normalize_numeric_tree
 
@@ -167,6 +169,181 @@ class WorldGraph:
         """Return a deep copy of the world with no shared mutable state."""
 
         return type(self).from_snapshot(self.snapshot())
+
+    def apply_shocks(
+        self,
+        resource_shocks: Dict[str, float] | None = None,
+        *,
+        actor_state_shocks: Dict[str, float] | None = None,
+        metadata_shocks: Dict[str, float] | None = None,
+        time_decay: float = 1.0,
+    ) -> "WorldGraph":
+        """Apply stateful shocks on top of a decayed prior state.
+
+        The method preserves a baseline snapshot inside ``metadata["_baseline_state"]``.
+        Before applying new shocks, current deviations from that baseline are multiplied
+        by ``time_decay``. New shocks are then added at full strength.
+        """
+
+        updated = self.clone()
+        baseline = updated._ensure_baseline_state()
+        shock_state = updated._ensure_shock_state(baseline)
+        decay = np.float64(time_decay)
+        updated._decay_toward_baseline(baseline, decay)
+        updated._decay_shock_state(shock_state, decay)
+        updated._apply_resource_shocks(resource_shocks or {})
+        updated._apply_actor_state_shocks(actor_state_shocks or {})
+        updated._apply_metadata_shocks(metadata_shocks or {})
+        return updated
+
+    def _ensure_baseline_state(self) -> Dict[str, Any]:
+        """Persist and return the immutable baseline state for decay calculations."""
+
+        baseline = self.metadata.get("_baseline_state")
+        if isinstance(baseline, dict):
+            return deep_copy_jsonable(baseline)
+
+        baseline = {
+            "resources": {resource_id: float(resource.value) for resource_id, resource in self.resources.items()},
+            "actors": {
+                actor_id: {key: float(value) for key, value in actor.state.items()}
+                for actor_id, actor in self.actors.items()
+            },
+            "metadata": {
+                key: float(value)
+                for key, value in self.metadata.items()
+                if not str(key).startswith("_") and isinstance(value, (int, float, np.generic))
+            },
+        }
+        self.metadata["_baseline_state"] = deep_copy_jsonable(baseline)
+        return deep_copy_jsonable(baseline)
+
+    def _decay_toward_baseline(self, baseline: Dict[str, Any], time_decay: np.float64) -> None:
+        """Shrink all stored deviations toward the baseline state."""
+
+        resource_baseline = baseline.get("resources", {})
+        for resource_id, resource in self.resources.items():
+            base_value = np.float64(resource_baseline.get(resource_id, float(resource.value)))
+            decayed = base_value + (np.float64(resource.value) - base_value) * time_decay
+            resource.value = np.float64(min(max(decayed, resource.min_value), resource.max_value))
+
+        actor_baseline = baseline.get("actors", {})
+        for actor_id, actor in self.actors.items():
+            base_state = actor_baseline.get(actor_id, {})
+            for key, value in actor.state.items():
+                base_value = np.float64(base_state.get(key, float(value)))
+                actor.state[key] = np.float64(base_value + (np.float64(value) - base_value) * time_decay)
+
+        metadata_baseline = baseline.get("metadata", {})
+        for key, value in list(self.metadata.items()):
+            if str(key).startswith("_") or not isinstance(value, (int, float, np.generic)):
+                continue
+            base_value = np.float64(metadata_baseline.get(key, float(value)))
+            self.metadata[key] = np.float64(base_value + (np.float64(value) - base_value) * time_decay)
+
+    def _ensure_shock_state(self, baseline: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist and return the accumulated shock/deviation state."""
+
+        shock_state = self.metadata.get("_shock_state")
+        if isinstance(shock_state, dict):
+            return deep_copy_jsonable(shock_state)
+
+        resource_baseline = baseline.get("resources", {})
+        actor_baseline = baseline.get("actors", {})
+        metadata_baseline = baseline.get("metadata", {})
+        shock_state = {
+            "resources": {
+                resource_id: float(np.float64(resource.value) - np.float64(resource_baseline.get(resource_id, float(resource.value))))
+                for resource_id, resource in self.resources.items()
+            },
+            "actors": {
+                actor_id: {
+                    key: float(np.float64(value) - np.float64(actor_baseline.get(actor_id, {}).get(key, float(value))))
+                    for key, value in actor.state.items()
+                }
+                for actor_id, actor in self.actors.items()
+            },
+            "metadata": {
+                key: float(np.float64(value) - np.float64(metadata_baseline.get(key, float(value))))
+                for key, value in self.metadata.items()
+                if not str(key).startswith("_") and isinstance(value, (int, float, np.generic))
+            },
+        }
+        self.metadata["_shock_state"] = deep_copy_jsonable(shock_state)
+        return deep_copy_jsonable(shock_state)
+
+    def _decay_shock_state(self, shock_state: Dict[str, Any], time_decay: np.float64) -> None:
+        """Decay the stored shock/deviation state in-place."""
+
+        decayed_resources = {
+            resource_id: float(np.float64(delta) * time_decay)
+            for resource_id, delta in shock_state.get("resources", {}).items()
+        }
+        decayed_actors = {
+            actor_id: {
+                key: float(np.float64(delta) * time_decay)
+                for key, delta in actor_state.items()
+            }
+            for actor_id, actor_state in shock_state.get("actors", {}).items()
+        }
+        decayed_metadata = {
+            key: float(np.float64(delta) * time_decay)
+            for key, delta in shock_state.get("metadata", {}).items()
+        }
+        self.metadata["_shock_state"] = {
+            "resources": decayed_resources,
+            "actors": decayed_actors,
+            "metadata": decayed_metadata,
+        }
+
+    def _apply_resource_shocks(self, resource_shocks: Dict[str, float]) -> None:
+        """Apply additive resource shocks with resource bounds."""
+
+        shock_state = self.metadata.setdefault("_shock_state", {"resources": {}, "actors": {}, "metadata": {}})
+        resource_state = shock_state.setdefault("resources", {})
+        for resource_id, delta in resource_shocks.items():
+            resource = self.resources.get(resource_id)
+            if resource is None:
+                raise KeyError(f"Unknown resource shock key: {resource_id}")
+            new_value = np.float64(resource.value) + np.float64(delta)
+            resource.value = np.float64(min(max(new_value, resource.min_value), resource.max_value))
+            resource_state[resource_id] = float(np.float64(resource_state.get(resource_id, 0.0)) + np.float64(delta))
+
+    def _apply_actor_state_shocks(self, actor_state_shocks: Dict[str, float]) -> None:
+        """Apply additive shocks to actor state fields.
+
+        Keys must be of the form ``actor_id.state_key``.
+        """
+
+        shock_state = self.metadata.setdefault("_shock_state", {"resources": {}, "actors": {}, "metadata": {}})
+        actor_state = shock_state.setdefault("actors", {})
+        for key, delta in actor_state_shocks.items():
+            if "." not in key:
+                raise KeyError(f"Actor-state shock keys must use actor_id.state_key format: {key}")
+            actor_id, state_key = key.split(".", 1)
+            actor = self.actors.get(actor_id)
+            if actor is None:
+                raise KeyError(f"Unknown actor in shock key: {key}")
+            current = np.float64(actor.state.get(state_key, 0.0))
+            actor.state[state_key] = np.float64(current + np.float64(delta))
+            actor_state.setdefault(actor_id, {})
+            actor_state[actor_id][state_key] = float(
+                np.float64(actor_state[actor_id].get(state_key, 0.0)) + np.float64(delta)
+            )
+
+    def _apply_metadata_shocks(self, metadata_shocks: Dict[str, float]) -> None:
+        """Apply additive shocks to numeric world metadata fields."""
+
+        shock_state = self.metadata.setdefault("_shock_state", {"resources": {}, "actors": {}, "metadata": {}})
+        metadata_state = shock_state.setdefault("metadata", {})
+        for key, delta in metadata_shocks.items():
+            if str(key).startswith("_"):
+                raise KeyError(f"Reserved metadata key cannot be shocked: {key}")
+            current = self.metadata.get(key, 0.0)
+            if not isinstance(current, (int, float, np.generic)):
+                current = 0.0
+            self.metadata[key] = np.float64(current) + np.float64(delta)
+            metadata_state[key] = float(np.float64(metadata_state.get(key, 0.0)) + np.float64(delta))
 
 
 WorldState = WorldGraph

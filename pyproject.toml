@@ -18,6 +18,11 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = ["chromadb>=0.5"]
+benchmark = [
+    "chromadb>=0.5",
+    "pandas>=2.2",
+    "tqdm>=4.66",
+]
 
 [project.scripts]
 freeman = "freeman.interface.cli:main"

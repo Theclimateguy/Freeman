@@ -1,0 +1,175 @@
+{
+  "case": {
+    "case_id": "film_buzz_frontload",
+    "domain": "film_release",
+    "ground_truth_t2": {
+      "dominant_outcome": "front_loaded_opening",
+      "key_metric": 22.0,
+      "key_metric_name": "box_office_legs"
+    },
+    "t0_signal": "Trailer buzz is extreme, pre-sales are strong, and marketing spend keeps climbing despite mixed critic reactions.",
+    "t1_signal": "Opening weekend was large, but weekday grosses collapsed quickly, exit scores disappointed, and audience chatter suggests a front-loaded release."
+  },
+  "created_at": "2026-03-28T16:45:46+00:00",
+  "errors": [],
+  "kg_snapshot_path": "/Users/theclimateguy/Documents/science/Freeman/runs/faab_real_regime_v1/kg_snapshots/film_buzz_frontload__mode_b_amnesic__t1.json",
+  "llm_calls": [
+    {
+      "ended_at": "2026-03-28T16:45:50+00:00",
+      "label": "t0_classifier",
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "FAAB_CLASSIFIER\nYou classify one benchmark signal for Freeman.\n\nReturn exactly one JSON object with:\n- shock_type: short label\n- severity: float in [0,1]\n- semantic_gap: float in [0,1]\n- rationale: one short sentence\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"signal_id\": \"film_buzz_frontload:t0\", \"topic\": \"film_release\", \"text\": \"Trailer buzz is extreme, pre-sales are strong, and marketing spend keeps climbing despite mixed critic reactions.\", \"entities\": [\"film release\"], \"sentiment\": 0.0}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "rationale": "Strong pre-sales and extreme trailer buzz indicate high consumer demand despite mixed critic reactions.",
+        "semantic_gap": 0.4,
+        "severity": 0.8,
+        "shock_type": "demand_surge"
+      },
+      "started_at": "2026-03-28T16:45:46+00:00",
+      "temperature": 0.0
+    },
+    {
+      "ended_at": "2026-03-28T16:45:58+00:00",
+      "label": "t0_state_inference",
+      "max_tokens": 1200,
+      "messages": [
+        {
+          "content": "FAAB_STATE_FORECAST\nYou update a compact Freeman world state from one benchmark signal and optional retrieved memory.\n\nAll resources are on a 0-100 scale. Use only the provided resource ids and outcome ids.\nReturn exactly one JSON object with:\n- overview: short paragraph\n- key_mechanisms: list of 3-5 concise points\n- resource_shocks: object mapping allowed resource ids to additive shocks in [-15, 15]\n- dominant_outcome_hypothesis: string\n- confidence: float in [0,1]\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"film_buzz_frontload\", \"domain\": \"film_release\", \"domain_description\": \"Buzz, critics, opening weekend strength, word of mouth, and box-office legs.\", \"step\": \"t0\", \"signal_text\": \"Trailer buzz is extreme, pre-sales are strong, and marketing spend keeps climbing despite mixed critic reactions.\", \"classification\": {\"shock_type\": \"demand_surge\", \"severity\": 0.8, \"semantic_gap\": 0.4, \"rationale\": \"Strong pre-sales and extreme trailer buzz indicate high consumer demand despite mixed critic reactions.\"}, \"resources\": {\"buzz\": \"Audience Buzz\", \"critic_sentiment\": \"Critic Sentiment\", \"marketing_intensity\": \"Marketing Intensity\", \"word_of_mouth\": \"Word of Mouth\", \"opening_weekend\": \"Opening Weekend Strength\", \"box_office_legs\": \"Box Office Legs\"}, \"outcomes\": [\"breakout_hit\", \"front_loaded_opening\", \"underperformer\"], \"retrieved_context\": []}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.75,
+        "dominant_outcome_hypothesis": "front_loaded_opening",
+        "key_mechanisms": [
+          "High consumer demand from trailer buzz and pre-sales drives immediate audience interest",
+          "Marketing amplification sustains momentum despite critical skepticism",
+          "Potential disconnect between audience enthusiasm and critical reception",
+          "Risk of front-loaded performance if word-of-mouth doesn't sustain post-opening"
+        ],
+        "overview": "Extreme trailer buzz and strong pre-sales signal robust consumer demand, driving a demand surge that may override mixed critic reactions. Marketing intensity continues to climb, potentially amplifying opening weekend strength while creating uncertainty about long-term sustainability.",
+        "resource_shocks": {
+          "box_office_legs": -2,
+          "buzz": 12,
+          "critic_sentiment": -5,
+          "marketing_intensity": 8,
+          "opening_weekend": 10,
+          "word_of_mouth": 3
+        }
+      },
+      "started_at": "2026-03-28T16:45:50+00:00",
+      "temperature": 0.1
+    },
+    {
+      "ended_at": "2026-03-28T16:46:03+00:00",
+      "label": "t1_classifier",
+      "max_tokens": 300,
+      "messages": [
+        {
+          "content": "FAAB_CLASSIFIER\nYou classify one benchmark signal for Freeman.\n\nReturn exactly one JSON object with:\n- shock_type: short label\n- severity: float in [0,1]\n- semantic_gap: float in [0,1]\n- rationale: one short sentence\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"signal_id\": \"film_buzz_frontload:t1\", \"topic\": \"film_release\", \"text\": \"Opening weekend was large, but weekday grosses collapsed quickly, exit scores disappointed, and audience chatter suggests a front-loaded release.\", \"entities\": [\"film release\"], \"sentiment\": 0.0}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "rationale": "Strong opening followed by rapid decline indicates front-loaded performance.",
+        "semantic_gap": 0.3,
+        "severity": 0.7,
+        "shock_type": "frontloaded_release"
+      },
+      "started_at": "2026-03-28T16:45:59+00:00",
+      "temperature": 0.0
+    },
+    {
+      "ended_at": "2026-03-28T17:02:56+00:00",
+      "label": "t1_state_inference",
+      "max_tokens": 1200,
+      "messages": [
+        {
+          "content": "FAAB_STATE_FORECAST\nYou update a compact Freeman world state from one benchmark signal and optional retrieved memory.\n\nAll resources are on a 0-100 scale. Use only the provided resource ids and outcome ids.\nReturn exactly one JSON object with:\n- overview: short paragraph\n- key_mechanisms: list of 3-5 concise points\n- resource_shocks: object mapping allowed resource ids to additive shocks in [-15, 15]\n- dominant_outcome_hypothesis: string\n- confidence: float in [0,1]\n",
+          "role": "system"
+        },
+        {
+          "content": "{\"case_id\": \"film_buzz_frontload\", \"domain\": \"film_release\", \"domain_description\": \"Buzz, critics, opening weekend strength, word of mouth, and box-office legs.\", \"step\": \"t1\", \"signal_text\": \"Opening weekend was large, but weekday grosses collapsed quickly, exit scores disappointed, and audience chatter suggests a front-loaded release.\", \"classification\": {\"shock_type\": \"frontloaded_release\", \"severity\": 0.7, \"semantic_gap\": 0.3, \"rationale\": \"Strong opening followed by rapid decline indicates front-loaded performance.\"}, \"resources\": {\"buzz\": \"Audience Buzz\", \"critic_sentiment\": \"Critic Sentiment\", \"marketing_intensity\": \"Marketing Intensity\", \"word_of_mouth\": \"Word of Mouth\", \"opening_weekend\": \"Opening Weekend Strength\", \"box_office_legs\": \"Box Office Legs\"}, \"outcomes\": [\"breakout_hit\", \"front_loaded_opening\", \"underperformer\"], \"retrieved_context\": []}",
+          "role": "user"
+        }
+      ],
+      "response": {
+        "confidence": 0.85,
+        "dominant_outcome_hypothesis": "front_loaded_opening",
+        "key_mechanisms": [
+          "Strong opening weekend momentum quickly dissipated as weekday grosses collapsed",
+          "Disappointing exit scores and negative audience chatter undermined word-of-mouth potential",
+          "Front-loaded pattern suggests core fanbase drove initial attendance but broader appeal was limited",
+          "Rapid decline indicates weak staying power despite strong marketing push"
+        ],
+        "overview": "The film experienced a strong opening weekend but suffered from rapid weekday declines and disappointing exit scores, indicating a front-loaded release pattern where initial audience interest failed to translate into sustained engagement.",
+        "resource_shocks": {
+          "box_office_legs": -15,
+          "buzz": -10,
+          "critic_sentiment": -5,
+          "marketing_intensity": 0,
+          "opening_weekend": 8,
+          "word_of_mouth": -12
+        }
+      },
+      "started_at": "2026-03-28T16:46:03+00:00",
+      "temperature": 0.1
+    }
+  ],
+  "mode": "MODE_B_AMNESIC",
+  "steps": {
+    "t0": {
+      "autonomy_flag": false,
+      "confidence": 0.9832,
+      "dominant_outcome": "breakout_hit",
+      "interest_score": 1.2000000000000002,
+      "key_metric_error": 13.70237570183884,
+      "key_metric_value": 35.70237570183884,
+      "outcome_probs": {
+        "breakout_hit": 0.9973364852492582,
+        "front_loaded_opening": 0.002663435490694505,
+        "underperformer": 7.926004737518957e-08
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t0",
+      "trigger_mode": "ANALYZE"
+    },
+    "t1": {
+      "autonomy_flag": false,
+      "confidence": 0.522,
+      "dominant_outcome": "breakout_hit",
+      "interest_score": 1.0,
+      "key_metric_error": 7.104202036655607,
+      "key_metric_value": 29.104202036655607,
+      "outcome_probs": {
+        "breakout_hit": 0.7813954618272919,
+        "front_loaded_opening": 0.2186039135905074,
+        "underperformer": 6.245822007744174e-07
+      },
+      "retrieval_precision": 0.0,
+      "retrieved_node_count": 0,
+      "retrieved_node_ids": [],
+      "step": "t1",
+      "trigger_mode": "ANALYZE"
+    }
+  }
+}

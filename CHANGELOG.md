@@ -4,6 +4,10 @@
 
 ### Added
 
+- Stateful shock accumulation in `WorldGraph.apply_shocks()` with decayed baseline-relative updates and persisted `_shock_state`.
+- Conditional `Outcome.regime_shifts` with safe boolean condition parsing for nonlinear outcome flips under large shocks.
+- FAAB benchmark package under `scripts/benchmark_faab/` with dummy dataset generation, mode-specific metric exports, and recorded longitudinal run artifacts.
+- `docs/FAAB.md` describing benchmark modes, formulas, commands, and the recorded post-regime-shift run.
 - Obligation-driven attention scheduling via `ForecastDebt`, `ConflictDebt`, `AnomalyDebt`, and `ObligationQueue`.
 - `ForecastRegistry` with horizon tracking, pending/due queries, verification, and optional JSON persistence.
 - Self-model reconciliation path that writes `self_observation` KG nodes from verified forecast errors.
@@ -17,6 +21,9 @@
 
 ### Changed
 
+- Outcome scoring now evaluates regime-shift conditions against accumulated shock state rather than only current absolute levels.
+- The FAAB benchmark runner now applies stateful `T_1` updates through `WorldGraph.apply_shocks(..., time_decay=0.5)` and includes macro / film regime-shift rules in its domain templates.
+- Repository documentation now covers decayed state updates, nonlinear scoring, and the FAAB benchmark workflow and results.
 - `ManualSignalSource` now accepts replay mappings with extra top-level fields and folds them into `Signal.metadata`.
 - Repository documentation now covers obligation pressure, forecast verification, self-model feedback, and replay-based testing flows.
 - Default embedding configuration now targets a local Ollama daemon with `nomic-embed-text`, while preserving hashing and OpenAI fallback paths.
@@ -24,7 +31,13 @@
 
 ### Validation
 
-- `pytest tests/` -> `80 passed`
+- `pytest tests/` -> `86 passed`
+- Real FAAB benchmark run completed at `runs/faab_real_regime_v1/`.
+- Recorded FAAB result means:
+  - `MODE_A_FULL`: `t0_mean=0.50`, `t1_mean=0.75`
+  - `MODE_B_AMNESIC`: `t0_mean=0.50`, `t1_mean=0.50`
+  - `MODE_C_HASH`: `t0_mean=0.50`, `t1_mean=0.50`
+  - `MODE_D_LLMONLY`: `t0_mean=0.50`, `t1_mean=1.00`
 - Live DeepSeek + Ollama E2E run completed across 3 domains plus repeated social-memory probe.
 - Local Ollama smoke tests completed for `nomic-embed-text` and `mxbai-embed-large`.
 

@@ -165,11 +165,17 @@ class Outcome:
     label: str
     scoring_weights: Dict[str, float]
     description: str = ""
+    regime_shifts: list[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.scoring_weights = {
             k: np.float64(v) for k, v in normalize_numeric_tree(self.scoring_weights).items()
         }
+        self.regime_shifts = [
+            normalize_numeric_tree(shift)
+            for shift in deep_copy_jsonable(self.regime_shifts)
+            if isinstance(shift, dict)
+        ]
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a JSON-serializable outcome snapshot."""
@@ -179,6 +185,7 @@ class Outcome:
             "label": self.label,
             "scoring_weights": json_ready(self.scoring_weights),
             "description": self.description,
+            "regime_shifts": json_ready(self.regime_shifts),
         }
 
     @classmethod
@@ -190,6 +197,7 @@ class Outcome:
             label=data["label"],
             scoring_weights={k: _decode_float(v) for k, v in data.get("scoring_weights", {}).items()},
             description=data.get("description", ""),
+            regime_shifts=deep_copy_jsonable(data.get("regime_shifts", [])),
         )
 
 
