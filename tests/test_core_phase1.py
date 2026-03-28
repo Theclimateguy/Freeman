@@ -6,7 +6,7 @@ import math
 
 from freeman.core.evolution import EvolutionRegistry
 from freeman.core.scorer import raw_outcome_scores, regime_shift_matches, score_outcomes
-from freeman.core.types import Outcome, Resource
+from freeman.core.types import Outcome, ParameterVector, Resource
 from freeman.core.world import OutcomeRegistry, WorldGraph, WorldState
 
 
@@ -30,6 +30,12 @@ def _base_world() -> WorldGraph:
 
 def test_worldgraph_exposes_live_outcome_registry() -> None:
     world = _base_world()
+    world.parameter_vector = ParameterVector(
+        outcome_modifiers={"good": 1.5},
+        shock_decay=0.7,
+        edge_weight_deltas={"x.y": 0.2},
+        rationale="test vector",
+    )
 
     assert WorldState is WorldGraph
     assert isinstance(world.outcome_registry, OutcomeRegistry)
@@ -40,6 +46,7 @@ def test_worldgraph_exposes_live_outcome_registry() -> None:
 
     assert "neutral" in world.outcomes
     assert "neutral" in restored.outcomes
+    assert restored.parameter_vector.snapshot() == world.parameter_vector.snapshot()
 
 
 def test_evolution_registry_supports_spec_operator_set() -> None:
@@ -58,10 +65,13 @@ def test_evolution_registry_supports_spec_operator_set() -> None:
 
 def test_softmax_scoring_matches_weighted_state() -> None:
     world = _base_world()
+    base_scores = raw_outcome_scores(world)
+    world.parameter_vector = ParameterVector(outcome_modifiers={"good": 2.0})
 
     raw_scores = raw_outcome_scores(world)
     probs = score_outcomes(world)
 
+    assert raw_scores["good"] > base_scores["good"]
     assert raw_scores["good"] > raw_scores["bad"]
     assert probs["good"] > probs["bad"]
     assert math.isclose(sum(probs.values()), 1.0, rel_tol=0.0, abs_tol=1.0e-9)
@@ -88,6 +98,11 @@ def test_worldgraph_apply_shocks_decays_previous_deviation() -> None:
     assert math.isclose(float(first.metadata["_shock_state"]["resources"]["x"]), 10.0, rel_tol=0.0, abs_tol=1.0e-9)
     assert math.isclose(float(second.metadata["_shock_state"]["resources"]["x"]), 9.0, rel_tol=0.0, abs_tol=1.0e-9)
 
+    first.parameter_vector = ParameterVector(shock_decay=0.5)
+    third = first.apply_shocks({"x": 4.0})
+    assert math.isclose(float(third.resources["x"].value), 19.0, rel_tol=0.0, abs_tol=1.0e-9)
+    assert math.isclose(float(third.metadata["_shock_state"]["resources"]["x"]), 9.0, rel_tol=0.0, abs_tol=1.0e-9)
+
 
 def test_regime_shift_multiplier_uses_decayed_state_context() -> None:
     world = WorldGraph(
@@ -110,12 +125,13 @@ def test_regime_shift_multiplier_uses_decayed_state_context() -> None:
         },
         causal_dag=[],
     ).apply_shocks({"business_demand": -7.0, "policy_rate": 5.0})
+    world.parameter_vector = ParameterVector(outcome_modifiers={"recession": 2.0})
 
     raw_scores = raw_outcome_scores(world)
     probs = score_outcomes(world)
 
     assert math.isclose(raw_scores["stable"], 5.0, rel_tol=0.0, abs_tol=1.0e-9)
-    assert math.isclose(raw_scores["recession"], 9.0, rel_tol=0.0, abs_tol=1.0e-9)
+    assert math.isclose(raw_scores["recession"], 18.0, rel_tol=0.0, abs_tol=1.0e-9)
     assert probs["recession"] > probs["stable"]
 
 

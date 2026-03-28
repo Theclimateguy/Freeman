@@ -7,7 +7,7 @@ from typing import Dict, List
 import numpy as np
 
 from freeman.core.access import get_world_value
-from freeman.core.evolution import get_operator
+from freeman.core.evolution import effective_edge_weight, get_operator
 from freeman.core.types import Policy, Violation
 from freeman.core.world import WorldState
 from freeman.exceptions import HardStopException
@@ -50,7 +50,8 @@ def _update_actor_states(world: WorldState, next_world: WorldState, policy_map: 
             policy_scale = np.float64(spec.get("policy_scale", 0.0))
             value = decay * np.float64(actor.state.get(state_key, 0.0)) + base + policy_scale * action_sum
             for source_key, weight in spec.get("weights", {}).items():
-                value += np.float64(weight) * np.float64(get_world_value(next_world, source_key))
+                adjusted_weight = effective_edge_weight(world, str(source_key), state_key, weight)
+                value += adjusted_weight * np.float64(get_world_value(next_world, source_key))
             if "min_value" in spec:
                 value = max(value, np.float64(spec["min_value"]))
             if "max_value" in spec:

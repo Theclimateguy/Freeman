@@ -45,6 +45,7 @@ flowchart LR
   - causal DAG
   - actor update rules
   - metadata
+  - `parameter_vector`
 
 ### Transition Operator
 
@@ -90,6 +91,22 @@ flowchart LR
     F --> G["Updated world for T_(t+1)"]
 ```
 
+### Parameter Vector
+
+The simulator now supports a universal dynamic calibration layer:
+
+\[
+\Theta_t = \{\text{outcome\_modifiers}, \text{shock\_decay}, \text{edge\_weight\_deltas}\}
+\]
+
+`ParameterVector` is stored directly on the world state and is preserved by snapshot/clone operations. It lets the system recalibrate a world at `T_1` without rewriting the base ontology generated at `T_0`.
+
+Its three active channels are:
+
+- outcome-level multiplicative scaling
+- global decay of previously accumulated shock state
+- additive adjustment of causal edge weights in resource and actor-state updates
+
 ### Outcome Scoring
 
 For outcomes \(o\), the raw score is:
@@ -120,6 +137,24 @@ Examples:
 
 - macro: `business_demand <= -5 AND policyrate >= 5`
 - film: `criticsentiment <= -5 AND boxofficelegs <= -5`
+
+Dynamic `ParameterVector.outcome_modifiers` are applied after static regime shifts:
+
+\[
+z_o \leftarrow z_o \cdot m_o
+\]
+
+with \(m_o = 1\) by default.
+
+### Dynamic Edge Calibration
+
+Resource and actor-state transitions now read:
+
+\[
+w_{ij}^{\mathrm{eff}} = w_{ij} + \Delta w_{ij}
+\]
+
+where \(\Delta w_{ij}\) comes from `ParameterVector.edge_weight_deltas`. This is how a new signal can temporarily strengthen or weaken one causal relation without changing the original schema.
 
 ## Verification Layer
 
@@ -256,6 +291,24 @@ Conflict handling:
 5. write summary node to KG
 6. append session deltas
 7. reconcile memory
+
+For longitudinal updates it now also exposes:
+
+```mermaid
+flowchart LR
+    A["Previous world"] --> B["ParameterEstimator"]
+    C["New signal"] --> B
+    B --> D["ParameterVector"]
+    D --> E["AnalysisPipeline.update()"]
+    E --> F["Simulation + KG write + reconciliation"]
+```
+
+`AnalysisPipeline.update()`:
+
+1. clones the previous world
+2. replaces its `parameter_vector`
+3. re-runs verify/simulate/score on the preserved ontology
+4. writes the chosen parameter vector into KG metadata for auditability
 
 If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
 

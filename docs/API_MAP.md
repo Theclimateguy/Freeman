@@ -16,6 +16,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `Resource`
   - `Relation`
   - `Outcome`
+  - `ParameterVector`
   - `CausalEdge`
   - `Policy`
   - `Violation`
@@ -31,6 +32,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `step_world()`
   - `raw_outcome_scores()`
   - `regime_shift_matches()`
+  - `effective_edge_weight()`
   - `softmax_distribution()`
   - `score_outcomes()`
   - `compute_confidence()`
@@ -98,6 +100,9 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `AnalysisPipeline`
   - `AnalysisPipelineConfig`
   - `AnalysisPipelineResult`
+  - `AnalysisPipeline.update()`
+- Dynamic calibration:
+  - `ParameterEstimator`
 - Forecasts:
   - `Forecast`
   - `ForecastRegistry`
@@ -242,6 +247,26 @@ Outputs:
   - per-case / per-mode prompt and prediction traces
 - `kg_snapshots/*.json`
   - persisted KG state after the `T1` step
+
+## Universal Update Map
+
+Core formula:
+- `ParameterVector`
+  - `outcome_modifiers`
+  - `shock_decay`
+  - `edge_weight_deltas`
+  - `rationale`
+
+Agent update path:
+1. `ParameterEstimator.estimate(previous_world, new_signal_text)`
+2. `AnalysisPipeline.update(previous_world, parameter_vector, ...)`
+3. KG analysis node stores `metadata["parameter_vector"]`
+
+Affected simulator surfaces:
+- `WorldGraph.apply_shocks()`
+- `raw_outcome_scores()`
+- resource coupling inside `freeman.core.evolution`
+- actor-state coupling inside `step_world()`
 
 ## REST Map
 

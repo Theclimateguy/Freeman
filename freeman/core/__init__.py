@@ -7,7 +7,7 @@ from freeman.core.compilevalidator import (
     HistoricalFitScore,
 )
 from freeman.core.evolution import DEFAULT_EVOLUTION_REGISTRY, EVOLUTION_REGISTRY, EvolutionRegistry
-from freeman.core.types import Actor, CausalEdge, Outcome, Policy, Relation, Resource, Violation
+from freeman.core.types import Actor, CausalEdge, Outcome, ParameterVector, Policy, Relation, Resource, Violation
 from freeman.core.uncertainty import (
     ConfidenceReport,
     OutcomeDistribution,
@@ -31,6 +31,7 @@ __all__ = [
     "Outcome",
     "OutcomeDistribution",
     "OutcomeRegistry",
+    "ParameterVector",
     "ParameterDistribution",
     "Policy",
     "Relation",

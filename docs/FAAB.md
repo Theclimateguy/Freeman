@@ -15,6 +15,7 @@ The key question is whether Freeman can carry forward useful state and then revi
 ## Modes
 
 - `MODE_A_FULL`: semantic memory + attention + deterministic simulator
+- `MODE_A_FULL` now uses `ParameterEstimator -> AnalysisPipeline.update()` on `T_1`
 - `MODE_B_AMNESIC`: same stack but memory cleared before `T_1`
 - `MODE_C_HASH`: semantic retrieval replaced with local hashing embeddings
 - `MODE_D_LLMONLY`: direct advanced-LLM baseline without Freeman simulation
@@ -40,6 +41,19 @@ z_o = W_o \cdot S_t, \qquad
 z_o \leftarrow m_o z_o \ \text{if} \ C_o(d_t)=\text{true}
 \]
 
+The universal update path adds a dynamic `ParameterVector`:
+
+\[
+\Theta_{t+1} = \text{LLM}(S_t, \text{signal}_{t+1})
+\]
+
+with fields:
+
+- `outcome_modifiers`
+- `shock_decay`
+- `edge_weight_deltas`
+- `rationale`
+
 ## Execution Flow
 
 ```mermaid
@@ -48,9 +62,12 @@ flowchart LR
     B --> C["Freeman or baseline mode"]
     C --> D["Forecast + memory write"]
     D --> E["T1 signal"]
-    E --> F["Stateful decay + new shocks"]
-    F --> G["Final T1 forecast"]
-    G --> H["metrics.csv / summary.json / traces / KG snapshots"]
+    E --> F["ParameterEstimator"]
+    F --> G["ParameterVector"]
+    G --> H["Stateful decay + new shocks"]
+    H --> I["AnalysisPipeline.update()"]
+    I --> J["Final T1 forecast"]
+    J --> K["metrics.csv / summary.json / traces / KG snapshots"]
 ```
 
 ## Commands
@@ -64,7 +81,7 @@ python scripts/benchmark_faab/run_benchmark.py --dataset scripts/benchmark_faab/
 Run the deterministic smoke version:
 
 ```bash
-python scripts/benchmark_faab/run_benchmark.py --dry-run --dataset scripts/benchmark_faab/dataset/cases.jsonl --output-dir runs/faab_smoke_regime_v4
+python scripts/benchmark_faab/run_benchmark.py --dry-run --dataset scripts/benchmark_faab/dataset/cases.jsonl --output-dir runs/faab_universal_dryrun
 ```
 
 ## Recorded Run
@@ -87,6 +104,21 @@ Mean accuracies from the recorded run:
 - The stateful simulator update now materially improves `MODE_A_FULL` at `T_1` relative to its own `T_0` and relative to `MODE_B_AMNESIC`.
 - The clearest repaired case is `macro_trade_to_recession`: `MODE_A_FULL` flips to `recession_spiral`, while `MODE_B_AMNESIC` remains stuck in `inflation_persistence`.
 - The `film_buzz_frontload` case still does not fully flip under `MODE_A_FULL`, so film-domain template calibration remains an open issue rather than a memory or retrieval failure.
+
+## Universal Dry-Run Result
+
+The current universal `ParameterVector` path is validated in:
+
+- `runs/faab_universal_dryrun/` (local run artifact)
+
+Dry-run means after the universal update integration:
+
+| Mode | T0 mean | T1 mean |
+| --- | ---: | ---: |
+| `MODE_A_FULL` | 0.50 | 1.00 |
+| `MODE_B_AMNESIC` | 0.50 | 0.50 |
+| `MODE_C_HASH` | 0.50 | 0.75 |
+| `MODE_D_LLMONLY` | 0.25 | 1.00 |
 
 ## Output Files
 

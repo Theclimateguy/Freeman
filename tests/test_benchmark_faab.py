@@ -47,8 +47,10 @@ def test_benchmark_runner_mode_a_writes_trace_and_snapshot(tmp_path: Path) -> No
     assert trace_path.exists()
     assert snapshot_path.exists()
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
-    assert len(trace["llm_calls"]) == 4
+    assert len(trace["llm_calls"]) == 5
     assert trace["steps"]["t1"]["retrieved_node_count"] >= 1
+    assert "parameter_vectors" in trace
+    assert trace["parameter_vectors"]["t1"]["shock_decay"] < 1.0
 
 
 def test_benchmark_runner_mode_b_clears_memory_before_t1(tmp_path: Path) -> None:

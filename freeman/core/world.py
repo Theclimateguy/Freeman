@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 import numpy as np
 
-from freeman.core.types import Actor, CausalEdge, Outcome, Relation, Resource
+from freeman.core.types import Actor, CausalEdge, Outcome, ParameterVector, Relation, Resource
 from freeman.utils import deep_copy_jsonable, json_ready, normalize_numeric_tree
 
 
@@ -87,6 +87,7 @@ class WorldGraph:
     actor_update_rules: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     seed: int = 42
     metadata: Dict[str, Any] = field(default_factory=dict)
+    parameter_vector: ParameterVector = field(default_factory=ParameterVector)
     _outcome_registry: OutcomeRegistry = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -99,6 +100,10 @@ class WorldGraph:
         self.outcomes = self._outcome_registry.outcomes
         self.actor_update_rules = normalize_numeric_tree(self.actor_update_rules)
         self.metadata = normalize_numeric_tree(self.metadata)
+        if isinstance(self.parameter_vector, dict):
+            self.parameter_vector = ParameterVector.from_snapshot(self.parameter_vector)
+        elif not isinstance(self.parameter_vector, ParameterVector):
+            self.parameter_vector = ParameterVector()
 
     @property
     def outcome_registry(self) -> OutcomeRegistry:
@@ -140,6 +145,7 @@ class WorldGraph:
             "actor_update_rules": json_ready(self.actor_update_rules),
             "seed": self.seed,
             "metadata": json_ready(self.metadata),
+            "parameter_vector": self.parameter_vector.snapshot(),
         }
 
     @classmethod
@@ -163,6 +169,7 @@ class WorldGraph:
             actor_update_rules=deep_copy_jsonable(data.get("actor_update_rules", {})),
             seed=data.get("seed", 42),
             metadata=deep_copy_jsonable(data.get("metadata", {})),
+            parameter_vector=ParameterVector.from_snapshot(data.get("parameter_vector", {})),
         )
 
     def clone(self) -> "WorldGraph":
@@ -188,7 +195,7 @@ class WorldGraph:
         updated = self.clone()
         baseline = updated._ensure_baseline_state()
         shock_state = updated._ensure_shock_state(baseline)
-        decay = np.float64(time_decay)
+        decay = np.float64(time_decay) * np.float64(self.parameter_vector.shock_decay)
         updated._decay_toward_baseline(baseline, decay)
         updated._decay_shock_state(shock_state, decay)
         updated._apply_resource_shocks(resource_shocks or {})

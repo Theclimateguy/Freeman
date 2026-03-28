@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import re
 from typing import Any, Dict, Optional, Type
 
 import numpy as np
@@ -21,12 +22,37 @@ def _policy_sum(policy: Optional[Policy]) -> np.float64:
     return np.float64(np.sum(list(policy.actions.values()), dtype=np.float64))
 
 
-def _coupling_term(world: WorldState, weights: Dict[str, Any]) -> np.float64:
+def _normalize_edge_token(value: str) -> str:
+    """Return a normalized token used for dynamic edge matching."""
+
+    return re.sub(r"[^a-zA-Z0-9]+", "", value).lower()
+
+
+def effective_edge_weight(world: WorldState, source_key: str, target_key: str, base_weight: Any) -> np.float64:
+    """Return a coupling weight adjusted by the current parameter vector."""
+
+    weight = np.float64(base_weight)
+    parameter_vector = getattr(world, "parameter_vector", None)
+    if parameter_vector is None:
+        return weight
+
+    normalized_source = _normalize_edge_token(source_key)
+    normalized_target = _normalize_edge_token(target_key)
+    for edge_key, delta in parameter_vector.edge_weight_deltas.items():
+        if "." not in edge_key:
+            continue
+        edge_source, edge_target = edge_key.rsplit(".", 1)
+        if _normalize_edge_token(edge_source) == normalized_source and _normalize_edge_token(edge_target) == normalized_target:
+            weight += np.float64(delta)
+    return weight
+
+
+def _coupling_term(world: WorldState, weights: Dict[str, Any], *, target_key: str) -> np.float64:
     """Return a linear combination of world values."""
 
     total = np.float64(0.0)
     for key, weight in weights.items():
-        total += np.float64(weight) * np.float64(get_world_value(world, key))
+        total += effective_edge_weight(world, str(key), target_key, weight) * np.float64(get_world_value(world, key))
     return total
 
 
@@ -83,7 +109,7 @@ class LinearTransition(EvolutionOperator):
         dt: float = 1.0,
     ) -> float:
         action_term = self.b * _policy_sum(policy)
-        coupling_term = _coupling_term(world, self.coupling_weights)
+        coupling_term = _coupling_term(world, self.coupling_weights, target_key=resource.id)
         value = self.a * np.float64(resource.value) + np.float64(dt) * (action_term + coupling_term + self.c)
         return float(np.float64(value))
 
@@ -100,11 +126,11 @@ class StockFlowTransition(EvolutionOperator):
         self.delta = np.float64(delta)
         self.phi_params = phi_params or {}
 
-    def _phi(self, world: WorldState, policy: Optional[Policy]) -> np.float64:
+    def _phi(self, resource: Resource, world: WorldState, policy: Optional[Policy]) -> np.float64:
         base_inflow = np.float64(self.phi_params.get("base_inflow", 0.0))
         policy_scale = np.float64(self.phi_params.get("policy_scale", 0.0))
         coupling_weights = self.phi_params.get("coupling_weights", {})
-        return base_inflow + policy_scale * _policy_sum(policy) + _coupling_term(world, coupling_weights)
+        return base_inflow + policy_scale * _policy_sum(policy) + _coupling_term(world, coupling_weights, target_key=resource.id)
 
     def step(
         self,
@@ -113,7 +139,7 @@ class StockFlowTransition(EvolutionOperator):
         policy: Optional[Policy],
         dt: float = 1.0,
     ) -> float:
-        phi = self._phi(world, policy)
+        phi = self._phi(resource, world, policy)
         value = np.float64(resource.value) + np.float64(dt) * (phi - self.delta * np.float64(resource.value))
         return float(np.float64(value))
 
@@ -150,7 +176,7 @@ class LogisticGrowthTransition(EvolutionOperator):
     ) -> float:
         current = np.float64(resource.value)
         growth = self.r * current * (1.0 - current / self.K)
-        forcing = self.external + self.policy_scale * _policy_sum(policy) + _coupling_term(world, self.coupling_weights)
+        forcing = self.external + self.policy_scale * _policy_sum(policy) + _coupling_term(world, self.coupling_weights, target_key=resource.id)
         value = current + np.float64(dt) * (growth + forcing)
         value = np.clip(value, resource.min_value, min(resource.max_value, self.K))
         return float(np.float64(value))
@@ -177,6 +203,7 @@ class ThresholdTransition(EvolutionOperator):
     def _branch_value(
         self,
         current: np.float64,
+        target_key: str,
         world: WorldState,
         policy: Optional[Policy],
         dt: float,
@@ -184,7 +211,7 @@ class ThresholdTransition(EvolutionOperator):
     ) -> np.float64:
         mode = branch.get("mode", "linear")
         action_sum = _policy_sum(policy)
-        coupling = _coupling_term(world, branch.get("coupling_weights", {}))
+        coupling = _coupling_term(world, branch.get("coupling_weights", {}), target_key=target_key)
         if mode == "increment":
             delta = np.float64(branch.get("delta", 0.0))
             policy_scale = np.float64(branch.get("policy_scale", 0.0))
@@ -208,7 +235,7 @@ class ThresholdTransition(EvolutionOperator):
     ) -> float:
         current = np.float64(resource.value)
         branch = self.low_params if current < self.theta else self.high_params
-        return float(np.float64(self._branch_value(current, world, policy, dt, branch)))
+        return float(np.float64(self._branch_value(current, resource.id, world, policy, dt, branch)))
 
     def stability_bound(self) -> float:
         """Return the larger of the branch-specific bounds."""

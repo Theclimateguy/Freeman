@@ -1,14 +1,16 @@
 # Freeman
 
-Freeman is a domain-agnostic simulation and agent framework for structured reasoning over actors, resources, causal graphs, uncertainty, semantic memory, forecast verification, and proactive agent behavior. The current codebase implements the USIM-AGENT roadmap through v0.2, plus semantic KG retrieval, obligation-driven scheduling, forecast tracking, self-model updates, replay-based behavioral tests, and a stateful regime-shift simulator update for longitudinal benchmark cases.
+Freeman is a domain-agnostic simulation and agent framework for structured reasoning over actors, resources, causal graphs, uncertainty, semantic memory, forecast verification, and proactive agent behavior. The current codebase implements the USIM-AGENT roadmap through v0.2, plus semantic KG retrieval, obligation-driven scheduling, forecast tracking, self-model updates, replay-based behavioral tests, a stateful regime-shift simulator update, and a universal dynamic `ParameterVector` layer for T1 recalibration.
 
 ## What Is Implemented
 
 - Core simulator: `WorldGraph` / `WorldState`, transition operators, outcome scoring, multi-domain shared-resource worlds.
 - Stateful regime updates: decayed shock accumulation via `WorldGraph.apply_shocks(..., time_decay=...)` plus conditional outcome multipliers through `Outcome.regime_shifts`.
+- Universal dynamic calibration: `ParameterVector` with `outcome_modifiers`, `shock_decay`, `edge_weight_deltas`, and LLM-generated rationale.
 - Verifier: Level 0 invariants, Level 1 structural checks, Level 2 sign consistency, fixed-point repair, spectral-radius guard.
 - Memory: NetworkX + JSON knowledge graph, ChromaDB semantic retrieval, session logs, confidence reconciliation, self-model nodes, export to HTML / JSON-LD / DOT.
 - Agent layer: domain template registry, analysis pipeline, signal ingestion, signal memory, UCB attention scheduler, obligation queue, forecast registry, proactive emitter, formal cost model.
+- T1 recalibration path: `ParameterEstimator` + `AnalysisPipeline.update()` for ontology-preserving world updates.
 - Interface layer: CLI commands, minimal REST API, KG export, human override API, simulation diff.
 - v0.2 extensions: compile validation, historical fit scoring, ensemble sign consensus, Monte Carlo uncertainty, cost governance, override audit trail.
 - Behavioral validation: deterministic `AgentHarness`, replay fixtures, and end-to-end stimulus tests for watch/analyze/escalation behavior.
@@ -115,11 +117,11 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 
 - Core Python API:
 - `freeman.core`
-  - includes stateful shock decay and regime-shift scoring
-  - `freeman.verifier`
-  - `freeman.memory`
-  - `freeman.agent`
-  - `freeman.interface`
+  - includes stateful shock decay, regime-shift scoring, and `ParameterVector`
+- `freeman.verifier`
+- `freeman.memory`
+- `freeman.agent`
+- `freeman.interface`
 - CLI:
   - `python -m freeman.interface.cli`
 - Minimal REST server:
@@ -135,6 +137,7 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 - Architecture and workflows: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
 - FAAB benchmark and recorded regime-shift run: [docs/FAAB.md](docs/FAAB.md)
+- Universal parameter-vector update path: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Release notes: [CHANGELOG.md](CHANGELOG.md)
 - Live E2E evaluation report: [docs/REAL_LLM_E2E.md](docs/REAL_LLM_E2E.md)
 
@@ -156,6 +159,7 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 - Semantic retrieval is optional and uses ChromaDB when installed with the `semantic` extra.
 - Local semantic retrieval defaults to Ollama with `nomic-embed-text`; `mxbai-embed-large` is supported through the same adapter.
 - The regime-shift benchmark baseline recorded in-repo lives under `runs/faab_real_regime_v1/`.
+- The universal T1 update path is exercised in `MODE_A_FULL` through `ParameterEstimator -> AnalysisPipeline.update()`.
 - Signal replay fixtures live under `tests/fixtures/signals/` and are used by `tests/test_agent_behavior.py`.
 - `pytest tests/` is the required validation command and is wired to work without manual `PYTHONPATH` changes.
 - The stdlib REST layer is intentionally minimal; the override and diff logic already exists as reusable Python API classes and can be mounted behind a richer HTTP framework later.

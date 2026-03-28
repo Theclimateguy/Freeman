@@ -27,12 +27,14 @@ from freeman.agent import (  # noqa: E402
     AttentionTask,
     ForecastRegistry,
     ManualSignalSource,
+    ParameterEstimator,
     ProactiveEmitter,
     ShockClassification,
     Signal,
     SignalIngestionEngine,
     SignalMemory,
 )
+from freeman.core import ParameterVector  # noqa: E402
 from freeman.game.runner import SimConfig  # noqa: E402
 from freeman.llm import HashingEmbeddingAdapter, OllamaEmbeddingClient  # noqa: E402
 from freeman.llm.deepseek import DeepSeekChatClient  # noqa: E402
@@ -232,6 +234,8 @@ class HeuristicBenchmarkClient:
         if "FAAB_STATE_FORECAST" in system:
             payload = json.loads(user)
             return self._state_forecast(payload)
+        if "causal calibration engine for a deterministic world simulator" in system:
+            return self._parameter_vector(user)
         if "FAAB_LLM_ONLY" in system:
             payload = json.loads(user)
             return self._llm_only(payload)
@@ -327,6 +331,53 @@ class HeuristicBenchmarkClient:
             "confidence": response.get("confidence", 0.5),
             "rationale": response.get("overview", ""),
         }
+
+    def _parameter_vector(self, prompt_text: str) -> Dict[str, Any]:
+        lower = prompt_text.lower()
+        parameter_vector = ParameterVector(
+            outcome_modifiers={},
+            shock_decay=0.95,
+            edge_weight_deltas={},
+            rationale="Gradual update with no major recalibration required.",
+        )
+        if any(token in lower for token in ["layoff", "orders plunged", "orders fell", "investment froze", "credit"]):
+            parameter_vector = ParameterVector(
+                outcome_modifiers={"recession_spiral": 3.0, "inflation_persistence": 0.75},
+                shock_decay=0.55,
+                edge_weight_deltas={
+                    "policy_rate.business_demand": -0.04,
+                    "business_demand.recession_risk": -0.05,
+                },
+                rationale="The new signal indicates a recessionary regime shift that should weaken inflation persistence.",
+            )
+        elif any(token in lower for token in ["weekday drop", "front-loaded", "cinemascore", "mixed exits"]):
+            parameter_vector = ParameterVector(
+                outcome_modifiers={"front_loaded_opening": 2.75, "breakout_hit": 0.8},
+                shock_decay=0.6,
+                edge_weight_deltas={
+                    "critic_sentiment.box_office_legs": 0.05,
+                    "word_of_mouth.box_office_legs": 0.05,
+                },
+                rationale="Opening strength remains high, but poor exits should sharply increase front-loading sensitivity.",
+            )
+        elif any(token in lower for token in ["therapy", "honest conversation", "check-ins", "apologized", "counseling"]):
+            parameter_vector = ParameterVector(
+                outcome_modifiers={"repair_path": 1.8, "breakup_path": 0.7},
+                shock_decay=0.75,
+                edge_weight_deltas={
+                    "communication_quality.trust_level": 0.04,
+                    "trust_level.jealousy_pressure": -0.03,
+                },
+                rationale="The new signal strengthens repair channels and reduces the persistence of prior conflict shocks.",
+            )
+        elif any(token in lower for token in ["rain", "conservation", "rationing eased"]):
+            parameter_vector = ParameterVector(
+                outcome_modifiers={"managed_adaptation": 1.6, "water_shortage_spiral": 0.85},
+                shock_decay=0.85,
+                edge_weight_deltas={"policy_response.reservoir_storage": 0.04},
+                rationale="Adaptive capacity improves, but the physical system still retains part of the earlier drought stress.",
+            )
+        return parameter_vector.snapshot()
 
 
 def _utc_now() -> str:
@@ -1060,6 +1111,39 @@ class BenchmarkRunner:
             trace["llm_calls"].append(record)
             raise
 
+    def _estimate_parameter_vector(
+        self,
+        *,
+        previous_world: Any,
+        signal_text: str,
+        trace: Dict[str, Any],
+        step: str,
+    ) -> ParameterVector:
+        """Estimate a dynamic parameter vector while recording the LLM call in the trace."""
+
+        runner = self
+
+        class _TracedClient:
+            def chat_json(
+                self,
+                messages: List[Dict[str, str]],
+                *,
+                temperature: float = 0.0,
+                max_tokens: int | None = None,
+            ) -> Dict[str, Any]:
+                return runner._trace_chat_json(
+                    trace=trace,
+                    label=f"{step}_parameter_vector",
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=500 if max_tokens is None else max_tokens,
+                )
+
+        estimator = ParameterEstimator(_TracedClient())
+        parameter_vector = estimator.estimate(previous_world, signal_text)
+        trace.setdefault("parameter_vectors", {})[step] = parameter_vector.snapshot()
+        return parameter_vector
+
     def _classify_signal(self, signal: Signal, trace: Dict[str, Any], *, step: str) -> ShockClassification:
         payload = {
             "signal_id": signal.signal_id,
@@ -1347,13 +1431,25 @@ class BenchmarkRunner:
             base_world = pipeline.compiler.compile(_domain_template(case.domain, case_id=case.case_id))
             self._state["base_world"] = base_world.clone()
         prior_world = self._state.get("current_world") or base_world.clone()
-        time_decay = self.config.state_time_decay if step != "t0" else 1.0
-        shocked_world = prior_world.apply_shocks(
-            inference["resource_shocks"],
-            time_decay=time_decay,
-        )
-        pipeline: AnalysisPipeline = self._state["pipeline"]
-        result = pipeline.run(shocked_world, session_log=session_log)
+        parameter_vector = prior_world.parameter_vector
+        if self.mode == MODE_A_FULL and step == "t1":
+            parameter_vector = self._estimate_parameter_vector(
+                previous_world=prior_world,
+                signal_text=signal.text,
+                trace=trace,
+                step=step,
+            )
+            calibrated_world = prior_world.clone()
+            calibrated_world.parameter_vector = parameter_vector
+            shocked_world = calibrated_world.apply_shocks(inference["resource_shocks"])
+            result = pipeline.update(shocked_world, parameter_vector, session_log=session_log)
+        else:
+            time_decay = self.config.state_time_decay if step != "t0" else 1.0
+            shocked_world = prior_world.apply_shocks(
+                inference["resource_shocks"],
+                time_decay=time_decay,
+            )
+            result = pipeline.run(shocked_world, session_log=session_log)
         self._state["current_world"] = shocked_world.clone()
         metric_name = str(case.ground_truth_t2.get("key_metric_name", "")).strip()
         key_metric_value = _extract_key_metric(result.simulation, metric_name)

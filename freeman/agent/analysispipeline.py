@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -12,7 +13,7 @@ from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.proactiveemitter import ProactiveEmitter, ProactiveEvent
 
 from freeman.core.scorer import raw_outcome_scores
-from freeman.core.types import Policy
+from freeman.core.types import ParameterVector, Policy
 from freeman.core.world import WorldState
 from freeman.domain.compiler import DomainCompiler
 from freeman.game.runner import GameRunner, SimConfig
@@ -20,6 +21,8 @@ from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler, ReconciliationResult
 from freeman.memory.sessionlog import KGDelta, SessionLog
 from freeman.verifier.verifier import Verifier, VerifierConfig
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -94,6 +97,43 @@ class AnalysisPipeline:
         """Run the full compile/simulate/verify/score/update workflow."""
 
         world = schema.clone() if isinstance(schema, WorldState) else self.compiler.compile(schema)
+        return self._run_world(world, policies=policies, session_log=session_log)
+
+    def update(
+        self,
+        previous_world: WorldState,
+        parameter_vector: ParameterVector,
+        *,
+        policies: Iterable[Policy | Dict[str, Any]] = (),
+        session_log: SessionLog | None = None,
+    ) -> AnalysisPipelineResult:
+        """Apply a new dynamic parameter layer to an existing world and re-run simulation."""
+
+        LOGGER.info(
+            "analysis_update domain_id=%s shock_decay=%.3f outcome_modifiers=%s",
+            previous_world.domain_id,
+            float(parameter_vector.shock_decay),
+            dict(parameter_vector.outcome_modifiers),
+        )
+        world = previous_world.clone()
+        world.parameter_vector = parameter_vector
+        return self._run_world(
+            world,
+            policies=policies,
+            session_log=session_log,
+            extra_summary_metadata={"parameter_vector": parameter_vector.snapshot()},
+        )
+
+    def _run_world(
+        self,
+        world: WorldState,
+        *,
+        policies: Iterable[Policy | Dict[str, Any]] = (),
+        session_log: SessionLog | None = None,
+        extra_summary_metadata: Dict[str, Any] | None = None,
+    ) -> AnalysisPipelineResult:
+        """Execute the compile/simulate/verify/score/update workflow from an initialized world."""
+
         verification = self.verifier.run(world, levels=(1, 2)).snapshot()
         policy_objects = [
             policy if isinstance(policy, Policy) else Policy.from_snapshot(policy)
@@ -129,6 +169,8 @@ class AnalysisPipeline:
                 "context_node_count": len(context_nodes),
                 "forecast_ids": [forecast.forecast_id for forecast in recorded_forecasts],
                 "verification": verification,
+                "parameter_vector": final_world.parameter_vector.snapshot(),
+                **(extra_summary_metadata or {}),
             },
         )
         self.knowledge_graph.add_node(summary_node)
@@ -159,6 +201,7 @@ class AnalysisPipeline:
                 "forecast_count": len(recorded_forecasts),
                 "steps_run": sim_result.steps_run,
                 "fixed_point_iters": sim_result.metadata.get("fixed_point_iters"),
+                "parameter_vector": final_world.parameter_vector.snapshot(),
             },
         )
         if self.emitter is not None:

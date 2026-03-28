@@ -196,7 +196,9 @@ def raw_outcome_scores(world: WorldState) -> Dict[str, float]:
         score = np.float64(0.0)
         for key, weight in outcome.scoring_weights.items():
             score += np.float64(weight) * np.float64(get_world_value(world, key))
-        raw_scores[outcome_id] = _apply_regime_shifts(outcome, world, score)
+        score = _apply_regime_shifts(outcome, world, score)
+        modifier = np.float64(world.parameter_vector.outcome_modifiers.get(outcome_id, 1.0))
+        raw_scores[outcome_id] = score * modifier
     return {key: float(value) for key, value in raw_scores.items()}
 
 

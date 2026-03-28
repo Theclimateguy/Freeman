@@ -202,6 +202,47 @@ class Outcome:
 
 
 @dataclass
+class ParameterVector:
+    """LLM-generated dynamic calibration layer applied on top of the static world schema."""
+
+    outcome_modifiers: Dict[str, float] = field(default_factory=dict)
+    shock_decay: float = 1.0
+    edge_weight_deltas: Dict[str, float] = field(default_factory=dict)
+    rationale: str = ""
+
+    def __post_init__(self) -> None:
+        self.outcome_modifiers = {
+            k: np.float64(v) for k, v in normalize_numeric_tree(self.outcome_modifiers).items()
+        }
+        self.shock_decay = float(np.clip(np.float64(self.shock_decay), 0.0, 1.0))
+        self.edge_weight_deltas = {
+            k: np.float64(v) for k, v in normalize_numeric_tree(self.edge_weight_deltas).items()
+        }
+        self.rationale = str(self.rationale)
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Return a JSON-serializable parameter-vector snapshot."""
+
+        return {
+            "outcome_modifiers": json_ready(self.outcome_modifiers),
+            "shock_decay": float(self.shock_decay),
+            "edge_weight_deltas": json_ready(self.edge_weight_deltas),
+            "rationale": self.rationale,
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: Dict[str, Any]) -> "ParameterVector":
+        """Recreate a parameter vector from a snapshot."""
+
+        return cls(
+            outcome_modifiers={k: float(v) for k, v in data.get("outcome_modifiers", {}).items()},
+            shock_decay=float(data.get("shock_decay", 1.0)),
+            edge_weight_deltas={k: float(v) for k, v in data.get("edge_weight_deltas", {}).items()},
+            rationale=str(data.get("rationale", "")),
+        )
+
+
+@dataclass
 class CausalEdge:
     """Expected qualitative causal relationship between two world quantities."""
 
@@ -293,3 +334,15 @@ class Violation:
             severity=data["severity"],
             details=deep_copy_jsonable(data.get("details", {})),
         )
+
+
+__all__ = [
+    "Actor",
+    "CausalEdge",
+    "Outcome",
+    "ParameterVector",
+    "Policy",
+    "Relation",
+    "Resource",
+    "Violation",
+]
