@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
@@ -42,6 +43,8 @@ class DeepSeekChatClient:
     model: str = "deepseek-chat"
     base_url: str = "https://api.deepseek.com"
     timeout_seconds: float = 90.0
+    max_retries: int = 2
+    retry_backoff_seconds: float = 1.5
 
     def create_chat_completion(
         self,
@@ -73,14 +76,24 @@ class DeepSeekChatClient:
             method="POST",
         )
 
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:  # pragma: no cover - exercised only against live API
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"DeepSeek HTTP {exc.code}: {body}") from exc
-        except URLError as exc:  # pragma: no cover - exercised only against live API
-            raise RuntimeError(f"DeepSeek connection error: {exc}") from exc
+        retryable_http = {408, 409, 429, 500, 502, 503, 504}
+        attempts = max(int(self.max_retries), 0) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:  # pragma: no cover - exercised only against live API
+                body = exc.read().decode("utf-8", errors="replace")
+                if exc.code in retryable_http and attempt < attempts:
+                    time.sleep(self.retry_backoff_seconds * attempt)
+                    continue
+                raise RuntimeError(f"DeepSeek HTTP {exc.code}: {body}") from exc
+            except (URLError, TimeoutError, ConnectionResetError, OSError) as exc:  # pragma: no cover - live API only
+                if attempt < attempts:
+                    time.sleep(self.retry_backoff_seconds * attempt)
+                    continue
+                raise RuntimeError(f"DeepSeek connection error: {exc}") from exc
+        raise RuntimeError("DeepSeek request failed after retries.")
 
     def chat_json(
         self,

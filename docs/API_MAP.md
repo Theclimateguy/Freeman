@@ -161,10 +161,20 @@ This is the implementation-facing map of modules, classes, and primary functions
 
 - `EmbeddingAdapter`
 - `DeterministicEmbeddingAdapter`
+- `HashingEmbeddingAdapter`
 - `OpenAIEmbeddingClient`
 - `DeepSeekChatClient`
 - `DeepSeekFreemanOrchestrator`
 - `LLMDrivenSimulationRun`
+
+### `scripts`
+
+- Live evaluation:
+  - `scripts/run_real_llm_e2e.py`
+  - real-LLM signal classification
+  - template shock inference
+  - simulation interpretation
+  - memory-only follow-up answers over KG retrieval
 
 ### `tests`
 

@@ -10,6 +10,9 @@
 - `ProactiveEmitter` for structured `alert`, `forecast_update`, and `question_to_human` interface events.
 - `SignalMemory` with cross-session deduplication, exponential decay, and replay-oriented signal ingestion support.
 - Deterministic `AgentHarness` plus JSONL replay fixtures for end-to-end behavioral tests.
+- `HashingEmbeddingAdapter` for local semantic retrieval without an external embedding API.
+- `scripts/run_real_llm_e2e.py` for live DeepSeek evaluation across multiple domains with semantic-memory follow-up.
+- `docs/REAL_LLM_E2E.md` documenting the recorded live E2E run and results.
 
 ### Changed
 
@@ -19,6 +22,7 @@
 ### Validation
 
 - `pytest tests/` -> `74 passed`
+- Live DeepSeek E2E run completed across 3 domains plus repeated social-memory probe.
 
 ## v1.1.0
 

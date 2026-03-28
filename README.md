@@ -11,6 +11,7 @@ Freeman is a domain-agnostic simulation and agent framework for structured reaso
 - Interface layer: CLI commands, minimal REST API, KG export, human override API, simulation diff.
 - v0.2 extensions: compile validation, historical fit scoring, ensemble sign consensus, Monte Carlo uncertainty, cost governance, override audit trail.
 - Behavioral validation: deterministic `AgentHarness`, replay fixtures, and end-to-end stimulus tests for watch/analyze/escalation behavior.
+- Live evaluation tooling: real-LLM scenario runner over economic, social, and media-release domains with semantic memory recall.
 
 ## Install
 
@@ -36,6 +37,12 @@ Run the replay-driven behavioral suite only:
 
 ```bash
 pytest tests/test_agent_behavior.py
+```
+
+Run the live DeepSeek end-to-end evaluation:
+
+```bash
+python scripts/run_real_llm_e2e.py --output-dir runs/real_llm_e2e --max-steps 12 --top-k 6
 ```
 
 Inspect the current knowledge graph status:
@@ -101,6 +108,7 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 - Architecture and workflows: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
 - Release notes: [CHANGELOG.md](CHANGELOG.md)
+- Live E2E evaluation report: [docs/REAL_LLM_E2E.md](docs/REAL_LLM_E2E.md)
 
 ## Repository Layout
 
