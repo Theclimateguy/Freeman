@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from freeman.core.scorer import raw_outcome_scores
+from freeman.core.scorer import pre_modifier_outcome_scores, scored_outcome_scores
 from freeman.core.types import ParameterVector
 from freeman.core.world import WorldState
 
@@ -20,6 +20,8 @@ You will receive:
 
 Your job is to output a JSON ParameterVector that adjusts the simulator's sensitivity to the new signal.
 Rules:
+- `current_outcome_scores_post_modifier` is the actual simulator output after the active ParameterVector was applied.
+- `current_outcome_scores_pre_modifier` is the same score surface before outcome modifiers were applied.
 - outcome_modifiers: multiply the base score of outcomes that the new signal fundamentally changes.
   Use values between 0.5 (suppress) and 4.0 (amplify). Only include outcomes that need adjustment.
   Default is 1.0 (no change).
@@ -72,7 +74,9 @@ Output ONLY valid JSON matching this schema:
                     }
                     for outcome_id, outcome in world.outcomes.items()
                 },
-                "current_outcome_scores": raw_outcome_scores(world),
+                "current_outcome_scores_pre_modifier": pre_modifier_outcome_scores(world),
+                "current_outcome_scores_post_modifier": scored_outcome_scores(world),
+                "current_outcome_scores": scored_outcome_scores(world),
                 "causal_dag": [edge.snapshot() for edge in world.causal_dag],
                 "current_actor_states": {
                     actor_id: dict(actor.state)

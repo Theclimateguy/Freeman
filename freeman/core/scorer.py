@@ -188,18 +188,32 @@ def _apply_regime_shifts(outcome: Outcome, world: WorldState, base_score: np.flo
     return score
 
 
-def raw_outcome_scores(world: WorldState) -> Dict[str, float]:
-    """Return weighted linear scores W · S(t) for each outcome."""
+def pre_modifier_outcome_scores(world: WorldState) -> Dict[str, float]:
+    """Return outcome scores after static regime shifts, before parameter-vector modifiers."""
 
     raw_scores: Dict[str, np.float64] = {}
     for outcome_id, outcome in world.outcomes.items():
         score = np.float64(0.0)
         for key, weight in outcome.scoring_weights.items():
             score += np.float64(weight) * np.float64(get_world_value(world, key))
-        score = _apply_regime_shifts(outcome, world, score)
-        modifier = np.float64(world.parameter_vector.outcome_modifiers.get(outcome_id, 1.0))
-        raw_scores[outcome_id] = score * modifier
+        raw_scores[outcome_id] = _apply_regime_shifts(outcome, world, score)
     return {key: float(value) for key, value in raw_scores.items()}
+
+
+def scored_outcome_scores(world: WorldState) -> Dict[str, float]:
+    """Return outcome scores after regime shifts and active parameter-vector modifiers."""
+
+    scores = pre_modifier_outcome_scores(world)
+    return {
+        outcome_id: float(np.float64(score) * np.float64(world.parameter_vector.outcome_modifiers.get(outcome_id, 1.0)))
+        for outcome_id, score in scores.items()
+    }
+
+
+def raw_outcome_scores(world: WorldState) -> Dict[str, float]:
+    """Backward-compatible alias for post-modifier outcome scores."""
+
+    return scored_outcome_scores(world)
 
 
 def softmax_distribution(scores: Mapping[str, float]) -> Dict[str, float]:
@@ -217,7 +231,7 @@ def softmax_distribution(scores: Mapping[str, float]) -> Dict[str, float]:
 def score_outcomes(world: WorldState) -> Dict[str, float]:
     """Score outcomes from world values and return a softmax distribution."""
 
-    return softmax_distribution(raw_outcome_scores(world))
+    return softmax_distribution(scored_outcome_scores(world))
 
 
 def compute_confidence(outcome_probs: Dict[str, float], violations: Iterable[Violation]) -> float:
@@ -237,8 +251,10 @@ def compute_confidence(outcome_probs: Dict[str, float], violations: Iterable[Vio
 
 __all__ = [
     "compute_confidence",
+    "pre_modifier_outcome_scores",
     "raw_outcome_scores",
     "regime_shift_matches",
+    "scored_outcome_scores",
     "score_outcomes",
     "softmax_distribution",
 ]
