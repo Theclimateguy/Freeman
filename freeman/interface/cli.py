@@ -16,7 +16,12 @@ from freeman.interface.api import InterfaceAPI
 from freeman.interface.kgexport import KnowledgeGraphExporter
 from freeman.interface.modeloverride import ModelOverrideAPI
 from freeman.interface.simulationdiff import build_simulation_diff, export_simulation_diff
-from freeman.llm import DeterministicEmbeddingAdapter, OpenAIEmbeddingClient
+from freeman.llm import (
+    DeterministicEmbeddingAdapter,
+    HashingEmbeddingAdapter,
+    OllamaEmbeddingClient,
+    OpenAIEmbeddingClient,
+)
 from freeman.core.world import WorldState
 from freeman.memory.knowledgegraph import KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
@@ -66,10 +71,34 @@ def _build_vectorstore(config: dict[str, Any], *, config_path: Path) -> KGVector
 
 def _build_embedding_adapter(config: dict[str, Any], *, use_stub: bool = False) -> tuple[Any, str]:
     memory_cfg = config.get("memory", {})
-    model = str(memory_cfg.get("embedding_model", "text-embedding-3-small"))
-    if use_stub or not os.getenv("OPENAI_API_KEY"):
+    provider = str(memory_cfg.get("embedding_provider", "")).strip().lower()
+    model = str(memory_cfg.get("embedding_model", "nomic-embed-text"))
+    timeout_seconds = float(memory_cfg.get("embedding_timeout_seconds", 120.0))
+    prompt_prefix = str(memory_cfg.get("embedding_prompt_prefix", ""))
+    if use_stub:
         return DeterministicEmbeddingAdapter(), "deterministic_stub"
-    return OpenAIEmbeddingClient(api_key=os.environ["OPENAI_API_KEY"], model=model), model
+    if provider in {"deterministic", "stub"}:
+        return DeterministicEmbeddingAdapter(), "deterministic_stub"
+    if provider in {"hash", "hashing"}:
+        dimension = int(memory_cfg.get("hashing_embedding_dimension", 384))
+        return HashingEmbeddingAdapter(dimension=dimension), f"hashing:{dimension}"
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required when memory.embedding_provider=openai")
+        return OpenAIEmbeddingClient(api_key=api_key, model=model), f"openai:{model}"
+    if provider in {"", "ollama"}:
+        base_url = str(memory_cfg.get("embedding_base_url", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")))
+        return (
+            OllamaEmbeddingClient(
+                model=model,
+                base_url=base_url,
+                timeout_seconds=timeout_seconds,
+                prompt_prefix=prompt_prefix,
+            ),
+            f"ollama:{model}",
+        )
+    raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,6 +242,13 @@ def main(argv: list[str] | None = None) -> int:
         reembedded = 0
         for batch_start in range(0, len(missing), args.batch_size):
             batch = missing[batch_start : batch_start + args.batch_size]
+            if hasattr(embedding_adapter, "embed_many"):
+                embeddings = embedding_adapter.embed_many(node.content for node in batch)
+                for node, embedding in zip(batch, embeddings, strict=False):
+                    node.embedding = list(embedding)
+                    knowledge_graph.update_node(node)
+                    reembedded += 1
+                continue
             for node in batch:
                 node.embedding = []
                 knowledge_graph.update_node(node)

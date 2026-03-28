@@ -25,6 +25,17 @@ Optional semantic-memory extras:
 pip install -e ".[semantic]"
 ```
 
+Local embedding backend with Ollama:
+
+```bash
+brew install ollama
+brew services start ollama
+ollama pull nomic-embed-text
+ollama pull mxbai-embed-large
+```
+
+The default `config.yaml` uses `memory.embedding_provider: ollama` and `memory.embedding_model: nomic-embed-text`. To switch to the larger local model, set `memory.embedding_model: mxbai-embed-large` or export `FREEMAN_EMBEDDING_MODEL=mxbai-embed-large` for the live runner.
+
 ## Quick Start
 
 Run the full test suite:
@@ -39,7 +50,7 @@ Run the replay-driven behavioral suite only:
 pytest tests/test_agent_behavior.py
 ```
 
-Run the live DeepSeek end-to-end evaluation:
+Run the live DeepSeek + Ollama end-to-end evaluation:
 
 ```bash
 python scripts/run_real_llm_e2e.py --output-dir runs/real_llm_e2e --max-steps 12 --top-k 6
@@ -100,6 +111,7 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
   - `freeman.interface.api.run_server()`
 - LLM orchestration:
   - `freeman.llm.orchestrator.DeepSeekFreemanOrchestrator`
+  - `freeman.llm.OllamaEmbeddingClient`
 - Deterministic replay harness:
   - `tests/harness.py::AgentHarness`
 
@@ -125,6 +137,7 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 
 - Default long-term memory backend is NetworkX + JSON via `config.yaml -> memory.json_path`.
 - Semantic retrieval is optional and uses ChromaDB when installed with the `semantic` extra.
+- Local semantic retrieval defaults to Ollama with `nomic-embed-text`; `mxbai-embed-large` is supported through the same adapter.
 - Signal replay fixtures live under `tests/fixtures/signals/` and are used by `tests/test_agent_behavior.py`.
 - `pytest tests/` is the required validation command and is wired to work without manual `PYTHONPATH` changes.
 - The stdlib REST layer is intentionally minimal; the override and diff logic already exists as reusable Python API classes and can be mounted behind a richer HTTP framework later.

@@ -27,7 +27,11 @@ memory:
     backend: "chroma"
     path: "./data/chroma_db"
     collection: "kg_nodes"
-  embedding_model: "text-embedding-3-small"
+  embedding_provider: "ollama"
+  embedding_model: "nomic-embed-text"
+  embedding_base_url: "http://127.0.0.1:11434"
+  embedding_timeout_seconds: 120.0
+  embedding_prompt_prefix: ""
   retrieval_top_k: 15
   max_context_nodes: 30
   session_log_path: "./data/sessions/"

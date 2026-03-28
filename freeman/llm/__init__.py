@@ -2,6 +2,7 @@
 
 from freeman.llm.adapter import DeterministicEmbeddingAdapter, EmbeddingAdapter, HashingEmbeddingAdapter
 from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator, LLMDrivenSimulationRun
+from freeman.llm.ollama import OllamaEmbeddingClient
 from freeman.llm.openai import OpenAIEmbeddingClient
 
 __all__ = [
@@ -10,5 +11,6 @@ __all__ = [
     "EmbeddingAdapter",
     "HashingEmbeddingAdapter",
     "LLMDrivenSimulationRun",
+    "OllamaEmbeddingClient",
     "OpenAIEmbeddingClient",
 ]

@@ -21,7 +21,7 @@ from freeman.agent.forecastregistry import ForecastRegistry
 from freeman.agent.proactiveemitter import ProactiveEmitter
 from freeman.agent.signalingestion import ManualSignalSource, ShockClassification, Signal, SignalIngestionEngine, SignalMemory
 from freeman.game.runner import SimConfig
-from freeman.llm import HashingEmbeddingAdapter
+from freeman.llm import HashingEmbeddingAdapter, OllamaEmbeddingClient
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
@@ -1049,11 +1049,17 @@ def run_evaluation(
         retry_backoff_seconds=2.0,
     )
     vectorstore = KGVectorStore(path=output_dir / "chroma_db", collection_name="real_llm_eval")
+    embedding_model = os.getenv("FREEMAN_EMBEDDING_MODEL", "nomic-embed-text").strip() or "nomic-embed-text"
+    embedding_base_url = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").strip() or "http://127.0.0.1:11434"
+    if os.getenv("FREEMAN_USE_HASHING_EMBEDDINGS", "").strip().lower() in {"1", "true", "yes"}:
+        embedding_adapter = HashingEmbeddingAdapter()
+    else:
+        embedding_adapter = OllamaEmbeddingClient(model=embedding_model, base_url=embedding_base_url)
     knowledge_graph = KnowledgeGraph(
         json_path=output_dir / "kg_state.json",
         auto_load=False,
         auto_save=True,
-        llm_adapter=HashingEmbeddingAdapter(),
+        llm_adapter=embedding_adapter,
         vectorstore=vectorstore,
     )
     forecast_registry = ForecastRegistry(

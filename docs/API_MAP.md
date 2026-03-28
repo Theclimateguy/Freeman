@@ -163,6 +163,7 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `DeterministicEmbeddingAdapter`
 - `HashingEmbeddingAdapter`
 - `OpenAIEmbeddingClient`
+- `OllamaEmbeddingClient`
 - `DeepSeekChatClient`
 - `DeepSeekFreemanOrchestrator`
 - `LLMDrivenSimulationRun`
@@ -202,7 +203,7 @@ Command:
 - `python -m freeman.interface.cli kg-archive [--node-id <id>] [--reason <reason>]`
   - archive one node or auto-archive all low-confidence nodes
 - `freeman --config-path <config> kg-reindex [--batch-size <n>] [--use-stub-embeddings]`
-  - re-embed legacy nodes without vectors and sync them into ChromaDB
+  - re-embed legacy nodes without vectors and sync them into ChromaDB using the configured embedding backend
 - `python -m freeman.interface.cli override-param <world_path> <param_path> <value> [--output-path <path>]`
   - apply one parameter override to a world snapshot
 - `python -m freeman.interface.cli override-sign <world_path> <edge_id> <expected_sign> [--output-path <path>]`

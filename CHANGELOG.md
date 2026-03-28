@@ -11,6 +11,7 @@
 - `SignalMemory` with cross-session deduplication, exponential decay, and replay-oriented signal ingestion support.
 - Deterministic `AgentHarness` plus JSONL replay fixtures for end-to-end behavioral tests.
 - `HashingEmbeddingAdapter` for local semantic retrieval without an external embedding API.
+- `OllamaEmbeddingClient` with batched `/api/embed` support, compatibility fallback to `/api/embeddings`, and model-aware prompt preparation for `nomic-embed-text` and `mxbai-embed-large`.
 - `scripts/run_real_llm_e2e.py` for live DeepSeek evaluation across multiple domains with semantic-memory follow-up.
 - `docs/REAL_LLM_E2E.md` documenting the recorded live E2E run and results.
 
@@ -18,11 +19,14 @@
 
 - `ManualSignalSource` now accepts replay mappings with extra top-level fields and folds them into `Signal.metadata`.
 - Repository documentation now covers obligation pressure, forecast verification, self-model feedback, and replay-based testing flows.
+- Default embedding configuration now targets a local Ollama daemon with `nomic-embed-text`, while preserving hashing and OpenAI fallback paths.
+- `freeman kg-reindex` now batches re-embedding through `embed_many()` when the provider supports it.
 
 ### Validation
 
-- `pytest tests/` -> `74 passed`
-- Live DeepSeek E2E run completed across 3 domains plus repeated social-memory probe.
+- `pytest tests/` -> `80 passed`
+- Live DeepSeek + Ollama E2E run completed across 3 domains plus repeated social-memory probe.
+- Local Ollama smoke tests completed for `nomic-embed-text` and `mxbai-embed-large`.
 
 ## v1.1.0
 
