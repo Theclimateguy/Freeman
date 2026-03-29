@@ -36,6 +36,9 @@ TS/
 
 tests/
 scripts/
+adapters/
+freeman/realworld/
+CHANGELOG.md
 
 docs/*
 !docs/API_MAP.md
@@ -48,12 +51,5 @@ docs/*
 docs/dev/
 docs/roadmap/
 docs/experiments/
-
-freeman/realworld/*
-!freeman/realworld/__init__.py
-!freeman/realworld/manifold.py
-!freeman/realworld/causal_graph.py
-!freeman/realworld/test_a_experiment.py
-!freeman/realworld/test_c_cross_domain.py
 
 PROGRESS.md
