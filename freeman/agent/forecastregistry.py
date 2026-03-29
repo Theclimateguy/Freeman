@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from freeman.agent.attentionscheduler import ForecastDebt, ObligationQueue
 
@@ -43,6 +43,7 @@ class Forecast:
     actual_prob: float | None = None
     error: float | None = None
     status: str = "pending"
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.predicted_prob = float(self.predicted_prob)
@@ -73,6 +74,7 @@ class Forecast:
             "actual_prob": self.actual_prob,
             "error": self.error,
             "status": self.status,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -93,6 +95,7 @@ class Forecast:
             actual_prob=data.get("actual_prob"),
             error=data.get("error"),
             status=data.get("status", "pending"),
+            metadata=dict(data.get("metadata", {})),
         )
 
 

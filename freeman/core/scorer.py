@@ -200,12 +200,34 @@ def pre_modifier_outcome_scores(world: WorldState) -> Dict[str, float]:
     return {key: float(value) for key, value in raw_scores.items()}
 
 
+def _apply_outcome_modifier(score: float, modifier: float, *, modifier_mode: str = "legacy") -> float:
+    """Apply one outcome modifier.
+
+    In ``probability_monotonic`` mode, ``modifier > 1`` always increases an
+    outcome's softmax probability and ``modifier < 1`` always decreases it,
+    even when the current raw score is negative.
+    """
+
+    score64 = np.float64(score)
+    modifier64 = np.float64(modifier)
+    if modifier_mode == "probability_monotonic":
+        if score64 < 0:
+            return float(score64 / max(modifier64, np.float64(1.0e-8)))
+        return float(score64 * modifier64)
+    return float(score64 * modifier64)
+
+
 def scored_outcome_scores(world: WorldState) -> Dict[str, float]:
     """Return outcome scores after regime shifts and active parameter-vector modifiers."""
 
     scores = pre_modifier_outcome_scores(world)
+    modifier_mode = str(world.metadata.get("modifier_mode", "legacy"))
     return {
-        outcome_id: float(np.float64(score) * np.float64(world.parameter_vector.outcome_modifiers.get(outcome_id, 1.0)))
+        outcome_id: _apply_outcome_modifier(
+            score,
+            float(world.parameter_vector.outcome_modifiers.get(outcome_id, 1.0)),
+            modifier_mode=modifier_mode,
+        )
         for outcome_id, score in scores.items()
     }
 

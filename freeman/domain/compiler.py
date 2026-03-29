@@ -26,6 +26,10 @@ class DomainCompiler:
             metadata["description"] = schema["description"]
         if "exogenous_inflows" in schema:
             metadata["exogenous_inflows"] = deep_copy_jsonable(schema["exogenous_inflows"])
+        if "domain_polarity" in schema:
+            metadata["domain_polarity"] = schema["domain_polarity"]
+        if "modifier_mode" in schema:
+            metadata["modifier_mode"] = schema["modifier_mode"]
 
         return WorldState(
             domain_id=schema["domain_id"],

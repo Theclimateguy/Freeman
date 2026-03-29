@@ -1,3 +1,0 @@
-{"signal_id":"japan-s1","source_type":"replay","text":"Debt crisis fears intensify after bond market stress","topic":"sovereign_debt","entities":["japan"],"anomaly_score":3.1,"semantic_gap":0.8,"timestamp":"2026-01-02T00:00:00+00:00"}
-{"signal_id":"japan-s2","source_type":"replay","text":"Default risk repriced as growth outlook collapses","topic":"sovereign_debt","entities":["japan"],"anomaly_score":3.4,"semantic_gap":0.9,"timestamp":"2026-01-02T06:00:00+00:00"}
-{"signal_id":"japan-s3","source_type":"replay","text":"Policy intervention fails to calm debt market volatility","topic":"sovereign_debt","entities":["japan","boj"],"anomaly_score":2.7,"semantic_gap":0.7,"timestamp":"2026-01-02T12:00:00+00:00"}

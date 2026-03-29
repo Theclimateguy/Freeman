@@ -22,6 +22,7 @@ Your job is to output a JSON ParameterVector that adjusts the simulator's sensit
 Rules:
 - `current_outcome_scores_post_modifier` is the actual simulator output after the active ParameterVector was applied.
 - `current_outcome_scores_pre_modifier` is the same score surface before outcome modifiers were applied.
+- `domain_polarity` says whether literal YES is favorable (`positive`) or adverse/risk-like (`negative`); preserve the literal YES semantics of the market question.
 - outcome_modifiers: multiply the base score of outcomes that the new signal fundamentally changes.
   Use values between 0.5 (suppress) and 4.0 (amplify). Only include outcomes that need adjustment.
   Default is 1.0 (no change).
@@ -77,6 +78,8 @@ Output ONLY valid JSON matching this schema:
                 "current_outcome_scores_pre_modifier": pre_modifier_outcome_scores(world),
                 "current_outcome_scores_post_modifier": scored_outcome_scores(world),
                 "current_outcome_scores": scored_outcome_scores(world),
+                "domain_polarity": world.metadata.get("domain_polarity", "positive"),
+                "modifier_mode": world.metadata.get("modifier_mode", "legacy"),
                 "causal_dag": [edge.snapshot() for edge in world.causal_dag],
                 "current_actor_states": {
                     actor_id: dict(actor.state)
