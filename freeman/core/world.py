@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
 
 import numpy as np
 
@@ -130,6 +130,66 @@ class WorldGraph:
         """Register or replace an outcome in the registry."""
 
         self._outcome_registry.add(outcome)
+
+    def edges(self, *, as_objects: bool = False) -> List[Any]:
+        """Return causal edges as tuples by default or as ``CausalEdge`` objects."""
+
+        if as_objects:
+            return list(self.causal_dag)
+        return [(edge.source, edge.target) for edge in self.causal_dag]
+
+    def update_edge_weights(
+        self,
+        weights: Mapping[tuple[str, str], float] | Any,
+        source: str = "causal_estimate",
+        *,
+        confidence_intervals: Optional[Mapping[tuple[str, str], tuple[float, float]]] = None,
+        metadata: Optional[Mapping[tuple[str, str], Dict[str, Any]]] = None,
+    ) -> Dict[tuple[str, str], float]:
+        """Apply numeric causal-edge weights and annotate provenance.
+
+        The update writes both to the declarative ``causal_dag`` edge metadata and,
+        when possible, to the target resource's ``coupling_weights`` so the simulator
+        uses the new magnitude in subsequent transitions.
+        """
+
+        resolved_weights = getattr(weights, "weights", weights)
+        if not isinstance(resolved_weights, Mapping):
+            raise TypeError("weights must be a mapping or an EstimationResult-like object with `.weights`")
+
+        ci_map = dict(confidence_intervals or getattr(weights, "confidence_intervals", {}) or {})
+        metadata_map = dict(metadata or getattr(weights, "edge_metadata", {}) or {})
+        updates: Dict[tuple[str, str], float] = {}
+
+        for edge in self.causal_dag:
+            edge_key = (edge.source, edge.target)
+            if edge_key not in resolved_weights:
+                continue
+
+            estimate = float(np.float64(resolved_weights[edge_key]))
+            edge.weight = np.float64(estimate)
+            edge.weight_source = str(source)
+            edge.weight_confidence_interval = ci_map.get(edge_key)
+            edge.metadata = {
+                **dict(edge.metadata),
+                **dict(metadata_map.get(edge_key, {})),
+                "weight_source": str(source),
+            }
+            self._apply_resource_coupling_weight(edge.target, edge.source, estimate)
+            updates[edge_key] = estimate
+
+        if updates:
+            update_log = self.metadata.setdefault("_causal_edge_updates", {})
+            for (edge_source, edge_target), estimate in updates.items():
+                payload: Dict[str, Any] = {"weight": estimate, "source": str(source)}
+                if (edge_source, edge_target) in ci_map:
+                    low, high = ci_map[(edge_source, edge_target)]
+                    payload["confidence_interval"] = [float(low), float(high)]
+                if (edge_source, edge_target) in metadata_map:
+                    payload["metadata"] = deep_copy_jsonable(metadata_map[(edge_source, edge_target)])
+                update_log[f"{edge_source}->{edge_target}"] = payload
+
+        return updates
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a fully JSON-serializable snapshot of the world."""
@@ -351,6 +411,38 @@ class WorldGraph:
                 current = 0.0
             self.metadata[key] = np.float64(current) + np.float64(delta)
             metadata_state[key] = float(np.float64(metadata_state.get(key, 0.0)) + np.float64(delta))
+
+    def _apply_resource_coupling_weight(self, target_key: str, source_key: str, weight: float) -> None:
+        """Write a numeric edge weight into the target resource evolution parameters."""
+
+        resource = self.resources.get(target_key)
+        if resource is None:
+            return
+
+        params = resource.evolution_params
+        matched_paths = self._set_coupling_weight_recursive(params, source_key, np.float64(weight))
+        if matched_paths:
+            return
+
+        coupling_weights = params.setdefault("coupling_weights", {})
+        coupling_weights[source_key] = np.float64(weight)
+
+    def _set_coupling_weight_recursive(self, node: Any, source_key: str, weight: np.float64) -> int:
+        """Recursively update matching ``coupling_weights`` entries in nested params."""
+
+        matches = 0
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "coupling_weights" and isinstance(value, dict):
+                    if source_key in value:
+                        value[source_key] = np.float64(weight)
+                        matches += 1
+                    continue
+                matches += self._set_coupling_weight_recursive(value, source_key, weight)
+        elif isinstance(node, list):
+            for item in node:
+                matches += self._set_coupling_weight_recursive(item, source_key, weight)
+        return matches
 
 
 WorldState = WorldGraph

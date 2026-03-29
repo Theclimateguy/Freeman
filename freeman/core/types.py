@@ -254,6 +254,20 @@ class CausalEdge:
     target: str
     expected_sign: Literal["+", "-"]
     strength: Literal["strong", "weak"] = "strong"
+    weight: Optional[float] = None
+    weight_source: str = "manual"
+    weight_confidence_interval: Optional[tuple[float, float]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.weight = None if self.weight is None else np.float64(self.weight)
+        self.weight_source = str(self.weight_source)
+        if self.weight_confidence_interval is None:
+            self.weight_confidence_interval = None
+        else:
+            low, high = self.weight_confidence_interval
+            self.weight_confidence_interval = (float(np.float64(low)), float(np.float64(high)))
+        self.metadata = normalize_numeric_tree(self.metadata)
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a JSON-serializable edge snapshot."""
@@ -263,6 +277,14 @@ class CausalEdge:
             "target": self.target,
             "expected_sign": self.expected_sign,
             "strength": self.strength,
+            "weight": None if self.weight is None else _encode_float(self.weight),
+            "weight_source": self.weight_source,
+            "weight_confidence_interval": (
+                None
+                if self.weight_confidence_interval is None
+                else [_encode_float(self.weight_confidence_interval[0]), _encode_float(self.weight_confidence_interval[1])]
+            ),
+            "metadata": json_ready(self.metadata),
         }
 
     @classmethod
@@ -274,6 +296,17 @@ class CausalEdge:
             target=data["target"],
             expected_sign=data["expected_sign"],
             strength=data.get("strength", "strong"),
+            weight=None if data.get("weight") is None else _decode_float(data["weight"]),
+            weight_source=str(data.get("weight_source", "manual")),
+            weight_confidence_interval=(
+                None
+                if data.get("weight_confidence_interval") is None
+                else (
+                    _decode_float(data["weight_confidence_interval"][0]),
+                    _decode_float(data["weight_confidence_interval"][1]),
+                )
+            ),
+            metadata=deep_copy_jsonable(data.get("metadata", {})),
         )
 
 

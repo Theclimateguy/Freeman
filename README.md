@@ -26,6 +26,12 @@ Optional semantic-memory extras:
 pip install ".[semantic]"
 ```
 
+Optional causal-estimation extras:
+
+```bash
+pip install ".[causal]"
+```
+
 Separate connector package:
 
 ```bash

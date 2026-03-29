@@ -17,6 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = ["chromadb>=0.5"]
+causal = [
+    "causalml>=0.15",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+]
 benchmark = [
     "chromadb>=0.5",
     "pandas>=2.2",
