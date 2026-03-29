@@ -13,9 +13,6 @@ Freeman is a domain-agnostic simulation and agent framework for structured reaso
 - T1 recalibration path: `ParameterEstimator` + `AnalysisPipeline.update()` for ontology-preserving world updates.
 - Interface layer: CLI commands, minimal REST API, KG export, human override API, simulation diff.
 - v0.2 extensions: compile validation, historical fit scoring, ensemble sign consensus, Monte Carlo uncertainty, cost governance, override audit trail.
-- Behavioral validation: deterministic `AgentHarness`, replay fixtures, and end-to-end stimulus tests for watch/analyze/escalation behavior.
-- Live evaluation tooling: real-LLM scenario runner over economic, social, and media-release domains with semantic memory recall.
-- Benchmark tooling: `scripts/benchmark_faab/` for longitudinal A/B evaluation of full-memory Freeman vs amnesic/hash/LLM-only baselines.
 
 ## Install
 
