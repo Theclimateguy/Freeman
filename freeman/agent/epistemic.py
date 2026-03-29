@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from freeman.agent.forecastregistry import Forecast
 from freeman.core.world import WorldState
 from freeman.memory.knowledgegraph import KGNode
+from freeman.memory.epistemiclog import infer_domain_family, normalize_causal_chain
 
 
 def extract_reference_outcome_probs(world: WorldState) -> Dict[str, float]:
@@ -117,13 +119,45 @@ def detect_belief_conflict(
     prior_outcome_probs: Dict[str, float],
     posterior_outcome_probs: Dict[str, float],
     *,
+    momentum_reference_outcome_probs: Dict[str, float] | None = None,
+    signal_source: str = "update_signal",
+    signal_text: str = "",
+    rationale: str = "",
+    parameter_conflict_flag: bool = False,
     prior_threshold: float = 0.60,
     delta_threshold: float = 0.15,
+    momentum_threshold: float = 0.05,
+    signal_strength_threshold: float = 0.05,
 ) -> Dict[str, Any] | None:
     """Detect whether an update materially contradicts the prior belief state."""
 
     if not prior_outcome_probs or not posterior_outcome_probs:
         return None
+    tracked_outcome_id = "yes" if "yes" in prior_outcome_probs and "yes" in posterior_outcome_probs else max(
+        prior_outcome_probs,
+        key=prior_outcome_probs.get,
+    )
+    belief_before = float(prior_outcome_probs.get(tracked_outcome_id, 0.0))
+    belief_after = float(posterior_outcome_probs.get(tracked_outcome_id, 0.0))
+    signal_strength = float(belief_after - belief_before)
+    if abs(signal_strength) < signal_strength_threshold:
+        signal_direction = "flat"
+    else:
+        signal_direction = "up" if signal_strength > 0.0 else "down"
+    current_momentum = None
+    current_momentum_direction = "unknown"
+    trend_conflict = False
+    if momentum_reference_outcome_probs is not None and tracked_outcome_id in momentum_reference_outcome_probs:
+        current_momentum = belief_before - float(momentum_reference_outcome_probs[tracked_outcome_id])
+        if abs(current_momentum) < momentum_threshold:
+            current_momentum_direction = "flat"
+        else:
+            current_momentum_direction = "up" if current_momentum > 0.0 else "down"
+        trend_conflict = (
+            signal_direction in {"up", "down"}
+            and current_momentum_direction in {"up", "down"}
+            and signal_direction != current_momentum_direction
+        )
     prior_dominant_outcome = max(prior_outcome_probs, key=prior_outcome_probs.get)
     posterior_dominant_outcome = max(posterior_outcome_probs, key=posterior_outcome_probs.get)
     prior_prob = float(prior_outcome_probs[prior_dominant_outcome])
@@ -137,8 +171,22 @@ def detect_belief_conflict(
     sharp_downgrade = prior_prob >= float(prior_threshold) and (
         posterior_prob_for_prior <= prior_prob - float(delta_threshold)
     )
-    if not dominance_flip and not sharp_downgrade:
+    if not trend_conflict and not dominance_flip and not sharp_downgrade and not parameter_conflict_flag:
         return None
+    if parameter_conflict_flag:
+        resolution = "dampened"
+        conflict_reason = "parameter_vector contradicted rationale and was dampened"
+    elif signal_direction == "flat":
+        resolution = "rejected"
+        conflict_reason = "signal had insufficient directional force to overcome prior belief"
+    else:
+        resolution = "accepted"
+        if trend_conflict:
+            conflict_reason = f"signal contradicts {current_momentum_direction} momentum"
+        elif dominance_flip:
+            conflict_reason = "signal reversed the dominant prior outcome"
+        else:
+            conflict_reason = "signal sharply downgraded the prior dominant outcome"
     return {
         "prior_outcome_probs": {key: float(value) for key, value in prior_outcome_probs.items()},
         "posterior_outcome_probs": {key: float(value) for key, value in posterior_outcome_probs.items()},
@@ -149,6 +197,24 @@ def detect_belief_conflict(
         "total_variation": float(total_variation),
         "dominance_flip": bool(dominance_flip),
         "sharp_downgrade": bool(sharp_downgrade),
+        "tracked_outcome_id": tracked_outcome_id,
+        "belief_before": belief_before,
+        "belief_after": belief_after,
+        "signal": {
+            "source": str(signal_source),
+            "direction": signal_direction,
+            "strength": float(abs(signal_strength)),
+            "raw_delta": signal_strength,
+        },
+        "signal_excerpt": signal_text[:500],
+        "current_momentum": current_momentum,
+        "current_momentum_direction": current_momentum_direction,
+        "trend_conflict": bool(trend_conflict),
+        "conflict_reason": conflict_reason,
+        "resolution": resolution,
+        "rationale": rationale,
+        "parameter_conflict_flag": bool(parameter_conflict_flag),
+        "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
     }
 
 
@@ -166,13 +232,20 @@ def build_belief_conflict_node(
     posterior_outcome = str(conflict_snapshot["posterior_dominant_outcome"])
     prior_prob = float(conflict_snapshot["prior_dominant_probability"])
     posterior_prob = float(conflict_snapshot["posterior_probability_for_prior_dominant"])
+    belief_before = float(conflict_snapshot.get("belief_before", 0.0))
+    belief_after = float(conflict_snapshot.get("belief_after", 0.0))
+    signal = dict(conflict_snapshot.get("signal", {}))
+    conflict_reason = str(conflict_snapshot.get("conflict_reason", rationale or "update applied"))
+    resolution = str(conflict_snapshot.get("resolution", "accepted"))
     return KGNode(
         id=f"belief_conflict:{domain_id}:{step}",
         label=f"Belief Conflict {domain_id}",
         node_type="belief_conflict",
         content=(
-            f"Prior dominant outcome {prior_outcome} moved from {prior_prob:.4f} to {posterior_prob:.4f}; "
-            f"posterior dominant outcome is {posterior_outcome}. Reason: {rationale or 'update applied'}"
+            f"Belief on {conflict_snapshot.get('tracked_outcome_id', prior_outcome)} moved from "
+            f"{belief_before:.4f} to {belief_after:.4f}; "
+            f"signal_direction={signal.get('direction', 'flat')}; "
+            f"resolution={resolution}. Reason: {conflict_reason}"
         ),
         confidence=min(max(float(conflict_snapshot["total_variation"]), 0.2), 0.95),
         metadata={
@@ -181,6 +254,15 @@ def build_belief_conflict_node(
             **conflict_snapshot,
             "rationale": rationale,
             "signal_excerpt": signal_text[:500],
+            "belief_before": belief_before,
+            "belief_after": belief_after,
+            "signal": {
+                "source": signal.get("source", "update_signal"),
+                "direction": signal.get("direction", "flat"),
+                "strength": float(signal.get("strength", 0.0)),
+            },
+            "conflict_reason": conflict_reason,
+            "resolution": resolution,
         },
     )
 
@@ -205,14 +287,23 @@ def build_epistemic_log_node(forecast: Forecast) -> KGNode:
             "forecast_id": forecast.forecast_id,
             "domain_id": forecast.domain_id,
             "outcome_id": forecast.outcome_id,
+            "domain_family": forecast.metadata.get(
+                "domain_family",
+                infer_domain_family(forecast.domain_id, forecast.metadata),
+            ),
+            "causal_chain": normalize_causal_chain(forecast.metadata.get("causal_chain")),
             "predicted_prob": float(forecast.predicted_prob),
             "actual_prob": float(forecast.actual_prob),
+            "predicted": float(forecast.predicted_prob),
+            "actual": float(forecast.actual_prob),
+            "delta": signed_error,
             "signed_error": signed_error,
             "abs_error": float(forecast.error),
             "session_id": forecast.session_id,
             "created_step": int(forecast.created_step),
             "horizon_steps": int(forecast.horizon_steps),
             "rationale_at_time": rationale,
+            "rationale_at_cutoff": rationale,
             "analysis_node_id": forecast.metadata.get("analysis_node_id"),
             "belief_confidence_at_time": forecast.metadata.get("belief_confidence"),
             "reference_prob_at_time": forecast.metadata.get("reference_prob"),
@@ -220,6 +311,8 @@ def build_epistemic_log_node(forecast: Forecast) -> KGNode:
             "confidence_weighted_gap_at_time": forecast.metadata.get("confidence_weighted_gap"),
             "created_at": forecast.created_at.isoformat(),
             "verified_at": forecast.verified_at.isoformat(),
+            "timestamp_cutoff": forecast.created_at.isoformat(),
+            "timestamp_resolution": forecast.verified_at.isoformat(),
             "parameter_vector_at_time": forecast.metadata.get("parameter_vector"),
         },
     )

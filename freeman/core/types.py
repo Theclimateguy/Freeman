@@ -209,6 +209,7 @@ class ParameterVector:
     shock_decay: float = 1.0
     edge_weight_deltas: Dict[str, float] = field(default_factory=dict)
     rationale: str = ""
+    conflict_flag: bool = False
 
     def __post_init__(self) -> None:
         self.outcome_modifiers = {
@@ -219,6 +220,7 @@ class ParameterVector:
             k: np.float64(v) for k, v in normalize_numeric_tree(self.edge_weight_deltas).items()
         }
         self.rationale = str(self.rationale)
+        self.conflict_flag = bool(self.conflict_flag)
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a JSON-serializable parameter-vector snapshot."""
@@ -228,6 +230,7 @@ class ParameterVector:
             "shock_decay": float(self.shock_decay),
             "edge_weight_deltas": json_ready(self.edge_weight_deltas),
             "rationale": self.rationale,
+            "conflict_flag": self.conflict_flag,
         }
 
     @classmethod
@@ -239,6 +242,7 @@ class ParameterVector:
             shock_decay=float(data.get("shock_decay", 1.0)),
             edge_weight_deltas={k: float(v) for k, v in data.get("edge_weight_deltas", {}).items()},
             rationale=str(data.get("rationale", "")),
+            conflict_flag=bool(data.get("conflict_flag", False)),
         )
 
 

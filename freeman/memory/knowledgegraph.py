@@ -250,6 +250,8 @@ class KnowledgeGraph:
         status: str | None = None,
         node_type: str | None = None,
         min_confidence: float | None = None,
+        metadata_filters: Dict[str, Any] | None = None,
+        metadata_contains: Dict[str, Sequence[Any] | Any] | None = None,
     ) -> List[KGNode]:
         """Return nodes matching the provided filters."""
 
@@ -261,6 +263,10 @@ class KnowledgeGraph:
             if node_type is not None and node.node_type != node_type:
                 continue
             if min_confidence is not None and node.confidence < min_confidence:
+                continue
+            if metadata_filters is not None and not self._metadata_matches(node.metadata, metadata_filters):
+                continue
+            if metadata_contains is not None and not self._metadata_contains(node.metadata, metadata_contains):
                 continue
             if text_query is not None:
                 haystack = " ".join(
@@ -277,6 +283,50 @@ class KnowledgeGraph:
                     continue
             results.append(node)
         return sorted(results, key=lambda item: (-item.confidence, item.id))
+
+    def _metadata_matches(self, metadata: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+        """Return whether all metadata filter values match exactly."""
+
+        for key, expected in filters.items():
+            actual = self._metadata_lookup(metadata, key)
+            if actual != expected:
+                return False
+        return True
+
+    def _metadata_contains(
+        self,
+        metadata: Dict[str, Any],
+        filters: Dict[str, Sequence[Any] | Any],
+    ) -> bool:
+        """Return whether metadata collections contain at least one requested value."""
+
+        for key, expected in filters.items():
+            actual = self._metadata_lookup(metadata, key)
+            if isinstance(actual, str):
+                actual_values = {actual}
+            elif isinstance(actual, Sequence):
+                actual_values = {value for value in actual if not isinstance(value, (dict, list))}
+            else:
+                actual_values = {actual}
+            if isinstance(expected, str):
+                expected_values = {expected}
+            elif isinstance(expected, Sequence):
+                expected_values = {value for value in expected if not isinstance(value, (dict, list))}
+            else:
+                expected_values = {expected}
+            if actual_values.isdisjoint(expected_values):
+                return False
+        return True
+
+    def _metadata_lookup(self, metadata: Dict[str, Any], key: str) -> Any:
+        """Resolve dotted metadata paths against a node payload."""
+
+        value: Any = metadata
+        for part in str(key).split("."):
+            if not isinstance(value, dict) or part not in value:
+                return None
+            value = value[part]
+        return value
 
     def semantic_query(self, query_text: str, top_k: int = 15) -> List[KGNode]:
         """Return semantically relevant nodes plus 1-hop graph neighbors."""

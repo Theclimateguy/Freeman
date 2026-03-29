@@ -13,7 +13,6 @@ from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.epistemic import (
     build_belief_conflict_node,
     build_disagreement_node,
-    build_epistemic_log_node,
     compute_confidence_weighted_disagreement,
     detect_belief_conflict,
     extract_reference_outcome_probs,
@@ -25,6 +24,8 @@ from freeman.core.types import ParameterVector, Policy
 from freeman.core.world import WorldState
 from freeman.domain.compiler import DomainCompiler
 from freeman.game.runner import GameRunner, SimConfig
+from freeman.memory.beliefconflictlog import BeliefConflictLog
+from freeman.memory.epistemiclog import EpistemicLog, infer_world_tags
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler, ReconciliationResult
 from freeman.memory.sessionlog import KGDelta, SessionLog
@@ -93,7 +94,10 @@ class AnalysisPipeline:
         self.forecast_registry = forecast_registry
         self.emitter = emitter
         self.config = config or AnalysisPipelineConfig.from_config(config_path)
+        self.epistemic_log = EpistemicLog(self.knowledge_graph)
+        self.belief_conflict_log = BeliefConflictLog(self.knowledge_graph)
         self._previous_outcome_probs: Dict[str, Dict[str, float]] = {}
+        self._outcome_history: Dict[str, List[Dict[str, float]]] = {}
 
     def run(
         self,
@@ -178,6 +182,7 @@ class AnalysisPipeline:
         signal_text = self._signal_text(final_world, session_log)
         context_nodes = self._get_context_nodes(signal_text)
         epistemic_node_ids: List[str] = []
+        belief_conflicts: List[Dict[str, Any]] = []
 
         summary_node = KGNode(
             id=analysis_node_id,
@@ -233,9 +238,18 @@ class AnalysisPipeline:
                 )
             )
         if prior_outcome_probs is not None:
+            momentum_reference_outcome_probs = self._momentum_reference(
+                final_world.domain_id,
+                prior_outcome_probs,
+            )
             conflict_snapshot = detect_belief_conflict(
                 prior_outcome_probs,
                 sim_result.final_outcome_probs,
+                momentum_reference_outcome_probs=momentum_reference_outcome_probs,
+                signal_source=str(final_world.metadata.get("signal_source", "update_signal")),
+                signal_text=update_signal_text or "",
+                rationale=final_world.parameter_vector.rationale,
+                parameter_conflict_flag=bool(final_world.parameter_vector.conflict_flag),
             )
             if conflict_snapshot is not None:
                 conflict_node = build_belief_conflict_node(
@@ -245,8 +259,9 @@ class AnalysisPipeline:
                     rationale=final_world.parameter_vector.rationale,
                     signal_text=update_signal_text or "",
                 )
-                self.knowledge_graph.add_node(conflict_node)
+                self.belief_conflict_log.record(conflict_node)
                 epistemic_node_ids.append(conflict_node.id)
+                belief_conflicts.append(dict(conflict_node.metadata))
                 session_log.add_kg_delta(
                     KGDelta(
                         operation="add_node",
@@ -278,6 +293,7 @@ class AnalysisPipeline:
                 "parameter_vector": final_world.parameter_vector.snapshot(),
                 "reference_outcome_probs": reference_outcome_probs,
                 "disagreement_snapshot": disagreement_snapshot,
+                "belief_conflicts": belief_conflicts,
             },
         )
         if self.emitter is not None:
@@ -288,6 +304,7 @@ class AnalysisPipeline:
                 outcome_id: float(prob)
                 for outcome_id, prob in sim_result.final_outcome_probs.items()
             }
+            self._append_outcome_history(final_world.domain_id, sim_result.final_outcome_probs)
         return result
 
     def _signal_text(self, world: WorldState, session_log: SessionLog | None) -> str:
@@ -328,6 +345,7 @@ class AnalysisPipeline:
             return []
         recorded: List[Forecast] = []
         for outcome_id, prob in final_outcome_probs.items():
+            tags = infer_world_tags(final_world)
             reference_prob = reference_outcome_probs.get(outcome_id)
             reference_gap = float(prob - reference_prob) if reference_prob is not None else None
             confidence_weighted_gap = (
@@ -350,6 +368,8 @@ class AnalysisPipeline:
                     "reference_prob": reference_prob,
                     "reference_gap": reference_gap,
                     "confidence_weighted_gap": confidence_weighted_gap,
+                    "domain_family": tags["domain_family"],
+                    "causal_chain": tags["causal_chain"],
                 },
             )
             self.forecast_registry.record(forecast)
@@ -375,8 +395,7 @@ class AnalysisPipeline:
             actual_prob=actual_prob,
             verified_at=verified_at,
         )
-        epistemic_node = build_epistemic_log_node(forecast)
-        self.knowledge_graph.add_node(epistemic_node)
+        epistemic_node = self.epistemic_log.record(forecast)
         session_log.add_kg_delta(
             KGDelta(
                 operation="add_node",
@@ -400,6 +419,42 @@ class AnalysisPipeline:
         )
         self.reconciler.reconcile(self.knowledge_graph, session_log)
         return forecast
+
+    def _momentum_reference(
+        self,
+        domain_id: str,
+        prior_outcome_probs: Dict[str, float],
+    ) -> Dict[str, float] | None:
+        """Return the pre-prior belief surface needed to estimate current momentum."""
+
+        history = self._outcome_history.get(domain_id, [])
+        if not history:
+            return None
+        if len(history) == 1:
+            return history[0]
+        if self._same_probability_surface(history[-1], prior_outcome_probs):
+            return history[-2]
+        return history[-1]
+
+    def _append_outcome_history(self, domain_id: str, outcome_probs: Dict[str, float]) -> None:
+        """Keep a short rolling history of belief surfaces per domain."""
+
+        history = self._outcome_history.setdefault(domain_id, [])
+        history.append({outcome_id: float(prob) for outcome_id, prob in outcome_probs.items()})
+        if len(history) > 5:
+            del history[:-5]
+
+    def _same_probability_surface(
+        self,
+        left: Dict[str, float],
+        right: Dict[str, float],
+        *,
+        tolerance: float = 1.0e-9,
+    ) -> bool:
+        """Return whether two outcome distributions are effectively identical."""
+
+        keys = set(left) | set(right)
+        return all(abs(float(left.get(key, 0.0)) - float(right.get(key, 0.0))) <= tolerance for key in keys)
 
 
 __all__ = ["AnalysisPipeline", "AnalysisPipelineConfig", "AnalysisPipelineResult"]
