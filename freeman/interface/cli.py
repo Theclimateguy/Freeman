@@ -17,16 +17,86 @@ from freeman.interface.kgexport import KnowledgeGraphExporter
 from freeman.interface.modeloverride import ModelOverrideAPI
 from freeman.interface.simulationdiff import build_simulation_diff, export_simulation_diff
 from freeman.llm import (
+    DeepSeekChatClient,
     DeterministicEmbeddingAdapter,
     HashingEmbeddingAdapter,
     OllamaEmbeddingClient,
+    OpenAIChatClient,
     OpenAIEmbeddingClient,
 )
 from freeman.core.world import WorldState
-from freeman.memory.knowledgegraph import KnowledgeGraph
+from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import SessionLog
 from freeman.memory.vectorstore import KGVectorStore
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "agent": {
+        "interest_function": "default",
+        "budget_usd_per_day": 0.50,
+        "source_refresh_seconds": 300,
+        "sources": [],
+        "bootstrap": {
+            "schema_path": None,
+            "policies_path": None,
+        },
+    },
+    "llm": {
+        "provider": "",
+        "model": "",
+        "base_url": "",
+        "timeout_seconds": 90.0,
+    },
+    "freeman": {
+        "default_evolution": "stock_flow",
+        "level0_hard_stop": True,
+        "epsilon": 1.0e-8,
+        "sign_epsilon": 1.0e-4,
+    },
+    "sim": {
+        "max_steps": 50,
+        "dt": 1.0,
+        "level2_check_every": 5,
+        "level2_shock_delta": 0.01,
+        "stop_on_hard_level2": True,
+        "convergence_check_steps": 20,
+        "convergence_epsilon": 1.0e-4,
+        "fixed_point_max_iter": 20,
+        "fixed_point_alpha": 0.1,
+        "seed": 42,
+    },
+    "memory": {
+        "backend": "networkx-json",
+        "json_path": "./data/kg_state.json",
+        "vector_store": {
+            "enabled": False,
+            "backend": "chroma",
+            "path": "./data/chroma_db",
+            "collection": "kg_nodes",
+        },
+        "embedding_provider": "hashing",
+        "hashing_embedding_dimension": 384,
+        "embedding_model": "text-embedding-3-small",
+        "embedding_base_url": "http://127.0.0.1:11434",
+        "embedding_timeout_seconds": 120.0,
+        "embedding_prompt_prefix": "",
+        "retrieval_top_k": 15,
+        "max_context_nodes": 30,
+        "session_log_path": "./data/sessions/",
+    },
+}
+
+
+def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge two config dictionaries."""
+
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _load_payload(path: str | Path) -> Any:
@@ -47,13 +117,29 @@ def _coerce_scalar(value: str) -> Any:
 def _load_config(path: str | Path) -> dict[str, Any]:
     target = Path(path).resolve()
     if not target.exists():
-        return {}
-    return yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+        return dict(DEFAULT_CONFIG)
+    payload = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    return _merge_dicts(DEFAULT_CONFIG, payload)
 
 
 def _resolve_path(base: Path, candidate: str | None, default: str) -> Path:
     target = Path(candidate or default)
     return target if target.is_absolute() else (base / target).resolve()
+
+
+def _print_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _add_config_option(command_parser: argparse.ArgumentParser) -> None:
+    """Attach the shared config option to a subcommand parser."""
+
+    command_parser.add_argument("--config", "--config-path", dest="config_path", default="config.yaml")
+
+
+def _memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
+    memory_cfg = config.get("memory", {})
+    return _resolve_path(config_path.parent, memory_cfg.get("json_path"), "./data/kg_state.json")
 
 
 def _build_vectorstore(config: dict[str, Any], *, config_path: Path) -> KGVectorStore | None:
@@ -101,56 +187,272 @@ def _build_embedding_adapter(config: dict[str, Any], *, use_stub: bool = False) 
     raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
+def _build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
+    """Build an optional text-generation client for `freeman ask`."""
+
+    llm_cfg = config.get("llm", {})
+    provider = str(llm_cfg.get("provider", "")).strip().lower()
+    model = str(llm_cfg.get("model", "")).strip()
+    base_url = str(llm_cfg.get("base_url", "")).strip()
+    timeout_seconds = float(llm_cfg.get("timeout_seconds", 90.0))
+    if provider in {"", "none"}:
+        return None, "llm provider is not configured"
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        if not api_key:
+            return None, "OPENAI_API_KEY or LLM_API_KEY is not set"
+        return (
+            OpenAIChatClient(
+                api_key=api_key,
+                model=model or "gpt-4o-mini",
+                base_url=base_url or "https://api.openai.com/v1",
+                timeout_seconds=timeout_seconds,
+            ),
+            None,
+        )
+    if provider == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        if not api_key:
+            return None, "DEEPSEEK_API_KEY or LLM_API_KEY is not set"
+        return (
+            DeepSeekChatClient(
+                api_key=api_key,
+                model=model or "deepseek-chat",
+                base_url=base_url or "https://api.deepseek.com",
+                timeout_seconds=timeout_seconds,
+            ),
+            None,
+        )
+    return None, f"unsupported llm provider: {provider}"
+
+
+def _build_sim_config(config: dict[str, Any]) -> SimConfig:
+    sim_cfg = config.get("sim", {})
+    return SimConfig(
+        max_steps=int(sim_cfg.get("max_steps", 50)),
+        dt=float(sim_cfg.get("dt", 1.0)),
+        level2_check_every=int(sim_cfg.get("level2_check_every", 5)),
+        level2_shock_delta=float(sim_cfg.get("level2_shock_delta", 0.01)),
+        stop_on_hard_level2=bool(sim_cfg.get("stop_on_hard_level2", True)),
+        convergence_check_steps=int(sim_cfg.get("convergence_check_steps", 20)),
+        convergence_epsilon=float(sim_cfg.get("convergence_epsilon", 1.0e-4)),
+        fixed_point_max_iter=int(sim_cfg.get("fixed_point_max_iter", 20)),
+        fixed_point_alpha=float(sim_cfg.get("fixed_point_alpha", 0.1)),
+        seed=int(sim_cfg.get("seed", 42)),
+    )
+
+
+def _bootstrap_storage(config: dict[str, Any], *, config_path: Path) -> dict[str, Any]:
+    """Create the empty KG and storage directories for a fresh agent."""
+
+    memory_cfg = config.get("memory", {})
+    kg_path = _memory_json_path(config, config_path=config_path)
+    session_log_path = _resolve_path(config_path.parent, memory_cfg.get("session_log_path"), "./data/sessions/")
+    vector_cfg = memory_cfg.get("vector_store", {})
+    vector_path = _resolve_path(config_path.parent, vector_cfg.get("path"), "./data/chroma_db")
+
+    created: dict[str, Any] = {
+        "knowledge_graph_path": str(kg_path),
+        "session_log_path": str(session_log_path),
+        "vector_store_path": str(vector_path) if vector_cfg.get("enabled", False) else None,
+        "created": [],
+    }
+    session_log_path.mkdir(parents=True, exist_ok=True)
+    if not kg_path.exists():
+        knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=False)
+        knowledge_graph.save()
+        created["created"].append(str(kg_path))
+    if vector_cfg.get("enabled", False):
+        vector_path.mkdir(parents=True, exist_ok=True)
+        created["created"].append(str(vector_path))
+    created["created"].append(str(session_log_path))
+    return created
+
+
+def _write_default_config(path: Path, *, force: bool = False) -> Path:
+    """Persist the default config template."""
+
+    if path.exists() and not force:
+        raise FileExistsError(f"{path} already exists. Use --force to overwrite it.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(DEFAULT_CONFIG, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _build_knowledge_graph(
+    config: dict[str, Any],
+    *,
+    config_path: Path,
+    embedding_adapter: Any | None = None,
+    vectorstore: KGVectorStore | None = None,
+) -> KnowledgeGraph:
+    """Instantiate the KG using the resolved config paths."""
+
+    return KnowledgeGraph(
+        json_path=_memory_json_path(config, config_path=config_path),
+        auto_load=True,
+        auto_save=True,
+        llm_adapter=embedding_adapter,
+        vectorstore=vectorstore,
+    )
+
+
+def _source_statuses(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Summarize configured sources for CLI reporting."""
+
+    statuses = []
+    for source in config.get("agent", {}).get("sources", []):
+        payload = dict(source)
+        payload["status"] = "configured_optional_connector"
+        statuses.append(payload)
+    return statuses
+
+
+def _retrieve_nodes(
+    knowledge_graph: KnowledgeGraph,
+    query: str,
+    *,
+    limit: int,
+    status: str | None = None,
+    node_type: str | None = None,
+    min_confidence: float | None = None,
+) -> list[KGNode]:
+    """Retrieve KG nodes using semantic search when available."""
+
+    if knowledge_graph.vectorstore is not None and knowledge_graph.llm_adapter is not None:
+        candidates = knowledge_graph.semantic_query(query, top_k=limit)
+        filtered = []
+        for node in candidates:
+            if status is not None and node.status != status:
+                continue
+            if node_type is not None and node.node_type != node_type:
+                continue
+            if min_confidence is not None and node.confidence < min_confidence:
+                continue
+            filtered.append(node)
+        return filtered[:limit]
+    return knowledge_graph.query(
+        text=query,
+        status=status,
+        node_type=node_type,
+        min_confidence=min_confidence,
+    )[:limit]
+
+
+def _summarize_query(
+    query: str,
+    nodes: list[KGNode],
+    *,
+    chat_client: Any | None,
+) -> tuple[str | None, str | None]:
+    """Generate a text answer from retrieved KG nodes when an LLM is configured."""
+
+    if not nodes:
+        return None, "no KG evidence matched the query"
+    if chat_client is None:
+        return None, "llm summarizer is not configured"
+    context = [
+        {
+            "id": node.id,
+            "label": node.label,
+            "node_type": node.node_type,
+            "content": node.content,
+            "confidence": node.confidence,
+            "metadata": node.metadata,
+        }
+        for node in nodes[:6]
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You answer user questions strictly from the provided Freeman knowledge-graph context. "
+                "If the evidence is insufficient, say so explicitly."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps({"query": query, "kg_context": context}, ensure_ascii=False),
+        },
+    ]
+    try:
+        return str(chat_client.chat_text(messages, temperature=0.1, max_tokens=500)).strip(), None
+    except Exception as exc:  # pragma: no cover - exercised only with live providers
+        return None, str(exc)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="freeman")
-    parser.add_argument("--config-path", default="config.yaml")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    init_parser = subparsers.add_parser("init")
+    _add_config_option(init_parser)
+    init_parser.add_argument("--force", action="store_true")
+
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("schema_path")
+    _add_config_option(run_parser)
+    run_parser.add_argument("--schema-path")
     run_parser.add_argument("--policies-path")
 
+    ask_parser = subparsers.add_parser("ask")
+    _add_config_option(ask_parser)
+    ask_parser.add_argument("query")
+    ask_parser.add_argument("--limit", type=int, default=5)
+    ask_parser.add_argument("--status")
+    ask_parser.add_argument("--node-type")
+    ask_parser.add_argument("--min-confidence", type=float)
+
+    status_parser = subparsers.add_parser("status")
+    _add_config_option(status_parser)
+
     query_parser = subparsers.add_parser("query")
+    _add_config_option(query_parser)
     query_parser.add_argument("--text")
     query_parser.add_argument("--status")
     query_parser.add_argument("--node-type")
     query_parser.add_argument("--min-confidence", type=float)
 
     export_parser = subparsers.add_parser("export-kg")
+    _add_config_option(export_parser)
     export_parser.add_argument("format", choices=["html", "json-ld", "dot"])
     export_parser.add_argument("output_path")
 
-    subparsers.add_parser("status")
-
     reconcile_parser = subparsers.add_parser("reconcile")
+    _add_config_option(reconcile_parser)
     reconcile_parser.add_argument("session_log_path")
 
     archive_parser = subparsers.add_parser("kg-archive")
+    _add_config_option(archive_parser)
     archive_parser.add_argument("--node-id")
     archive_parser.add_argument("--reason", default="manual_archive")
 
     reindex_parser = subparsers.add_parser("kg-reindex")
+    _add_config_option(reindex_parser)
     reindex_parser.add_argument("--batch-size", type=int, default=100)
     reindex_parser.add_argument("--use-stub-embeddings", action="store_true")
 
     override_param_parser = subparsers.add_parser("override-param")
+    _add_config_option(override_param_parser)
     override_param_parser.add_argument("world_path")
     override_param_parser.add_argument("param_path")
     override_param_parser.add_argument("value")
     override_param_parser.add_argument("--output-path")
 
     override_sign_parser = subparsers.add_parser("override-sign")
+    _add_config_option(override_sign_parser)
     override_sign_parser.add_argument("world_path")
     override_sign_parser.add_argument("edge_id")
     override_sign_parser.add_argument("expected_sign")
     override_sign_parser.add_argument("--output-path")
 
     rerun_parser = subparsers.add_parser("rerun-domain")
+    _add_config_option(rerun_parser)
     rerun_parser.add_argument("world_path")
     rerun_parser.add_argument("--max-steps", type=int, default=5)
     rerun_parser.add_argument("--output-path")
 
     diff_parser = subparsers.add_parser("diff-domain")
+    _add_config_option(diff_parser)
     diff_parser.add_argument("baseline_path")
     diff_parser.add_argument("current_path")
     diff_parser.add_argument("--output-path")
@@ -161,8 +463,23 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    config_path = Path(args.config_path).resolve()
+    config_path = Path(getattr(args, "config_path", "config.yaml")).resolve()
+
+    if args.command == "init":
+        written = _write_default_config(config_path, force=args.force)
+        config = _load_config(written)
+        storage = _bootstrap_storage(config, config_path=written)
+        _print_json(
+            {
+                "status": "initialized",
+                "config_path": str(written),
+                **storage,
+            }
+        )
+        return 0
+
     config = _load_config(config_path)
+    storage = _bootstrap_storage(config, config_path=config_path)
     vectorstore = _build_vectorstore(config, config_path=config_path)
     needs_embeddings = vectorstore is not None or args.command == "kg-reindex"
     embedding_adapter = None
@@ -172,17 +489,91 @@ def main(argv: list[str] | None = None) -> int:
             config,
             use_stub=getattr(args, "use_stub_embeddings", False),
         )
-    knowledge_graph = KnowledgeGraph(
+    knowledge_graph = _build_knowledge_graph(
+        config,
         config_path=config_path,
-        llm_adapter=embedding_adapter,
+        embedding_adapter=embedding_adapter,
         vectorstore=vectorstore,
     )
 
     if args.command == "run":
-        schema = _load_payload(args.schema_path)
-        policies = _load_payload(args.policies_path) if args.policies_path else []
-        result = AnalysisPipeline(knowledge_graph=knowledge_graph).run(schema, policies=policies)
-        print(json.dumps(result.simulation, indent=2, sort_keys=True))
+        agent_cfg = config.get("agent", {})
+        bootstrap_cfg = agent_cfg.get("bootstrap", {})
+        schema_path = args.schema_path or bootstrap_cfg.get("schema_path")
+        policies_path = args.policies_path or bootstrap_cfg.get("policies_path")
+        if schema_path:
+            schema = _load_payload(schema_path)
+            policies = _load_payload(policies_path) if policies_path else []
+            pipeline = AnalysisPipeline(
+                knowledge_graph=knowledge_graph,
+                sim_config=_build_sim_config(config),
+                config_path=config_path,
+            )
+            result = pipeline.run(schema, policies=policies)
+            _print_json(
+                {
+                    "status": "completed",
+                    "mode": "bootstrap_schema_run",
+                    "knowledge_graph_path": str(knowledge_graph.json_path),
+                    "domain_id": result.world.domain_id,
+                    "dominant_outcome": result.dominant_outcome,
+                    "confidence": result.simulation["confidence"],
+                    "forecast_count": result.metadata.get("forecast_count", 0),
+                    "epistemic_event_count": len(result.metadata.get("epistemic_event_ids", [])),
+                    "simulation": result.simulation,
+                }
+            )
+            return 0
+        _print_json(
+            {
+                "status": "idle",
+                "mode": "config_first_bootstrap",
+                "knowledge_graph_path": str(knowledge_graph.json_path),
+                "configured_source_count": len(agent_cfg.get("sources", [])),
+                "sources": _source_statuses(config),
+                "budget_usd_per_day": float(agent_cfg.get("budget_usd_per_day", 0.0)),
+                "note": (
+                    "Core Freeman does not ship live source connectors. "
+                    "Install the optional connectors package to ingest RSS/arXiv/HTTP streams."
+                ),
+            }
+        )
+        return 0
+
+    if args.command == "ask":
+        nodes = _retrieve_nodes(
+            knowledge_graph,
+            args.query,
+            limit=args.limit,
+            status=args.status,
+            node_type=args.node_type,
+            min_confidence=args.min_confidence,
+        )
+        chat_client, llm_error = _build_chat_client(config)
+        answer, answer_error = _summarize_query(args.query, nodes, chat_client=chat_client)
+        _print_json(
+            {
+                "query": args.query,
+                "answer": answer,
+                "answer_generated": answer is not None,
+                "llm_error": answer_error or llm_error,
+                "match_count": len(nodes),
+                "matches": [node.snapshot() for node in nodes],
+            }
+        )
+        return 0
+
+    if args.command == "status":
+        payload = InterfaceAPI(knowledge_graph).get_status()
+        payload["budget"] = {
+            "configured_usd_per_day": float(config.get("agent", {}).get("budget_usd_per_day", 0.0)),
+            "spent_usd": None,
+            "tracking_enabled": False,
+        }
+        payload["sources"] = _source_statuses(config)
+        payload["vector_store_enabled"] = bool(config.get("memory", {}).get("vector_store", {}).get("enabled", False))
+        payload["storage"] = storage
+        _print_json(payload)
         return 0
 
     if args.command == "query":
@@ -192,7 +583,7 @@ def main(argv: list[str] | None = None) -> int:
             node_type=args.node_type,
             min_confidence=args.min_confidence,
         )
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _print_json(payload)
         return 0
 
     if args.command == "export-kg":
@@ -206,33 +597,28 @@ def main(argv: list[str] | None = None) -> int:
         print(str(output))
         return 0
 
-    if args.command == "status":
-        payload = InterfaceAPI(knowledge_graph).get_status()
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return 0
-
     if args.command == "reconcile":
         session_log = SessionLog.load(args.session_log_path)
         result = Reconciler().reconcile(knowledge_graph, session_log)
-        print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+        _print_json(result.__dict__)
         return 0
 
     if args.command == "kg-archive":
         if args.node_id:
             archived = knowledge_graph.archive(args.node_id, reason=args.reason)
-            print(json.dumps(archived.snapshot(), indent=2, sort_keys=True))
+            _print_json(archived.snapshot())
             return 0
         archived_ids = []
         for node in knowledge_graph.nodes():
             if node.confidence < 0.15 and node.status != "archived":
                 knowledge_graph.archive(node.id, reason=args.reason)
                 archived_ids.append(node.id)
-        print(json.dumps({"archived_ids": archived_ids}, indent=2, sort_keys=True))
+        _print_json({"archived_ids": archived_ids})
         return 0
 
     if args.command == "kg-reindex":
         if vectorstore is None:
-            print(json.dumps({"reembedded": 0, "synced": 0, "status": "vector_store_disabled"}, indent=2, sort_keys=True))
+            _print_json({"reembedded": 0, "synced": 0, "status": "vector_store_disabled"})
             return 0
         missing = [
             node
@@ -255,17 +641,13 @@ def main(argv: list[str] | None = None) -> int:
                 reembedded += 1
         synced = vectorstore.sync_from_kg(knowledge_graph)
         knowledge_graph.save()
-        print(
-            json.dumps(
-                {
-                    "embedding_backend": embedding_backend,
-                    "reembedded": reembedded,
-                    "synced": synced,
-                    "vectorstore_path": str(vectorstore.path),
-                },
-                indent=2,
-                sort_keys=True,
-            )
+        _print_json(
+            {
+                "embedding_backend": embedding_backend,
+                "reembedded": reembedded,
+                "synced": synced,
+                "vectorstore_path": str(vectorstore.path),
+            }
         )
         return 0
 
@@ -281,7 +663,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps(override_api.records[world.domain_id].current_world.snapshot(), indent=2, sort_keys=True),
                 encoding="utf-8",
             )
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _print_json(payload)
         return 0
 
     if args.command == "override-sign":
@@ -296,7 +678,7 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps(override_api.records[world.domain_id].current_world.snapshot(), indent=2, sort_keys=True),
                 encoding="utf-8",
             )
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _print_json(payload)
         return 0
 
     if args.command == "rerun-domain":
@@ -308,7 +690,7 @@ def main(argv: list[str] | None = None) -> int:
             output = Path(args.output_path).resolve()
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        _print_json(payload)
         return 0
 
     if args.command == "diff-domain":
@@ -318,7 +700,7 @@ def main(argv: list[str] | None = None) -> int:
         report = build_simulation_diff(domain_id=domain_id, before=before, after=after)
         if args.output_path:
             export_simulation_diff(report, args.output_path)
-        print(json.dumps(report.snapshot(), indent=2, sort_keys=True))
+        _print_json(report.snapshot())
         return 0
 
     return 1

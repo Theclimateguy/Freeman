@@ -13,16 +13,21 @@ dependencies = [
     "numpy>=1.26",
     "PyYAML>=6.0",
     "scipy>=1.11",
-    "pytest>=8.0",
 ]
 
 [project.optional-dependencies]
 semantic = ["chromadb>=0.5"]
+connectors = [
+    "beautifulsoup4>=4.12",
+    "feedparser>=6.0",
+    "requests>=2.31",
+]
 benchmark = [
     "chromadb>=0.5",
     "pandas>=2.2",
     "tqdm>=4.66",
 ]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 freeman = "freeman.interface.cli:main"

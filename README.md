@@ -20,97 +20,86 @@ Freeman is a domain-agnostic simulation and agent framework for structured reaso
 ## Install
 
 ```bash
-pip install -e .
+pip install .
 ```
 
 Optional semantic-memory extras:
 
 ```bash
-pip install -e ".[semantic]"
+pip install ".[semantic]"
 ```
 
-Benchmark extras:
+Optional connector extras:
 
 ```bash
-pip install -e ".[benchmark]"
+pip install ".[connectors]"
 ```
 
-Local embedding backend with Ollama:
+Development extras:
 
 ```bash
-brew install ollama
-brew services start ollama
-ollama pull nomic-embed-text
-ollama pull mxbai-embed-large
+pip install ".[dev]"
 ```
 
-The default `config.yaml` uses `memory.embedding_provider: ollama` and `memory.embedding_model: nomic-embed-text`. To switch to the larger local model, set `memory.embedding_model: mxbai-embed-large` or export `FREEMAN_EMBEDDING_MODEL=mxbai-embed-large` for the live runner.
+GitHub install:
+
+```bash
+pip install git+https://github.com/Theclimateguy/Freeman.git
+```
 
 ## Quick Start
 
-Run the full test suite:
+Initialize an empty agent in the current directory:
 
 ```bash
-pytest tests/
+freeman init
 ```
 
-Run the replay-driven behavioral suite only:
+Or create the config manually from the bundled template:
 
 ```bash
-pytest tests/test_agent_behavior.py
+cp config.yaml.example config.yaml
 ```
 
-Run the live DeepSeek + Ollama end-to-end evaluation:
+Check the empty knowledge graph status:
 
 ```bash
-python scripts/run_real_llm_e2e.py --output-dir runs/real_llm_e2e --max-steps 12 --top-k 6
+freeman status --config-path config.yaml
 ```
 
-Run the FAAB longitudinal benchmark:
+Ask a question against the accumulated KG:
 
 ```bash
-python scripts/benchmark_faab/run_benchmark.py --dataset scripts/benchmark_faab/dataset/cases.jsonl --output-dir runs/faab_real_regime_v1
+freeman ask "What is the current strongest belief conflict?" --config-path config.yaml
 ```
 
-Inspect the current knowledge graph status:
+Run a config-driven bootstrap cycle:
 
 ```bash
-python -m freeman.interface.cli status
+freeman run --config-path config.yaml
 ```
 
-Run a domain schema end-to-end:
+Run a one-shot bootstrap from a schema configured in `agent.bootstrap.schema_path`, or override it explicitly:
 
 ```bash
-python -m freeman.interface.cli run path/to/schema.json
-```
-
-Query the knowledge graph:
-
-```bash
-python -m freeman.interface.cli query --text "water stress"
-```
-
-Reindex legacy KG nodes into the semantic vector store:
-
-```bash
-python -m freeman.interface.cli kg-reindex --batch-size 100
+freeman run --config-path config.yaml --schema-path path/to/schema.json
 ```
 
 Export the knowledge graph:
 
 ```bash
-python -m freeman.interface.cli export-kg html runs/kg.html
-python -m freeman.interface.cli export-kg json-ld runs/kg.jsonld
-python -m freeman.interface.cli export-kg dot runs/kg.dot
+freeman export-kg html runs/kg.html
+freeman export-kg json-ld runs/kg.jsonld
+freeman export-kg dot runs/kg.dot
 ```
 
 Apply human overrides:
 
 ```bash
-python -m freeman.interface.cli override-param world.json resources.x.value 12.0 --output-path world_override.json
-python -m freeman.interface.cli override-sign world.json x->y + --output-path world_override.json
-python -m freeman.interface.cli rerun-domain world_override.json --max-steps 10 --output-path rerun.json
-python -m freeman.interface.cli diff-domain world.json rerun.json --output-path diff.json
+freeman override-param world.json resources.x.value 12.0 --output-path world_override.json
+freeman override-sign world.json x->y + --output-path world_override.json
+freeman rerun-domain world_override.json --max-steps 10 --output-path rerun.json
+freeman diff-domain world.json rerun.json --output-path diff.json
 ```
 
 ## Main Entry Points
@@ -123,43 +112,37 @@ python -m freeman.interface.cli diff-domain world.json rerun.json --output-path 
 - `freeman.agent`
 - `freeman.interface`
 - CLI:
-  - `python -m freeman.interface.cli`
+  - `freeman init`
+  - `freeman run --config-path config.yaml`
+  - `freeman ask "..."`
+  - `freeman status`
 - Minimal REST server:
   - `freeman.interface.api.run_server()`
 - LLM orchestration:
   - `freeman.llm.orchestrator.DeepSeekFreemanOrchestrator`
   - `freeman.llm.OllamaEmbeddingClient`
-- Deterministic replay harness:
-  - `tests/harness.py::AgentHarness`
 
 ## Documentation
 
 - Architecture and workflows: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
-- FAAB benchmark and recorded regime-shift run: [docs/FAAB.md](docs/FAAB.md)
 - Universal parameter-vector update path: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Release notes: [CHANGELOG.md](CHANGELOG.md)
 - Live E2E evaluation report: [docs/REAL_LLM_E2E.md](docs/REAL_LLM_E2E.md)
 
 ## Repository Layout
 
 - `freeman/core/` — simulator state, evolution operators, transition logic, scoring, compile validation, uncertainty.
-- `scripts/benchmark_faab/` — longitudinal benchmark runner, dummy dataset generator, and evaluation fixtures.
 - `freeman/verifier/` — verifier levels, aggregate verifier, fixed-point correction.
 - `freeman/memory/` — knowledge graph, semantic vector store, reconciliation, session logs.
 - `freeman/agent/` — analysis pipeline, scheduling, signal ingestion, forecast tracking, proactive emission, cost governance.
 - `freeman/interface/` — CLI, REST API, export, override and diff helpers.
 - `freeman/domain/` — schema compiler and bundled profiles.
 - `freeman/llm/` — provider-facing LLM orchestration and repair loop.
-- `tests/` — unit, integration, replay fixtures, and behavioral agent harness coverage.
 
 ## Notes
 
 - Default long-term memory backend is NetworkX + JSON via `config.yaml -> memory.json_path`.
 - Semantic retrieval is optional and uses ChromaDB when installed with the `semantic` extra.
-- Local semantic retrieval defaults to Ollama with `nomic-embed-text`; `mxbai-embed-large` is supported through the same adapter.
-- The regime-shift benchmark baseline recorded in-repo lives under `runs/faab_real_regime_v1/`.
-- The universal T1 update path is exercised in `MODE_A_FULL` through `ParameterEstimator -> AnalysisPipeline.update()`.
-- Signal replay fixtures live under `tests/fixtures/signals/` and are used by `tests/test_agent_behavior.py`.
-- `pytest tests/` is the required validation command and is wired to work without manual `PYTHONPATH` changes.
+- The default packaged agent starts empty: `freeman init` creates a blank KG plus storage directories, not a prefilled memory.
+- The core package stays source-agnostic. Live ingestion adapters are intended for optional connector extras, not the core runtime.
 - The stdlib REST layer is intentionally minimal; the override and diff logic already exists as reusable Python API classes and can be mounted behind a richer HTTP framework later.
