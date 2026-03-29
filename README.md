@@ -26,10 +26,11 @@ Optional semantic-memory extras:
 pip install ".[semantic]"
 ```
 
-Optional connector extras:
+Separate connector package:
 
 ```bash
-pip install ".[connectors]"
+pip install ./packages/freeman-connectors
+pip install "git+https://github.com/Theclimateguy/Freeman.git#subdirectory=packages/freeman-connectors"
 ```
 
 Development extras:
@@ -141,5 +142,5 @@ freeman diff-domain world.json rerun.json --output-path diff.json
 - Default long-term memory backend is NetworkX + JSON via `config.yaml -> memory.json_path`.
 - Semantic retrieval is optional and uses ChromaDB when installed with the `semantic` extra.
 - The default packaged agent starts empty: `freeman init` creates a blank KG plus storage directories, not a prefilled memory.
-- The core package stays source-agnostic. Live ingestion adapters are intended for optional connector extras, not the core runtime.
+- The core package stays source-agnostic. Live ingestion adapters live in the separate `freeman-connectors` package, not in the core runtime.
 - The stdlib REST layer is intentionally minimal; the override and diff logic already exists as reusable Python API classes and can be mounted behind a richer HTTP framework later.

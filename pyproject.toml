@@ -17,11 +17,6 @@ dependencies = [
 
 [project.optional-dependencies]
 semantic = ["chromadb>=0.5"]
-connectors = [
-    "beautifulsoup4>=4.12",
-    "feedparser>=6.0",
-    "requests>=2.31",
-]
 benchmark = [
     "chromadb>=0.5",
     "pandas>=2.2",
