@@ -168,6 +168,11 @@ class SignalTrigger:
     mahalanobis_score: float
     classification: ShockClassification
     mode: str
+    interest_score: float = 0.0
+    novelty: float = 1.0
+    requested_mode: str = "WATCH"
+    estimated_cost: float = 0.0
+    budget_reason: str | None = None
 
 
 class ManualSignalSource:
@@ -294,6 +299,108 @@ class SignalIngestionEngine:
             return "ANALYZE"
         return "WATCH"
 
+    def novelty_score(
+        self,
+        signal: Signal,
+        *,
+        signal_memory: SignalMemory | None = None,
+    ) -> float:
+        """Return a generic novelty score from signal recurrence, independent of domain."""
+
+        if signal_memory is None:
+            return 1.0
+        prior_weight = float(signal_memory.effective_weight(signal.signal_id))
+        return float(np.clip(1.0 - min(prior_weight, 1.0), 0.0, 1.0))
+
+    def interest_score(
+        self,
+        *,
+        mahalanobis_score: float,
+        classification: ShockClassification,
+        novelty: float,
+        anomaly_lambda: float = 3.0,
+    ) -> float:
+        """Score how much compute attention a signal deserves, without filtering domains."""
+
+        anomaly_scale = max(float(anomaly_lambda), 1.0e-8)
+        anomaly_term = 1.0 - exp(-max(float(mahalanobis_score), 0.0) / anomaly_scale)
+        score = (
+            0.40 * anomaly_term
+            + 0.30 * float(classification.semantic_gap)
+            + 0.20 * float(classification.severity)
+            + 0.10 * float(novelty)
+        )
+        return float(np.clip(score, 0.0, 1.0))
+
+    def _estimated_mode_cost(
+        self,
+        mode: str,
+        *,
+        analyze_cost: float,
+        deep_dive_cost: float,
+    ) -> float:
+        if mode == "DEEP_DIVE":
+            return float(deep_dive_cost)
+        if mode == "ANALYZE":
+            return float(analyze_cost)
+        return 0.0
+
+    def _apply_interest_budget(
+        self,
+        triggers: Sequence[SignalTrigger],
+        *,
+        analysis_budget: float | None,
+        analyze_cost: float,
+        deep_dive_cost: float,
+    ) -> None:
+        """Downgrade expensive analysis modes by generic interest ranking, not by topic."""
+
+        for trigger in triggers:
+            trigger.requested_mode = trigger.mode
+            trigger.estimated_cost = self._estimated_mode_cost(
+                trigger.mode,
+                analyze_cost=analyze_cost,
+                deep_dive_cost=deep_dive_cost,
+            )
+            trigger.budget_reason = None
+        if analysis_budget is None:
+            return
+
+        remaining_budget = float(analysis_budget)
+        ranked_indices = sorted(
+            range(len(triggers)),
+            key=lambda index: float(triggers[index].interest_score),
+            reverse=True,
+        )
+        for index in ranked_indices:
+            trigger = triggers[index]
+            if trigger.requested_mode == "WATCH":
+                trigger.mode = "WATCH"
+                trigger.estimated_cost = 0.0
+                continue
+
+            requested_cost = self._estimated_mode_cost(
+                trigger.requested_mode,
+                analyze_cost=analyze_cost,
+                deep_dive_cost=deep_dive_cost,
+            )
+            if requested_cost <= remaining_budget:
+                trigger.mode = trigger.requested_mode
+                trigger.estimated_cost = requested_cost
+                remaining_budget -= requested_cost
+                continue
+
+            if trigger.requested_mode == "DEEP_DIVE" and float(analyze_cost) <= remaining_budget:
+                trigger.mode = "ANALYZE"
+                trigger.estimated_cost = float(analyze_cost)
+                trigger.budget_reason = "budget_downgrade"
+                remaining_budget -= float(analyze_cost)
+                continue
+
+            trigger.mode = "WATCH"
+            trigger.estimated_cost = 0.0
+            trigger.budget_reason = "interest_budget_exhausted"
+
     def ingest(
         self,
         source: ManualSignalSource,
@@ -303,12 +410,16 @@ class SignalIngestionEngine:
         skip_duplicates_within_hours: float = 1.0,
         anomaly_lambda: float = 3.0,
         semantic_threshold: float = 0.5,
+        analysis_budget: float | None = None,
+        analyze_cost: float = 1.0,
+        deep_dive_cost: float = 2.0,
     ) -> List[SignalTrigger]:
-        """Fetch, score, classify, and trigger on a batch of signals."""
+        """Fetch, score, classify, and rank signals for compute attention."""
 
         signals = source.fetch()
         scores = self.mahalanobis_scores(signals)
         triggers: List[SignalTrigger] = []
+        retained_signals: List[Signal] = []
         for signal, score in zip(signals, scores, strict=False):
             if signal_memory is not None and signal_memory.is_duplicate(
                 signal,
@@ -316,22 +427,45 @@ class SignalIngestionEngine:
             ):
                 continue
             classification = self.classify_shock(signal, classifier=classifier)
-            mode = self.trigger_mode(
+            novelty = self.novelty_score(signal, signal_memory=signal_memory)
+            requested_mode = self.trigger_mode(
                 score,
                 classification,
                 anomaly_lambda=anomaly_lambda,
                 semantic_threshold=semantic_threshold,
             )
-            if signal_memory is not None:
-                signal_memory.see(signal, mode)
+            interest = self.interest_score(
+                mahalanobis_score=score,
+                classification=classification,
+                novelty=novelty,
+                anomaly_lambda=anomaly_lambda,
+            )
+            retained_signals.append(signal)
             triggers.append(
                 SignalTrigger(
                     signal_id=signal.signal_id,
                     mahalanobis_score=score,
                     classification=classification,
-                    mode=mode,
+                    mode=requested_mode,
+                    interest_score=interest,
+                    novelty=novelty,
+                    requested_mode=requested_mode,
+                    estimated_cost=self._estimated_mode_cost(
+                        requested_mode,
+                        analyze_cost=analyze_cost,
+                        deep_dive_cost=deep_dive_cost,
+                    ),
                 )
             )
+        self._apply_interest_budget(
+            triggers,
+            analysis_budget=analysis_budget,
+            analyze_cost=analyze_cost,
+            deep_dive_cost=deep_dive_cost,
+        )
+        for signal, trigger in zip(retained_signals, triggers, strict=False):
+            if signal_memory is not None:
+                signal_memory.see(signal, trigger.mode)
         return triggers
 
 

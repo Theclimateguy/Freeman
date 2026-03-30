@@ -210,6 +210,8 @@ class ParameterVector:
     edge_weight_deltas: Dict[str, float] = field(default_factory=dict)
     rationale: str = ""
     conflict_flag: bool = False
+    repair_conflicts: list[Dict[str, Any]] = field(default_factory=list)
+    valid_outcome_ids: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.outcome_modifiers = {
@@ -221,6 +223,16 @@ class ParameterVector:
         }
         self.rationale = str(self.rationale)
         self.conflict_flag = bool(self.conflict_flag)
+        self.repair_conflicts = [
+            deep_copy_jsonable(conflict)
+            for conflict in self.repair_conflicts
+            if isinstance(conflict, dict)
+        ]
+        self.valid_outcome_ids = tuple(str(outcome_id) for outcome_id in self.valid_outcome_ids)
+        if self.valid_outcome_ids:
+            unknown = set(self.outcome_modifiers) - set(self.valid_outcome_ids)
+            if unknown:
+                raise ValueError(f"Unknown outcome_ids in modifiers: {sorted(unknown)}")
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a JSON-serializable parameter-vector snapshot."""
@@ -231,10 +243,16 @@ class ParameterVector:
             "edge_weight_deltas": json_ready(self.edge_weight_deltas),
             "rationale": self.rationale,
             "conflict_flag": self.conflict_flag,
+            "repair_conflicts": deep_copy_jsonable(self.repair_conflicts),
         }
 
     @classmethod
-    def from_snapshot(cls, data: Dict[str, Any]) -> "ParameterVector":
+    def from_snapshot(
+        cls,
+        data: Dict[str, Any],
+        *,
+        valid_outcome_ids: Any | None = None,
+    ) -> "ParameterVector":
         """Recreate a parameter vector from a snapshot."""
 
         return cls(
@@ -243,6 +261,8 @@ class ParameterVector:
             edge_weight_deltas={k: float(v) for k, v in data.get("edge_weight_deltas", {}).items()},
             rationale=str(data.get("rationale", "")),
             conflict_flag=bool(data.get("conflict_flag", False)),
+            repair_conflicts=deep_copy_jsonable(data.get("repair_conflicts", [])),
+            valid_outcome_ids=tuple(valid_outcome_ids or ()),
         )
 
 

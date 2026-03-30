@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import feedparser
@@ -18,6 +20,24 @@ def _entry_authors(entry: dict[str, Any]) -> list[str]:
     if isinstance(authors, list):
         return [str(author.get("name", "")).strip() for author in authors if str(author.get("name", "")).strip()]
     return []
+
+
+def _normalize_entry_timestamp(entry: dict[str, Any]) -> str:
+    """Return an ISO timestamp from RSS/Atom entry metadata when possible."""
+
+    for field_name in ("published", "updated", "created"):
+        raw = coerce_text(entry.get(field_name))
+        if not raw:
+            continue
+        try:
+            return parsedate_to_datetime(raw).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        except (TypeError, ValueError, IndexError, OverflowError):
+            pass
+        try:
+            return datetime.fromisoformat(raw).astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        except ValueError:
+            continue
+    return now_iso()
 
 
 @dataclass
@@ -45,11 +65,7 @@ class RSSFeedSignalSource:
             title = coerce_text(entry.get("title"))
             summary = coerce_text(entry.get("summary"))
             text = "\n\n".join(part for part in [title, summary] if part).strip() or coerce_text(entry)
-            published = (
-                coerce_text(entry.get("published"))
-                or coerce_text(entry.get("updated"))
-                or now_iso()
-            )
+            published = _normalize_entry_timestamp(entry)
             link = coerce_text(entry.get("link"))
             signals.append(
                 Signal(
@@ -127,7 +143,7 @@ class ArxivSignalSource(RSSFeedSignalSource):
                     topic=topic,
                     entities=coerce_entities([*authors, *categories]),
                     sentiment=0.0,
-                    timestamp=coerce_text(entry.get("published"), fallback=now_iso()),
+                    timestamp=_normalize_entry_timestamp(entry),
                     metadata={
                         **self.static_metadata,
                         "connector_type": "arxiv",

@@ -165,6 +165,19 @@ class AnalysisPipeline:
         if sim_result.final_outcome_probs:
             dominant_outcome = max(sim_result.final_outcome_probs, key=sim_result.final_outcome_probs.get)
         analysis_node_id = f"analysis:{final_world.domain_id}:{final_world.t}"
+        parameter_effect_trace: List[Dict[str, Any]] = []
+        parameter_effect_mismatches: List[Dict[str, Any]] = []
+        if prior_outcome_probs is not None:
+            parameter_effect_trace = self._parameter_effect_trace(
+                prior_outcome_probs,
+                sim_result.final_outcome_probs,
+                final_world.parameter_vector,
+            )
+            parameter_effect_mismatches = [
+                entry for entry in parameter_effect_trace if not bool(entry.get("sign_match", True))
+            ]
+            if parameter_effect_mismatches:
+                final_world.parameter_vector.conflict_flag = True
         reference_outcome_probs = extract_reference_outcome_probs(final_world)
         disagreement_snapshot = compute_confidence_weighted_disagreement(
             sim_result.final_outcome_probs,
@@ -205,6 +218,8 @@ class AnalysisPipeline:
                 "parameter_vector": final_world.parameter_vector.snapshot(),
                 "reference_outcome_probs": reference_outcome_probs,
                 "disagreement_snapshot": disagreement_snapshot,
+                "parameter_effect_trace": parameter_effect_trace,
+                "parameter_effect_mismatches": parameter_effect_mismatches,
                 **(extra_summary_metadata or {}),
             },
         )
@@ -235,6 +250,26 @@ class AnalysisPipeline:
                     support=1,
                     contradiction=0,
                     metadata={"epistemic_event_type": "belief_disagreement"},
+                )
+            )
+        if parameter_effect_mismatches:
+            effect_conflict_node = self._build_parameter_effect_conflict_node(
+                domain_id=final_world.domain_id,
+                step=final_world.t,
+                mismatches=parameter_effect_mismatches,
+                rationale=final_world.parameter_vector.rationale,
+                signal_text=update_signal_text or "",
+            )
+            self.knowledge_graph.add_node(effect_conflict_node)
+            epistemic_node_ids.append(effect_conflict_node.id)
+            session_log.add_kg_delta(
+                KGDelta(
+                    operation="add_node",
+                    target_id=effect_conflict_node.id,
+                    payload={"node": effect_conflict_node.snapshot()},
+                    support=1,
+                    contradiction=1,
+                    metadata={"epistemic_event_type": "parameter_effect_conflict"},
                 )
             )
         if prior_outcome_probs is not None:
@@ -294,6 +329,8 @@ class AnalysisPipeline:
                 "reference_outcome_probs": reference_outcome_probs,
                 "disagreement_snapshot": disagreement_snapshot,
                 "belief_conflicts": belief_conflicts,
+                "parameter_effect_trace": parameter_effect_trace,
+                "parameter_effect_mismatches": parameter_effect_mismatches,
             },
         )
         if self.emitter is not None:
@@ -455,6 +492,112 @@ class AnalysisPipeline:
 
         keys = set(left) | set(right)
         return all(abs(float(left.get(key, 0.0)) - float(right.get(key, 0.0))) <= tolerance for key in keys)
+
+    def _parameter_effect_trace(
+        self,
+        prior_outcome_probs: Dict[str, float],
+        posterior_outcome_probs: Dict[str, float],
+        parameter_vector: ParameterVector,
+        *,
+        tolerance: float = 1.0e-6,
+    ) -> List[Dict[str, Any]]:
+        """Compare intended modifier directions with realized posterior probability shifts."""
+
+        trace: List[Dict[str, Any]] = []
+        for conflict in parameter_vector.repair_conflicts:
+            trace.append(
+                {
+                    "mismatch_type": "unknown_outcome_id",
+                    "outcome_id": conflict.get("corrected_to") or conflict.get("hallucinated_outcome_id"),
+                    "hallucinated_outcome_id": conflict.get("hallucinated_outcome_id"),
+                    "corrected_to": conflict.get("corrected_to"),
+                    "dropped": bool(conflict.get("dropped", False)),
+                    "modifier": conflict.get("modifier"),
+                    "intended_direction": "unknown",
+                    "actual_direction": "corrected" if conflict.get("corrected_to") else "dropped",
+                    "sign_match": False,
+                    "prior_probability": None,
+                    "posterior_probability": None,
+                    "delta_probability": 0.0,
+                    "fuzzy_ratio": conflict.get("fuzzy_ratio"),
+                }
+            )
+        for outcome_id, modifier in parameter_vector.outcome_modifiers.items():
+            modifier_value = float(modifier)
+            if abs(modifier_value - 1.0) <= tolerance:
+                continue
+            prior_prob = float(prior_outcome_probs.get(outcome_id, 0.0))
+            posterior_prob = float(posterior_outcome_probs.get(outcome_id, prior_prob))
+            delta_probability = float(posterior_prob - prior_prob)
+            intended_direction = "up" if modifier_value > 1.0 else "down"
+            if delta_probability > tolerance:
+                actual_direction = "up"
+            elif delta_probability < -tolerance:
+                actual_direction = "down"
+            else:
+                actual_direction = "flat"
+            trace.append(
+                {
+                    "mismatch_type": "direction_mismatch" if actual_direction != intended_direction else "direction_trace",
+                    "outcome_id": outcome_id,
+                    "modifier": modifier_value,
+                    "intended_direction": intended_direction,
+                    "actual_direction": actual_direction,
+                    "sign_match": actual_direction == intended_direction,
+                    "prior_probability": prior_prob,
+                    "posterior_probability": posterior_prob,
+                    "delta_probability": delta_probability,
+                }
+            )
+        return trace
+
+    def _build_parameter_effect_conflict_node(
+        self,
+        *,
+        domain_id: str,
+        step: int,
+        mismatches: List[Dict[str, Any]],
+        rationale: str,
+        signal_text: str,
+    ) -> KGNode:
+        """Persist simulator sign mismatches between intended and realized outcome motion."""
+
+        strongest = max(mismatches, key=lambda entry: abs(float(entry.get("delta_probability", 0.0))))
+        confidence = min(1.0, 0.35 + abs(float(strongest.get("delta_probability", 0.0))))
+        if strongest.get("mismatch_type") == "unknown_outcome_id":
+            target = strongest.get("corrected_to")
+            if target:
+                content = (
+                    f"LLM emitted unknown outcome id {strongest.get('hallucinated_outcome_id')}; "
+                    f"repaired to {target} before simulator update."
+                )
+            else:
+                content = (
+                    f"LLM emitted unknown outcome id {strongest.get('hallucinated_outcome_id')}; "
+                    "modifier was dropped before simulator update."
+                )
+        else:
+            content = (
+                f"Parameter intent diverged from realized posterior drift for {len(mismatches)} outcomes; "
+                f"strongest mismatch={strongest['outcome_id']} intended {strongest['intended_direction']} "
+                f"but moved {strongest['actual_direction']}."
+            )
+        return KGNode(
+            id=f"parameter_effect_conflict:{domain_id}:{step}",
+            label=f"Parameter Effect Conflict {domain_id}",
+            node_type="parameter_effect_conflict",
+            content=content,
+            confidence=confidence,
+            metadata={
+                "domain_id": domain_id,
+                "step": int(step),
+                "mismatches": mismatches,
+                "rationale": rationale,
+                "signal_excerpt": signal_text[:280],
+                "mismatch_count": len(mismatches),
+                "strongest_mismatch": strongest,
+            },
+        )
 
 
 __all__ = ["AnalysisPipeline", "AnalysisPipelineConfig", "AnalysisPipelineResult"]
