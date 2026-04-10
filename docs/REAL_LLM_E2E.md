@@ -12,9 +12,9 @@ This document records a live end-to-end evaluation of Freeman using a real DeepS
 
 The evaluation target was:
 
-\[
+$$
 \text{signal stream} \rightarrow \text{world picture} \rightarrow \text{simulation forecast} \rightarrow \text{memory write} \rightarrow \text{memory-only follow-up prior}
-\]
+$$
 
 For each domain, the agent had to:
 
@@ -42,9 +42,9 @@ flowchart LR
 
 No follow-up answer received the full KG. The prompt path was:
 
-\[
+$$
 \text{question} \xrightarrow{\text{embed}} \text{top-}K \text{ semantic nodes} \xrightarrow{\text{1-hop}} \text{context subset}
-\]
+$$
 
 The embedding backend for the recorded run was local Ollama with `nomic-embed-text`. The same adapter also supports `mxbai-embed-large`.
 
