@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from math import inf, log, sqrt
 from typing import Dict, List
@@ -86,6 +87,49 @@ class ObligationQueue:
 
 
 @dataclass
+class InterestNormalizer:
+    """Rolling z-score normalizer for heterogeneous interest components."""
+
+    window: int = 50
+    epsilon: float = 1.0e-6
+    _history: Dict[str, deque[float]] = field(default_factory=dict, init=False, repr=False)
+
+    def normalize(self, component_name: str, value: float) -> float:
+        """Return a clipped rolling z-score using previously observed values."""
+
+        if self.window <= 1:
+            return 0.0
+        history = list(self._history.get(component_name, ()))
+        if len(history) < 2:
+            return 0.0
+        mean = sum(history) / len(history)
+        variance = sum((entry - mean) ** 2 for entry in history) / len(history)
+        std = sqrt(variance)
+        if std < self.epsilon:
+            return 0.0
+        z_score = (float(value) - mean) / std
+        return float(min(max(z_score, -3.0), 3.0))
+
+    def observe(self, component_name: str, value: float) -> None:
+        """Store one raw component value in the rolling history."""
+
+        history = self._history.setdefault(component_name, deque(maxlen=max(self.window, 1)))
+        history.append(float(value))
+
+    def is_ready(self, component_name: str) -> bool:
+        """Return True when the component has enough variation for normalization."""
+
+        if self.window <= 1:
+            return False
+        history = list(self._history.get(component_name, ()))
+        if len(history) < 2:
+            return False
+        mean = sum(history) / len(history)
+        variance = sum((entry - mean) ** 2 for entry in history) / len(history)
+        return variance >= self.epsilon**2
+
+
+@dataclass
 class AttentionTask:
     """Task competing for the finite attention budget."""
 
@@ -131,11 +175,13 @@ class AttentionScheduler:
         attention_budget: float,
         ucb_beta: float = 1.0,
         obligation_queue: ObligationQueue | None = None,
+        interest_normalizer: InterestNormalizer | None = None,
     ) -> None:
         self.attention_budget = float(attention_budget)
         self.remaining_budget = float(attention_budget)
         self.ucb_beta = float(ucb_beta)
         self.obligation_queue = obligation_queue
+        self.interest_normalizer = interest_normalizer or InterestNormalizer()
         self.t = 0
         self.tasks: Dict[str, AttentionTask] = {}
 
@@ -153,16 +199,41 @@ class AttentionScheduler:
     def interest_score(self, task: AttentionTask) -> float:
         """Expected information gain per cost with anomaly and semantic terms."""
 
-        obligation = self.obligation_queue.pressure(task.task_id) if self.obligation_queue is not None else 0.0
-        score = (
-            task.expected_information_gain
-            + task.anomaly_score
-            + task.semantic_gap
-            + task.confidence_gap
-            + obligation
-        ) / max(task.cost, 1.0e-8)
+        components = self._interest_components(task)
+        normalized_components = self._normalize_components(components)
+        score = sum(normalized_components.values()) / max(task.cost, 1.0e-8)
         task.last_interest_score = float(score)
         return float(score)
+
+    def _interest_components(self, task: AttentionTask) -> Dict[str, float]:
+        """Return raw component values before normalization."""
+
+        obligation = self.obligation_queue.pressure(task.task_id) if self.obligation_queue is not None else 0.0
+        return {
+            "expected_information_gain": task.expected_information_gain,
+            "anomaly_score": task.anomaly_score,
+            "semantic_gap": task.semantic_gap,
+            "confidence_gap": task.confidence_gap,
+            "obligation_pressure": obligation,
+        }
+
+    def _normalize_components(self, components: Dict[str, float]) -> Dict[str, float]:
+        """Normalize each component when rolling statistics are available."""
+
+        normalized: Dict[str, float] = {}
+        for name, value in components.items():
+            if self.interest_normalizer.is_ready(name):
+                normalized[name] = self.interest_normalizer.normalize(name, value)
+            else:
+                normalized[name] = float(value)
+        return normalized
+
+    def _observe_components(self, components_by_task: Dict[str, Dict[str, float]]) -> None:
+        """Update rolling statistics from the current decision frontier."""
+
+        for components in components_by_task.values():
+            for name, value in components.items():
+                self.interest_normalizer.observe(name, value)
 
     def eligible_tasks(self) -> List[AttentionTask]:
         return [
@@ -183,24 +254,29 @@ class AttentionScheduler:
         best_interest = 0.0
         best_bonus = 0.0
         best_score = -inf
+        components_by_task: Dict[str, Dict[str, float]] = {}
 
         for task in eligible:
-            interest = self.interest_score(task)
+            components_by_task[task.task_id] = self._interest_components(task)
+            interest = self._normalize_components(components_by_task[task.task_id])
+            interest_value = sum(interest.values()) / max(task.cost, 1.0e-8)
+            task.last_interest_score = float(interest_value)
             if task.pulls == 0:
                 bonus = inf
                 ucb_score = inf
             else:
                 bonus = self.ucb_beta * sqrt(log(max(self.t, 1)) / task.pulls)
-                ucb_score = interest + bonus
+                ucb_score = interest_value + bonus
             if ucb_score > best_score:
                 best_task = task
-                best_interest = interest
+                best_interest = interest_value
                 best_bonus = bonus
                 best_score = ucb_score
 
         if best_task is None:
             return None
 
+        self._observe_components(components_by_task)
         self.remaining_budget -= best_task.cost
         best_task.pulls += 1
         if best_task.state in {"PENDING", "SUSPENDED"}:
@@ -219,6 +295,7 @@ class AttentionScheduler:
 __all__ = [
     "AnomalyDebt",
     "AttentionDecision",
+    "InterestNormalizer",
     "AttentionScheduler",
     "AttentionTask",
     "ConflictDebt",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from typing import Dict, List
 
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
@@ -37,10 +38,24 @@ class Reconciler:
         self,
         *,
         thresholds: ConfidenceThresholds | None = None,
+        mode: str = "log_odds",
         prior_strength_penalty: float = 0.0,
+        prior_strength: float = 1.0,
+        w_support: float = 1.0,
+        w_conflict: float = 1.0,
+        gamma: float = 0.0,
+        clip_eps: float = 1.0e-9,
     ) -> None:
         self.thresholds = thresholds or ConfidenceThresholds()
+        self.mode = str(mode).strip().lower()
         self.prior_strength_penalty = float(prior_strength_penalty)
+        self.prior_strength = max(float(prior_strength), 1.0e-9)
+        self.w_support = float(w_support)
+        self.w_conflict = float(w_conflict)
+        self.gamma = max(float(gamma), 0.0)
+        self.clip_eps = min(max(float(clip_eps), 1.0e-12), 1.0e-3)
+        if self.mode not in {"legacy", "log_odds"}:
+            raise ValueError(f"Unsupported reconciler mode: {mode}")
 
     def beta_update(
         self,
@@ -50,13 +65,51 @@ class Reconciler:
         *,
         prior_strength_penalty: float | None = None,
     ) -> float:
-        """Apply the spec confidence update and clip to [0, 1]."""
+        """Update confidence using the configured reconciliation mode."""
+
+        if self.mode == "legacy":
+            return self._legacy_update(
+                confidence,
+                support,
+                contradiction,
+                prior_strength_penalty=prior_strength_penalty,
+            )
+        return self._log_odds_update(confidence, support, contradiction)
+
+    def _legacy_update(
+        self,
+        confidence: float,
+        support: int,
+        contradiction: int,
+        *,
+        prior_strength_penalty: float | None = None,
+    ) -> float:
+        """Apply the legacy multiplicative confidence update and clip to [0, 1]."""
 
         penalty = self.prior_strength_penalty if prior_strength_penalty is None else float(prior_strength_penalty)
         denominator = support + contradiction
         support_ratio = float(support / denominator) if denominator > 0 else 1.0
         updated = float(confidence) * support_ratio - penalty
         return min(max(updated, 0.0), 1.0)
+
+    def _log_odds_update(self, confidence: float, support: int, contradiction: int) -> float:
+        """Apply a Bayesian-style log-odds update with exponential forgetting."""
+
+        clipped_confidence = min(max(float(confidence), self.clip_eps), 1.0 - self.clip_eps)
+        support_count = max(int(support), 0)
+        contradiction_count = max(int(contradiction), 0)
+        if support_count == 0 and contradiction_count == 0 and self.gamma == 0.0:
+            return clipped_confidence
+
+        current_log_odds = math.log(clipped_confidence / (1.0 - clipped_confidence))
+        forgetting_decay = math.exp(-self.gamma)
+        evidence_unit = math.log((self.prior_strength + 1.0) / self.prior_strength)
+        updated_log_odds = (
+            forgetting_decay * current_log_odds
+            + self.w_support * support_count * evidence_unit
+            - self.w_conflict * contradiction_count * evidence_unit
+        )
+        return 1.0 / (1.0 + math.exp(-updated_log_odds))
 
     def classify_status(self, confidence: float) -> str:
         """Map confidence to the configured status bands."""

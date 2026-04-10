@@ -5,6 +5,7 @@ from freeman.core.compilevalidator import (
     CompileValidationReport,
     CompileValidator,
     HistoricalFitScore,
+    OperatorFitReport,
 )
 from freeman.core.evolution import DEFAULT_EVOLUTION_REGISTRY, EVOLUTION_REGISTRY, EvolutionRegistry
 from freeman.core.types import Actor, CausalEdge, Outcome, ParameterVector, Policy, Relation, Resource, Violation
@@ -28,6 +29,7 @@ __all__ = [
     "EVOLUTION_REGISTRY",
     "EvolutionRegistry",
     "HistoricalFitScore",
+    "OperatorFitReport",
     "Outcome",
     "OutcomeDistribution",
     "OutcomeRegistry",

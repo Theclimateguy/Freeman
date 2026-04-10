@@ -4,6 +4,7 @@ from freeman.agent.analysispipeline import AnalysisPipeline, AnalysisPipelineCon
 from freeman.agent.attentionscheduler import (
     AnomalyDebt,
     AttentionDecision,
+    InterestNormalizer,
     AttentionScheduler,
     AttentionTask,
     ConflictDebt,
@@ -33,6 +34,7 @@ __all__ = [
     "AnalysisPipelineResult",
     "AnomalyDebt",
     "AttentionDecision",
+    "InterestNormalizer",
     "AttentionScheduler",
     "AttentionTask",
     "BudgetDecision",

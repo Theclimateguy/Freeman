@@ -43,8 +43,12 @@ This is the implementation-facing map of modules, classes, and primary functions
 - v0.2:
   - `CompileCandidate`
   - `HistoricalFitScore`
+  - `OperatorFitReport`
   - `CompileValidationReport`
   - `CompileValidator`
+  - `CompileValidator.validate()`
+  - `CompileValidator.compare_operators()`
+  - `CompileValidator.fit_outcome_weights()`
   - `ParameterDistribution`
   - `ScenarioSample`
   - `OutcomeDistribution`
@@ -120,6 +124,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `ForecastDebt`
   - `ConflictDebt`
   - `AnomalyDebt`
+  - `InterestNormalizer`
   - `ObligationQueue`
   - `AttentionTask`
   - `AttentionDecision`
@@ -237,10 +242,13 @@ Command:
   - run longitudinal FAAB evaluation across all benchmark modes
 - `python scripts/benchmark_faab/generate_dummy_dataset.py`
   - emit the default four-case dummy benchmark dataset
+- `scripts/benchmark_faab/metrics.py`
+  - `brier_score()`
 
 Outputs:
 - `metrics.csv`
   - one row per `(case_id, mode)`
+  - includes `t0_brier_score` and `t1_brier_score`
 - `summary.json`
   - full serialized predictions and metadata
 - `traces/*.json`

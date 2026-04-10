@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Any
 
 import yaml
@@ -134,7 +135,7 @@ def _print_json(payload: dict[str, Any]) -> None:
 def _add_config_option(command_parser: argparse.ArgumentParser) -> None:
     """Attach the shared config option to a subcommand parser."""
 
-    command_parser.add_argument("--config", "--config-path", dest="config_path", default="config.yaml")
+    command_parser.add_argument("--config", "--config-path", dest="config_path", default=argparse.SUPPRESS)
 
 
 def _memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
@@ -383,6 +384,7 @@ def _summarize_query(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="freeman")
+    parser.add_argument("--config", "--config-path", dest="config_path", default="config.yaml")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init")
@@ -510,6 +512,9 @@ def main(argv: list[str] | None = None) -> int:
                 config_path=config_path,
             )
             result = pipeline.run(schema, policies=policies)
+            warnings = list(result.metadata.get("warnings", []))
+            for message in warnings:
+                print(message, file=sys.stderr)
             _print_json(
                 {
                     "status": "completed",
@@ -520,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
                     "confidence": result.simulation["confidence"],
                     "forecast_count": result.metadata.get("forecast_count", 0),
                     "epistemic_event_count": len(result.metadata.get("epistemic_event_ids", [])),
+                    "warnings": warnings,
                     "simulation": result.simulation,
                 }
             )

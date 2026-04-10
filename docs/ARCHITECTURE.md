@@ -65,6 +65,25 @@ Operationally, each resource uses one evolution operator:
 
 `EvolutionRegistry` provides the spec-facing factory over these operators.
 
+## Operator Selection Criteria
+
+By default the schema still chooses an operator explicitly, but `CompileValidator.compare_operators()` can now compare that choice against alternatives on a historical resource series. The validator runs each candidate operator on the observed trajectory, computes RMSE, and warns when the chosen operator is materially worse than the best alternative.
+
+| Operator | When to use it | Typical signal in data |
+| --- | --- | --- |
+| `linear` | smooth trend-like dynamics | approximately affine step-to-step update |
+| `stock_flow` | accumulation with inflow/outflow | drift toward or away from a stock level |
+| `logistic` | bounded S-curve growth | inflection plus saturation near a ceiling |
+| `threshold` | regime change around a level | different dynamics below vs above a cutoff |
+| `coupled` | blended operator behavior | no single family dominates cleanly |
+
+If historical data are available, the validator reports:
+
+- per-operator RMSE for each resource
+- the best operator under that metric
+- a relative RMSE gap for the schema-chosen operator
+- `warn=True` when the chosen operator exceeds the configured gap threshold
+
 ### Stateful Shock Update
 
 Longitudinal updates now keep an explicit baseline-relative shock state:
@@ -263,13 +282,23 @@ Confidence status mapping:
 
 ### Reconciler
 
-The implemented confidence update follows the requested multiplicative form:
+The default reconciliation update is now a Bayesian log-odds rule with optional exponential forgetting. Let
 
 \[
-c_v(n+1) = c_v(n)\cdot\frac{S_v}{S_v + S_v^-} - \text{prior\_strength\_penalty}
+L_v(n) = \log\frac{c_v(n)}{1 - c_v(n)}
 \]
 
-followed by clipping to \([0,1]\) and status remapping.
+For `support = S_v` and `contradiction = S_v^-`, Freeman treats each unit observation as a repeated Bayes factor relative to a prior-strength pseudocount \(S_{v0}\):
+
+\[
+L_v(n+1) = e^{-\gamma}L_v(n) + w_s S_v \log\left(\frac{S_{v0}+1}{S_{v0}}\right) - w_c S_v^- \log\left(\frac{S_{v0}+1}{S_{v0}}\right)
+\]
+
+\[
+c_v(n+1) = \sigma(L_v(n+1)), \qquad \sigma(x)=\frac{1}{1+e^{-x}}
+\]
+
+So support multiplies posterior odds, conflict divides them, and \(e^{-\gamma}\) decays stale evidence back toward neutral confidence \(0.5\). A compatibility path remains available through `Reconciler(mode="legacy")`, which preserves the older multiplicative update.
 
 Conflict handling:
 
@@ -384,22 +413,24 @@ Observed mean accuracies in the recorded run:
 
 ### Attention Scheduler
 
-The scheduler implements UCB allocation:
+The scheduler implements a UCB-inspired allocation rule:
 
 \[
 a_t = \arg\max_i\left[\text{interest}_i(t) + \beta\sqrt{\frac{\ln t}{n_i(t)}}\right]
 \]
 
-Current interest term:
+The exploration bonus keeps the familiar UCB form, but Freeman normalizes heterogeneous interest components before summation. This means the scheduler should be understood as a heuristic inspired by UCB1 rather than a setting where classical logarithmic-regret guarantees hold automatically.
 
 \[
 \text{interest}_i(t) =
 \frac{
-\text{EIG}_i + \text{anomaly}_i + \text{semanticGap}_i + \text{confidenceGap}_i + \text{obligationPressure}_i(t)
+\tilde{\text{EIG}}_i + \tilde{\text{anomaly}}_i + \widetilde{\text{semanticGap}}_i + \widetilde{\text{confidenceGap}}_i + \widetilde{\text{obligationPressure}}_i(t)
 }{\text{cost}_i}
 \]
 
-where `obligationPressure` is the sum of urgency from:
+Each \(\tilde{x}\) is a rolling z-score over the recent component history, clipped to \([-3, 3]\). During the warm-up phase, when a component has not yet accumulated enough variance, the scheduler falls back to the raw component value instead of dividing by a near-zero standard deviation.
+
+`obligationPressure` is normalized on its own history, because it aggregates deadline-like pressure from:
 
 - `ForecastDebt`: open forecasts approaching their verification horizon
 - `ConflictDebt`: aged review conflicts in the KG
@@ -484,9 +515,12 @@ These events are attached to `AnalysisPipelineResult.proactive_events` and are d
 
 - `CompileCandidate`
 - `HistoricalFitScore`
+- `OperatorFitReport`
 - `CompileValidationReport`
 - backtesting against historical series
 - ensemble sign voting / consensus
+- operator comparison across `linear`, `stock_flow`, `logistic`, `threshold`, `coupled`
+- optional `fit_outcome_weights()` suggestion path for calibrating outcome weight vectors from historical `(state, outcome)` data
 - `review_required` on sign conflict
 
 ### Uncertainty

@@ -19,6 +19,7 @@ from freeman.agent.epistemic import (
 )
 from freeman.agent.proactiveemitter import ProactiveEmitter, ProactiveEvent
 
+from freeman.core.compilevalidator import CompileValidator, OperatorFitReport
 from freeman.core.scorer import raw_outcome_scores, score_outcomes
 from freeman.core.types import ParameterVector, Policy
 from freeman.core.world import WorldState
@@ -108,8 +109,40 @@ class AnalysisPipeline:
     ) -> AnalysisPipelineResult:
         """Run the full compile/simulate/verify/score/update workflow."""
 
-        world = schema.clone() if isinstance(schema, WorldState) else self.compiler.compile(schema)
-        return self._run_world(world, policies=policies, session_log=session_log)
+        extra_summary_metadata: Dict[str, Any] = {}
+        if isinstance(schema, WorldState):
+            world = schema.clone()
+        else:
+            world = self.compiler.compile(schema)
+            historical_data = self._extract_historical_data(schema)
+            if historical_data:
+                validation_report = CompileValidator(
+                    compiler=self.compiler,
+                    sim_config=self.sim_config,
+                ).validate(schema, historical_data=historical_data)
+                warnings = self._operator_fit_warning_messages(validation_report.operator_fit_reports)
+                if validation_report.operator_fit_reports:
+                    extra_summary_metadata["operator_fit_reports"] = [
+                        {
+                            "resource_id": report.resource_id,
+                            "chosen_operator": report.chosen_operator,
+                            "scores": dict(report.scores),
+                            "best_operator": report.best_operator,
+                            "gap": float(report.gap),
+                            "warn": bool(report.warn),
+                        }
+                        for report in validation_report.operator_fit_reports
+                    ]
+                if warnings:
+                    extra_summary_metadata["warnings"] = warnings
+                    for message in warnings:
+                        LOGGER.warning(message)
+        return self._run_world(
+            world,
+            policies=policies,
+            session_log=session_log,
+            extra_summary_metadata=extra_summary_metadata or None,
+        )
 
     def update(
         self,
@@ -331,6 +364,7 @@ class AnalysisPipeline:
                 "belief_conflicts": belief_conflicts,
                 "parameter_effect_trace": parameter_effect_trace,
                 "parameter_effect_mismatches": parameter_effect_mismatches,
+                **(extra_summary_metadata or {}),
             },
         )
         if self.emitter is not None:
@@ -343,6 +377,35 @@ class AnalysisPipeline:
             }
             self._append_outcome_history(final_world.domain_id, sim_result.final_outcome_probs)
         return result
+
+    def _extract_historical_data(self, schema: Dict[str, Any]) -> Dict[str, List[float]] | None:
+        """Return optional resource histories bundled with a raw schema payload."""
+
+        payload = schema.get("historical_data")
+        if payload is None:
+            payload = schema.get("metadata", {}).get("historical_data")
+        if not isinstance(payload, dict):
+            return None
+        histories: Dict[str, List[float]] = {}
+        for resource_id, series in payload.items():
+            if not isinstance(series, list):
+                continue
+            histories[str(resource_id)] = [float(value) for value in series]
+        return histories or None
+
+    def _operator_fit_warning_messages(self, reports: List[OperatorFitReport]) -> List[str]:
+        """Format operator-selection warnings for interface layers."""
+
+        messages: List[str] = []
+        for report in reports:
+            if not report.warn:
+                continue
+            messages.append(
+                f"[WARN] Resource '{report.resource_id}': chosen operator '{report.chosen_operator}' "
+                f"has RMSE gap +{report.gap * 100.0:.0f}% vs best '{report.best_operator}'. "
+                "Consider switching operator in schema."
+            )
+        return messages
 
     def _signal_text(self, world: WorldState, session_log: SessionLog | None) -> str:
         """Build a compact retrieval query from the incoming signal context."""
