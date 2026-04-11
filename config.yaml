@@ -48,3 +48,34 @@ memory:
   retrieval_top_k: 15
   max_context_nodes: 30
   session_log_path: "./data/sessions/"
+
+runtime:
+  mode: "follow"
+  poll_interval_seconds: 30
+  checkpoint_every_n_events: 25
+  checkpoint_every_n_seconds: 300
+  runtime_path: "./data/runtime"
+  resume_on_start: true
+
+consciousness:
+  idle_scheduler:
+    threshold: 0.60
+    weights:
+      time_since_last_update: 0.25
+      confidence_gap: 0.35
+      hypothesis_age: 0.20
+      attention_deficit: 0.20
+  operators:
+    capability_review:
+      alpha: 2.0
+      beta: 4.0
+    attention_rebalance:
+      w_g: 0.30
+      w_u: 0.30
+      w_e: 0.25
+      w_s: 0.15
+    trait_consolidation:
+      lambda_k: 0.95
+      eta_k: 0.10
+      beta_k: 0.20
+      min_delta: 0.01

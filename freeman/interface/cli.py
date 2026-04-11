@@ -14,13 +14,16 @@ import yaml
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.game.runner import SimConfig
 from freeman.interface.api import InterfaceAPI
+from freeman.interface.identity import build_identity_state
 from freeman.interface.kgexport import KnowledgeGraphExporter
 from freeman.interface.modeloverride import ModelOverrideAPI
 from freeman.interface.simulationdiff import build_simulation_diff, export_simulation_diff
 from freeman.llm import (
     DeepSeekChatClient,
     DeterministicEmbeddingAdapter,
+    ExplanationRenderer,
     HashingEmbeddingAdapter,
+    IdentityNarrator,
     OllamaEmbeddingClient,
     OpenAIChatClient,
     OpenAIEmbeddingClient,
@@ -84,6 +87,43 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "retrieval_top_k": 15,
         "max_context_nodes": 30,
         "session_log_path": "./data/sessions/",
+    },
+    "runtime": {
+        "mode": "follow",
+        "poll_interval_seconds": 30,
+        "checkpoint_every_n_events": 25,
+        "checkpoint_every_n_seconds": 300,
+        "runtime_path": "./data/runtime",
+        "resume_on_start": True,
+    },
+    "consciousness": {
+        "idle_scheduler": {
+            "threshold": 0.60,
+            "weights": {
+                "time_since_last_update": 0.25,
+                "confidence_gap": 0.35,
+                "hypothesis_age": 0.20,
+                "attention_deficit": 0.20,
+            },
+        },
+        "operators": {
+            "capability_review": {
+                "alpha": 2.0,
+                "beta": 4.0,
+            },
+            "attention_rebalance": {
+                "w_g": 0.30,
+                "w_u": 0.30,
+                "w_e": 0.25,
+                "w_s": 0.15,
+            },
+            "trait_consolidation": {
+                "lambda_k": 0.95,
+                "eta_k": 0.10,
+                "beta_k": 0.20,
+                "min_delta": 0.01,
+            },
+        },
     },
 }
 
@@ -459,6 +499,14 @@ def build_parser() -> argparse.ArgumentParser:
     diff_parser.add_argument("current_path")
     diff_parser.add_argument("--output-path")
 
+    identity_parser = subparsers.add_parser("identity")
+    _add_config_option(identity_parser)
+    identity_parser.add_argument("--narrative", action="store_true")
+
+    explain_parser = subparsers.add_parser("explain")
+    _add_config_option(explain_parser)
+    explain_parser.add_argument("--trace-id", required=True)
+
     return parser
 
 
@@ -707,6 +755,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.output_path:
             export_simulation_diff(report, args.output_path)
         _print_json(report.snapshot())
+        return 0
+
+    if args.command == "identity":
+        state = build_identity_state(knowledge_graph)
+        narrator = IdentityNarrator(_build_chat_client(config)[0] if args.narrative else None)
+        payload = narrator.structured_snapshot(state)
+        if args.narrative:
+            payload["narrative"] = narrator.render(state)
+        _print_json(payload)
+        return 0
+
+    if args.command == "explain":
+        state = build_identity_state(knowledge_graph)
+        trace_slice = [event for event in state.trace_state if event.event_id == args.trace_id]
+        renderer = ExplanationRenderer(_build_chat_client(config)[0])
+        _print_json(
+            {
+                "trace_id": args.trace_id,
+                "found": bool(trace_slice),
+                "explanation": renderer.explain_trace(trace_slice) if trace_slice else None,
+            }
+        )
         return 0
 
     return 1

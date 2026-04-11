@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 import yaml
+from freeman.agent.consciousness import (
+    ConsciousState,
+    ConsciousnessEngine,
+    DEFAULT_CONSCIOUSNESS_CONFIG,
+)
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.epistemic import (
     build_belief_conflict_node,
@@ -31,6 +36,8 @@ from freeman.memory.epistemiclog import EpistemicLog, infer_world_tags
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler, ReconciliationResult
 from freeman.memory.sessionlog import KGDelta, SessionLog
+from freeman.memory.selfmodel import SelfModelGraph
+from freeman.utils import deep_copy_jsonable
 from freeman.verifier.verifier import Verifier, VerifierConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -101,6 +108,15 @@ class AnalysisPipeline:
         self.belief_conflict_log = BeliefConflictLog(self.knowledge_graph)
         self._previous_outcome_probs: Dict[str, Dict[str, float]] = {}
         self._outcome_history: Dict[str, List[Dict[str, float]]] = {}
+        self.consciousness_config = self._load_consciousness_config(config_path)
+        self.conscious_state = ConsciousState(
+            world_ref="world:uninitialized",
+            self_model_ref=SelfModelGraph(self.knowledge_graph),
+            goal_state=[],
+            attention_state={},
+            trace_state=[],
+            runtime_metadata={"schema_version": 1},
+        )
 
     def run(
         self,
@@ -391,6 +407,8 @@ class AnalysisPipeline:
         if self.emitter is not None:
             prev_probs = self._previous_outcome_probs.get(final_world.domain_id)
             result.proactive_events = self.emitter.evaluate(result, prev_probs=prev_probs)
+        engine = ConsciousnessEngine(self.conscious_state, self.consciousness_config)
+        self.conscious_state = engine.post_pipeline_update(result, self.knowledge_graph)
         if sim_result.final_outcome_probs:
             self._previous_outcome_probs[final_world.domain_id] = {
                 outcome_id: float(prob)
@@ -413,6 +431,28 @@ class AnalysisPipeline:
                 continue
             histories[str(resource_id)] = [float(value) for value in series]
         return histories or None
+
+    def _load_consciousness_config(self, config_path: str | Path | None) -> Dict[str, Any]:
+        """Load consciousness config with defaults."""
+
+        config_file = Path(config_path).resolve() if config_path is not None else Path(__file__).resolve().parents[2] / "config.yaml"
+        payload = DEFAULT_CONSCIOUSNESS_CONFIG
+        if not config_file.exists():
+            return payload
+        loaded = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        consciousness_cfg = loaded.get("consciousness", {})
+        return self._merge_config_tree(payload, consciousness_cfg)
+
+    def _merge_config_tree(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively merge nested config dictionaries."""
+
+        merged = deep_copy_jsonable(base)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = self._merge_config_tree(merged[key], value)
+            else:
+                merged[key] = deep_copy_jsonable(value)
+        return merged
 
     def _operator_fit_warning_messages(self, reports: List[OperatorFitReport]) -> List[str]:
         """Format operator-selection warnings for interface layers."""

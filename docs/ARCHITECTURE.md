@@ -4,13 +4,15 @@ This document describes the implemented USIM-AGENT architecture in the current r
 
 ## System Overview
 
-Freeman is organized into five layers:
+Freeman is organized into seven layers:
 
 1. `freeman.core`: deterministic world model, transition operators, scoring, uncertainty, compile validation.
 2. `freeman.verifier`: invariant checks, structural stability checks, sign consistency, fixed-point correction.
-3. `freeman.memory`: long-term knowledge graph, semantic vector store, session log, confidence reconciliation, self-model feedback.
+3. `freeman.memory`: long-term knowledge graph, semantic vector store, session log, confidence reconciliation, self-model feedback, `SelfModelGraph`.
 4. `freeman.agent`: signal ingestion, signal memory, obligation-driven attention scheduling, end-to-end analysis pipeline, forecast tracking, proactive emission, cost governance.
-5. `freeman.interface`: CLI, REST endpoints, export, override and diff utilities.
+5. `freeman.agent.consciousness`: `ConsciousState`, deterministic metacognitive operators, idle deliberation scheduling, trace generation.
+6. `freeman.runtime`: local foreground runtime, checkpointing, and stream cursor persistence.
+7. `freeman.interface`: CLI, REST endpoints, identity/explanation views, export, override and diff utilities.
 
 ## High-Level Flow
 
@@ -26,9 +28,11 @@ flowchart LR
     H --> I["ForecastRegistry + ProactiveEmitter"]
     H --> J["KnowledgeGraph update"]
     J --> K["SessionLog + Reconciler"]
-    I --> L["Self-model updates after verification"]
-    K --> M["CLI / REST / Human override / Export"]
-    L --> M
+    K --> L["ConsciousnessEngine"]
+    L --> M["SelfModelGraph + TraceEvent log"]
+    M --> N["CLI / REST / Identity / Explain / Export"]
+    M --> O["CheckpointManager + StreamCursorStore"]
+    I --> N
 ```
 
 ## Core Simulation Layer
@@ -339,6 +343,24 @@ flowchart LR
 3. re-runs verify/simulate/score on the preserved ontology
 4. writes the chosen parameter vector into KG metadata for auditability
 
+### Consciousness Layer
+
+After reconciliation, `AnalysisPipeline` now invokes `ConsciousnessEngine.post_pipeline_update()` without altering the pipeline result payload. The consciousness layer is deterministic and additive:
+
+1. read rolling `self_observation` nodes and derive `self_capability`
+2. rebalance `attention_focus`
+3. consolidate `identity_trait`
+4. append one `TraceEvent` per operator, including empty diffs with rationale `no change`
+
+The resulting `ConsciousState` remains separate from the simulator output. LLM-facing components may render this state, but may not mutate it.
+
+`IdleScheduler` and `ConsciousnessEngine.maybe_deliberate()` provide synchronous idle deliberation with no background threads. Internal acts currently include:
+
+- `hypothesis_aging`
+- `consistency_check`
+
+Both operate only on structured self-model state and emit trace entries for replayability.
+
 If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
 
 1. embed the incoming signal text
@@ -626,6 +648,8 @@ The machine hypothesis is never overwritten. Manual edits append audit entries a
 Implemented commands:
 
 - `run`
+- `identity`
+- `explain`
 - `query`
 - `export-kg`
 - `status`
@@ -653,6 +677,9 @@ Implemented endpoints:
 - KG path is read from `config.yaml -> memory.json_path`
 - default path: `runs/memory/knowledge_graph.json`
 - session logs are JSON-serializable via `SessionLog.save()`
+- local runtime checkpoints are managed by `freeman.runtime.checkpoint.CheckpointManager`
+- committed stream ids are persisted by `freeman.runtime.stream.StreamCursorStore`
+- replayable consciousness traces live in `ConsciousState.trace_state` and are included in checkpoint payloads
 
 ## Testing
 
