@@ -150,6 +150,8 @@ This is the implementation-facing map of modules, classes, and primary functions
 - CLI:
   - `build_parser()`
   - `main()`
+  - `identity`
+  - `explain --trace-id <id>`
 - REST:
   - `InterfaceAPI`
   - `run_server()`
@@ -185,9 +187,18 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `HashingEmbeddingAdapter`
 - `OpenAIEmbeddingClient`
 - `OllamaEmbeddingClient`
+- `OllamaChatClient`
 - `DeepSeekChatClient`
 - `DeepSeekFreemanOrchestrator`
 - `LLMDrivenSimulationRun`
+
+### `freeman.runtime`
+
+- `AgentRuntime`
+- `CheckpointManager`
+- `EventLog`
+- `StreamCursorStore`
+- `climate_stream.main()` (RSS + Ollama long-run loop)
 
 ### `scripts`
 
@@ -223,6 +234,10 @@ This is the implementation-facing map of modules, classes, and primary functions
 Command:
 - `python -m freeman.interface.cli run <schema_path> [--policies-path <path>]`
   - compile schema, run the analysis pipeline, print simulation JSON
+- `python -m freeman.interface.cli identity [--narrative]`
+  - print structured consciousness snapshot; optional LLM narrative projection
+- `python -m freeman.interface.cli explain --trace-id <id>`
+  - render causal explanation for one trace event from runtime event log/checkpoint
 - `python -m freeman.interface.cli query [--text ...] [--status ...] [--node-type ...] [--min-confidence ...]`
   - query KG nodes
 - `python -m freeman.interface.cli export-kg <html|json-ld|dot> <output_path>`
@@ -243,6 +258,11 @@ Command:
   - rerun a world snapshot after overrides
 - `python -m freeman.interface.cli diff-domain <baseline_path> <current_path> [--output-path <path>]`
   - export structured differences between two snapshots or simulation payloads
+
+Runtime command:
+
+- `python -m freeman.runtime.climate_stream --config-path config.climate.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --resume --model auto`
+  - long local RSS ingestion with deterministic checkpoint/resume and local Ollama (`chat_json`) updates
 
 ## Benchmark Map
 

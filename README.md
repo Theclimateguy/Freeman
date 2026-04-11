@@ -135,6 +135,17 @@ freeman rerun-domain world_override.json --max-steps 10 --output-path rerun.json
 freeman diff-domain world.json rerun.json --output-path diff.json --config-path config.yaml
 ```
 
+Long local stream run (climate RSS + Ollama):
+
+```bash
+python -m freeman.runtime.climate_stream \
+  --config-path config.climate.yaml \
+  --schema-path freeman/domain/profiles/gim15.json \
+  --hours 8 \
+  --resume \
+  --model auto
+```
+
 ## Main Commands
 
 - `freeman init`: create a config file and empty storage for the knowledge graph and session logs.

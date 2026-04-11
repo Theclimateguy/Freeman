@@ -43,6 +43,7 @@ CHANGELOG.md
 docs/*
 !docs/API_MAP.md
 !docs/ARCHITECTURE.md
+!docs/CONSCIOUSNESS_ARCHITECTURE.md
 !docs/REAL_LLM_E2E.md
 !docs/architecture/
 !docs/architecture/**

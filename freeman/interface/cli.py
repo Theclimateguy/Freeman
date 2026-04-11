@@ -24,6 +24,7 @@ from freeman.llm import (
     ExplanationRenderer,
     HashingEmbeddingAdapter,
     IdentityNarrator,
+    OllamaChatClient,
     OllamaEmbeddingClient,
     OpenAIChatClient,
     OpenAIEmbeddingClient,
@@ -273,6 +274,15 @@ def _build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
                 api_key=api_key,
                 model=model or "deepseek-chat",
                 base_url=base_url or "https://api.deepseek.com",
+                timeout_seconds=timeout_seconds,
+            ),
+            None,
+        )
+    if provider == "ollama":
+        return (
+            OllamaChatClient(
+                model=model or "qwen2.5-coder:14b",
+                base_url=base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
                 timeout_seconds=timeout_seconds,
             ),
             None,

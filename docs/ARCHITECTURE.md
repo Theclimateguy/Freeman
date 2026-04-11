@@ -11,7 +11,7 @@ Freeman is organized into seven layers:
 3. `freeman.memory`: long-term knowledge graph, semantic vector store, session log, confidence reconciliation, self-model feedback, `SelfModelGraph`.
 4. `freeman.agent`: signal ingestion, signal memory, obligation-driven attention scheduling, end-to-end analysis pipeline, forecast tracking, proactive emission, cost governance.
 5. `freeman.agent.consciousness`: `ConsciousState`, deterministic metacognitive operators, idle deliberation scheduling, trace generation.
-6. `freeman.runtime`: local foreground runtime, checkpointing, and stream cursor persistence.
+6. `freeman.runtime`: local foreground runtime, checkpointing, stream cursor persistence, and climate stream loop.
 7. `freeman.interface`: CLI, REST endpoints, identity/explanation views, export, override and diff utilities.
 
 ## High-Level Flow
@@ -360,6 +360,24 @@ The resulting `ConsciousState` remains separate from the simulator output. LLM-f
 - `consistency_check`
 
 Both operate only on structured self-model state and emit trace entries for replayability.
+
+### Runtime Stream Loop
+
+`freeman.runtime.climate_stream` provides an operational long-run loop for local learning on RSS climate signals.
+
+Flow:
+
+1. fetch signals from configured RSS sources (`freeman-connectors`)
+2. classify shock and trigger mode via `SignalIngestionEngine` + local `OllamaChatClient`
+3. on `ANALYZE/DEEP_DIVE`, estimate `ParameterVector` and run `AnalysisPipeline.update()`
+4. append trace events to `EventLog`
+5. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`)
+
+Resume semantics:
+
+- `--resume` restores `ConsciousState`, `WorldState`, committed `signal_id` cursor set, and `SignalMemory`
+- duplicate signals are suppressed by at-least-once + idempotent cursor dedup
+- shutdown on `SIGINT/SIGTERM` persists runtime state before exit
 
 If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
 

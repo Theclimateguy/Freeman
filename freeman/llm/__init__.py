@@ -5,7 +5,7 @@ from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.llm.explanation_renderer import ExplanationRenderer
 from freeman.llm.identity_narrator import IdentityNarrator
 from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator, LLMDrivenSimulationRun
-from freeman.llm.ollama import OllamaEmbeddingClient
+from freeman.llm.ollama import OllamaChatClient, OllamaEmbeddingClient
 from freeman.llm.openai import OpenAIChatClient, OpenAIEmbeddingClient
 
 __all__ = [
@@ -18,6 +18,7 @@ __all__ = [
     "IdentityNarrator",
     "LLMDrivenSimulationRun",
     "OpenAIChatClient",
+    "OllamaChatClient",
     "OllamaEmbeddingClient",
     "OpenAIEmbeddingClient",
 ]

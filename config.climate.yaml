@@ -1,0 +1,65 @@
+agent:
+  source_refresh_seconds: 300
+  climate_keywords:
+    - climate
+    - warming
+    - heatwave
+    - drought
+    - flood
+    - wildfire
+    - emissions
+    - carbon
+    - co2
+    - extreme weather
+    - sea level
+    - adaptation
+    - mitigation
+  sources:
+    - type: rss
+      url: "https://www.carbonbrief.org/feed/"
+      default_topic: "climate_news"
+      max_entries: 25
+      source_type: "rss_carbonbrief"
+    - type: rss
+      url: "https://www.theguardian.com/environment/rss"
+      default_topic: "climate_news"
+      max_entries: 25
+      source_type: "rss_guardian_env"
+    - type: rss
+      url: "https://www.noaa.gov/rss.xml"
+      default_topic: "climate_news"
+      max_entries: 25
+      source_type: "rss_noaa"
+
+llm:
+  provider: "ollama"
+  model: "qwen2.5-coder:14b"
+  base_url: "http://127.0.0.1:11434"
+  timeout_seconds: 120.0
+
+memory:
+  backend: "networkx-json"
+  json_path: "./data/kg_climate.json"
+  embedding_provider: "hashing"
+  hashing_embedding_dimension: 384
+
+runtime:
+  mode: "follow"
+  poll_interval_seconds: 300
+  checkpoint_every_n_events: 25
+  checkpoint_every_n_seconds: 300
+  runtime_path: "./data/runtime_climate"
+  event_log_path: "./data/runtime_climate/event_log.jsonl"
+  resume_on_start: true
+
+sim:
+  max_steps: 12
+  dt: 1.0
+  level2_check_every: 5
+  level2_shock_delta: 0.01
+  stop_on_hard_level2: true
+  convergence_check_steps: 20
+  convergence_epsilon: 1.0e-4
+  fixed_point_max_iter: 20
+  fixed_point_alpha: 0.1
+  seed: 42
