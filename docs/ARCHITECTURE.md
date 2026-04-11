@@ -423,6 +423,8 @@ flowchart LR
     C -->|no| E["Mahalanobis score"]
     E --> F["Shock classification"]
     F --> G["WATCH / ANALYZE / DEEP_DIVE"]
+    G --> H["Persist in SignalMemory"]
+```
 
 ## FAAB Benchmark
 
@@ -450,8 +452,6 @@ Observed mean accuracies in the recorded run:
 - `MODE_B_AMNESIC`: `t0_mean=0.50`, `t1_mean=0.50`
 - `MODE_C_HASH`: `t0_mean=0.50`, `t1_mean=0.50`
 - `MODE_D_LLMONLY`: `t0_mean=0.50`, `t1_mean=1.00`
-    G --> H["Persist in SignalMemory"]
-```
 
 ### Attention Scheduler
 
