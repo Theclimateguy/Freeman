@@ -15,6 +15,7 @@ from freeman.agent.costmodel import BudgetDecision, BudgetPolicy, CostEstimate, 
 from freeman.agent.domainregistry import DomainTemplate, DomainTemplateRegistry, MultiDomainWorld, SharedResourceBus
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.parameterestimator import ParameterEstimator
+from freeman.agent.policyevaluator import PolicyEvalResult, PolicyEvaluator
 from freeman.agent.proactiveemitter import ProactiveEmitter, ProactiveEvent
 from freeman.agent.signalingestion import (
     ManualSignalSource,
@@ -51,6 +52,8 @@ __all__ = [
     "MultiDomainWorld",
     "ObligationQueue",
     "ParameterEstimator",
+    "PolicyEvalResult",
+    "PolicyEvaluator",
     "ProactiveEmitter",
     "ProactiveEvent",
     "RSSSignalSource",

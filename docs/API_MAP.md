@@ -94,6 +94,10 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `ReconciliationResult`
   - `Reconciler`
   - `update_self_model()`
+- Epistemic memory:
+  - `EpistemicLog`
+  - `EpistemicLog.domain_mae()`
+  - `EpistemicLog.domain_weight()`
 
 ### `freeman.agent`
 
@@ -105,6 +109,9 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `AnalysisPipelineConfig`
   - `AnalysisPipelineResult`
   - `AnalysisPipeline.update()`
+- Counterfactual planning:
+  - `PolicyEvaluator`
+  - `PolicyEvalResult`
 - Dynamic calibration:
   - `ParameterEstimator`
 - Forecasts:
@@ -167,6 +174,8 @@ This is the implementation-facing map of modules, classes, and primary functions
 
 - `SimConfig`
 - `GameRunner`
+- `GameRunner.prepare()`
+- `GameRunner.run_prepared()`
 - `SimResult`
 
 ### `freeman.llm`
@@ -391,10 +400,18 @@ print(result.decisions, result.proactive_events)
 ### End-to-end pipeline
 
 ```python
-from freeman.agent.analysispipeline import AnalysisPipeline
+from freeman.agent import AnalysisPipeline, PolicyEvaluator
+from freeman.game.runner import SimConfig
 
 pipeline = AnalysisPipeline()
 result = pipeline.run(schema, policies=[])
+
+planner = PolicyEvaluator(sim_config=SimConfig(max_steps=8))
+ranked = pipeline.run(
+    schema,
+    policy_evaluator=planner,
+    candidate_policies=[policy_a, policy_b, policy_c],
+).policy_ranking
 ```
 
 ### Compile validation

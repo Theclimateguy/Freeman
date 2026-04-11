@@ -175,6 +175,45 @@ class EpistemicLog:
 
         return [record.prompt_payload() for record in self.relevant_for_world(world, limit=limit)]
 
+    def domain_mae(self, domain_id: str, *, fallback: float = 0.0) -> float:
+        """Return the rolling mean absolute error for one domain when available."""
+
+        self_observations = self.knowledge_graph.query(
+            node_type="self_observation",
+            metadata_filters={"domain_id": str(domain_id)},
+        )
+        weighted_abs_error = 0.0
+        total_forecasts = 0.0
+        for node in self_observations:
+            mean_abs_error = float(node.metadata.get("mean_abs_error", 0.0))
+            n_forecasts = max(float(node.metadata.get("n_forecasts", 0.0)), 0.0)
+            if n_forecasts <= 0.0:
+                continue
+            weighted_abs_error += mean_abs_error * n_forecasts
+            total_forecasts += n_forecasts
+        if total_forecasts > 0.0:
+            return float(weighted_abs_error / total_forecasts)
+
+        records = self.query(domain_id=domain_id)
+        if records:
+            return float(sum(record.abs_error for record in records) / len(records))
+        return float(fallback)
+
+    def domain_weight(self, domain_id: str, *, fallback: float = 1.0) -> float:
+        """Return an inverse-noise epistemic weight from the domain MAE."""
+
+        has_self_observation = bool(
+            self.knowledge_graph.query(
+                node_type="self_observation",
+                metadata_filters={"domain_id": str(domain_id)},
+            )
+        )
+        has_records = bool(self.query(domain_id=domain_id, limit=1))
+        if not has_self_observation and not has_records:
+            return float(fallback)
+        mae = max(self.domain_mae(domain_id, fallback=0.0), 0.0)
+        return float(1.0 / (1.0 + mae))
+
 
 __all__ = [
     "EpistemicLog",

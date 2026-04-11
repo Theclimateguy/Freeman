@@ -346,6 +346,48 @@ If semantic memory is enabled, step 5 is preceded by retrieval-bounded context s
 3. expand by one hop in the NetworkX graph
 4. cap the resulting context to the configured token budget
 
+### Counterfactual Policy Planning
+
+`freeman.agent.policyevaluator.PolicyEvaluator` adds short-horizon Dyna-style planning on top of the same deterministic simulator. For a candidate policy bundle $\pi$, Freeman computes:
+
+$$
+U(\pi) = \frac{\sum_o p(o \mid \pi) z_o}{\bar{|z|} + \varepsilon},
+\qquad
+w_d = \frac{1}{1 + \mathrm{MAE}_d},
+\qquad
+J(\pi) = w_d \, U(\pi)
+$$
+
+where $z_o$ are the simulator raw outcome scores, $p(o \mid \pi)$ is the counterfactual outcome distribution, and $\mathrm{MAE}_d$ is the rolling domain forecast error stored in epistemic/self-model memory.
+
+Hard verifier failures are treated as feasibility constraints rather than as a soft penalty. Ranking is therefore lexicographic:
+
+1. fewer hard violations
+2. fewer soft violations
+3. larger epistemically weighted utility $J(\pi)$
+4. higher confidence as a tie-breaker
+
+To keep planning cheap enough for repeated and multi-domain use, the evaluator applies three bounds:
+
+- short planning horizon $H_{\text{plan}}$ with default `min(sim.max_steps, 8)`
+- one shared policy-invariant preparation pass per world (`level1` + fixed point) reused across all branches
+- early stop when the outcome distribution stabilizes before the horizon
+
+This changes the branch-comparison cost from naive
+
+$$
+O\!\left(K\left(C_{\mathrm{prep}} + H C_{\mathrm{step}}\right)\right)
+$$
+
+to
+
+$$
+O\!\left(C_{\mathrm{prep}} + \sum_{\pi=1}^{K} \tau_\pi C_{\mathrm{step}}\right),
+\qquad \tau_\pi \le H_{\text{plan}}
+$$
+
+which is the main reason counterfactual planning remains tractable even when several policy branches must be compared.
+
 ### Signal Ingestion
 
 `freeman.agent.signalingestion` supports normalized source adapters:

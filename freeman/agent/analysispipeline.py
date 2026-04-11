@@ -17,6 +17,7 @@ from freeman.agent.epistemic import (
     detect_belief_conflict,
     extract_reference_outcome_probs,
 )
+from freeman.agent.policyevaluator import PolicyEvalResult, PolicyEvaluator
 from freeman.agent.proactiveemitter import ProactiveEmitter, ProactiveEvent
 
 from freeman.core.compilevalidator import CompileValidator, OperatorFitReport
@@ -48,6 +49,7 @@ class AnalysisPipelineResult:
     reconciliation: ReconciliationResult | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     proactive_events: List[ProactiveEvent] = field(default_factory=list)
+    policy_ranking: List[PolicyEvalResult] = field(default_factory=list)
 
 
 @dataclass
@@ -105,6 +107,8 @@ class AnalysisPipeline:
         schema: Dict[str, Any] | WorldState,
         *,
         policies: Iterable[Policy | Dict[str, Any]] = (),
+        candidate_policies: Iterable[Any] = (),
+        policy_evaluator: PolicyEvaluator | None = None,
         session_log: SessionLog | None = None,
     ) -> AnalysisPipelineResult:
         """Run the full compile/simulate/verify/score/update workflow."""
@@ -140,6 +144,8 @@ class AnalysisPipeline:
         return self._run_world(
             world,
             policies=policies,
+            candidate_policies=candidate_policies,
+            policy_evaluator=policy_evaluator,
             session_log=session_log,
             extra_summary_metadata=extra_summary_metadata or None,
         )
@@ -150,6 +156,8 @@ class AnalysisPipeline:
         parameter_vector: ParameterVector,
         *,
         policies: Iterable[Policy | Dict[str, Any]] = (),
+        candidate_policies: Iterable[Any] = (),
+        policy_evaluator: PolicyEvaluator | None = None,
         signal_text: str | None = None,
         session_log: SessionLog | None = None,
     ) -> AnalysisPipelineResult:
@@ -166,6 +174,8 @@ class AnalysisPipeline:
         return self._run_world(
             world,
             policies=policies,
+            candidate_policies=candidate_policies,
+            policy_evaluator=policy_evaluator,
             session_log=session_log,
             prior_outcome_probs=score_outcomes(previous_world),
             update_signal_text=signal_text,
@@ -177,6 +187,8 @@ class AnalysisPipeline:
         world: WorldState,
         *,
         policies: Iterable[Policy | Dict[str, Any]] = (),
+        candidate_policies: Iterable[Any] = (),
+        policy_evaluator: PolicyEvaluator | None = None,
         session_log: SessionLog | None = None,
         prior_outcome_probs: Dict[str, float] | None = None,
         update_signal_text: str | None = None,
@@ -189,6 +201,12 @@ class AnalysisPipeline:
             policy if isinstance(policy, Policy) else Policy.from_snapshot(policy)
             for policy in policies
         ]
+        policy_ranking = (
+            policy_evaluator.evaluate(world.clone(), candidate_policies)
+            if policy_evaluator is not None
+            else []
+        )
+        policy_ranking_payload = [result.snapshot() for result in policy_ranking]
         sim_result = self.runner.run(world.clone(), policy_objects)
         final_world = WorldState.from_snapshot(sim_result.trajectory[-1])
         raw_scores = raw_outcome_scores(final_world)
@@ -253,6 +271,7 @@ class AnalysisPipeline:
                 "disagreement_snapshot": disagreement_snapshot,
                 "parameter_effect_trace": parameter_effect_trace,
                 "parameter_effect_mismatches": parameter_effect_mismatches,
+                "policy_ranking": policy_ranking_payload,
                 **(extra_summary_metadata or {}),
             },
         )
@@ -364,8 +383,10 @@ class AnalysisPipeline:
                 "belief_conflicts": belief_conflicts,
                 "parameter_effect_trace": parameter_effect_trace,
                 "parameter_effect_mismatches": parameter_effect_mismatches,
+                "policy_ranking": policy_ranking_payload,
                 **(extra_summary_metadata or {}),
             },
+            policy_ranking=policy_ranking,
         )
         if self.emitter is not None:
             prev_probs = self._previous_outcome_probs.get(final_world.domain_id)
