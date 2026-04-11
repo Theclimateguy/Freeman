@@ -5,7 +5,10 @@ from freeman_connectors.http import HTTPJSONSignalSource
 from freeman_connectors.rss import ArxivSignalSource, RSSFeedSignalSource
 from freeman_connectors.web import WebPageSignalSource
 
+__version__ = "1.0.0"
+
 __all__ = [
+    "__version__",
     "ArxivSignalSource",
     "HTTPJSONSignalSource",
     "RSSFeedSignalSource",
