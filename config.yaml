@@ -55,6 +55,7 @@ runtime:
   checkpoint_every_n_events: 25
   checkpoint_every_n_seconds: 300
   runtime_path: "./data/runtime"
+  event_log_path: "./data/runtime/event_log.jsonl"
   resume_on_start: true
 
 consciousness:

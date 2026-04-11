@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from freeman.agent.consciousness import ConsciousState
+from freeman.interface.cli import main
 from freeman.memory.knowledgegraph import KnowledgeGraph
 from freeman.memory.selfmodel import SelfModelGraph
 from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
+import yaml
 
 
 def _state(tmp_path) -> ConsciousState:
@@ -106,6 +110,41 @@ def test_replay_from_checkpoint_plus_events(tmp_path) -> None:
     assert runtime_second_leg.state == original_runtime.state
 
 
+def test_event_log_lookup_after_restart(tmp_path) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    state = _state(tmp_path)
+    runtime = AgentRuntime(state=state, signals=_signals()[:2], runtime_path=runtime_path)
+
+    runtime.run_oneshot()
+
+    event_log = EventLog(runtime_path / "event_log.jsonl")
+    restored = EventLog(runtime_path / "event_log.jsonl")
+    event = restored.lookup("trace:signal:s2")
+
+    assert event_log.path.exists()
+    assert event is not None
+    assert event.event_id == "trace:signal:s2"
+
+
+def test_replay_from_checkpoint_plus_event_log(tmp_path) -> None:
+    signals = _signals()
+    original_state = _state(tmp_path / "original")
+    original_runtime = AgentRuntime(state=original_state, signals=signals, runtime_path=tmp_path / "original")
+    original_runtime.run_oneshot()
+
+    checkpoint_runtime_path = Path(tmp_path) / "checkpoint-runtime"
+    partial_state = _state(tmp_path / "partial")
+    partial_runtime = AgentRuntime(state=partial_state, signals=signals[:2], runtime_path=checkpoint_runtime_path)
+    partial_runtime.run_oneshot()
+    CheckpointManager().save(partial_runtime.state, checkpoint_runtime_path / "checkpoint.json")
+
+    event_log = EventLog(checkpoint_runtime_path / "event_log.jsonl")
+    event_log.append(original_runtime.state.trace_state[2])
+    replayed = event_log.replay(CheckpointManager().load(checkpoint_runtime_path / "checkpoint.json"))
+
+    assert replayed == original_runtime.state
+
+
 def test_duplicate_signal_no_double_mutation(tmp_path) -> None:
     state = _state(tmp_path)
     runtime = AgentRuntime(
@@ -117,3 +156,37 @@ def test_duplicate_signal_no_double_mutation(tmp_path) -> None:
     runtime.run_oneshot()
 
     assert [event.event_id for event in state.trace_state] == ["trace:signal:s1"]
+
+
+def test_explain_cli_resolves_from_event_log(tmp_path, capsys) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    state = _state(tmp_path)
+    runtime = AgentRuntime(state=state, signals=_signals()[:1], runtime_path=runtime_path)
+    runtime.run_oneshot()
+    CheckpointManager().save(state, runtime_path / "checkpoint.json")
+
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "memory": {
+                    "json_path": str(Path(tmp_path) / "kg.json"),
+                    "session_log_path": str(Path(tmp_path) / "sessions"),
+                },
+                "runtime": {
+                    "runtime_path": str(runtime_path),
+                    "event_log_path": str(runtime_path / "event_log.jsonl"),
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["--config", str(config_path), "explain", "--trace-id", "trace:signal:s1"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["found"] is True
+    assert payload["explanation"]

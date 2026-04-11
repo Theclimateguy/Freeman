@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable
 
 from freeman.agent.consciousness import ConsciousState, TraceEvent
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
 
 
@@ -27,6 +28,7 @@ class AgentRuntime:
         signals: Iterable[dict[str, Any]] = (),
         cursor_store: StreamCursorStore | None = None,
         checkpoint_manager: CheckpointManager | None = None,
+        event_log: EventLog | None = None,
         runtime_path: Path | None = None,
         process_signal: Callable[[ConsciousState, dict[str, Any]], None] | None = None,
     ) -> None:
@@ -35,6 +37,7 @@ class AgentRuntime:
         self.cursor_store = cursor_store or StreamCursorStore()
         self.checkpoint_manager = checkpoint_manager or CheckpointManager()
         self.runtime_path = Path(runtime_path or ".").resolve()
+        self._event_log = event_log or EventLog(self.runtime_path / "event_log.jsonl")
         self.process_signal = process_signal or self._default_process_signal
         self._stop_requested = False
 
@@ -94,6 +97,8 @@ class AgentRuntime:
             rationale=f"processed signal {signal_id}",
         )
         self.state.trace_state.append(event)
+        if self._event_log is not None:
+            self._event_log.append(event)
         self.cursor_store.commit(signal_id)
 
     def _default_process_signal(self, state: ConsciousState, signal_payload: dict[str, Any]) -> None:

@@ -678,6 +678,7 @@ Implemented endpoints:
 - default path: `runs/memory/knowledge_graph.json`
 - session logs are JSON-serializable via `SessionLog.save()`
 - local runtime checkpoints are managed by `freeman.runtime.checkpoint.CheckpointManager`
+- append-only runtime trace events are stored in `config.yaml -> runtime.event_log_path`
 - committed stream ids are persisted by `freeman.runtime.stream.StreamCursorStore`
 - replayable consciousness traces live in `ConsciousState.trace_state` and are included in checkpoint payloads
 

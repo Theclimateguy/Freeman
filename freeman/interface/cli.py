@@ -33,6 +33,8 @@ from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import SessionLog
 from freeman.memory.vectorstore import KGVectorStore
+from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.event_log import EventLog
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "agent": {
@@ -94,6 +96,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "checkpoint_every_n_events": 25,
         "checkpoint_every_n_seconds": 300,
         "runtime_path": "./data/runtime",
+        "event_log_path": "./data/runtime/event_log.jsonl",
         "resume_on_start": True,
     },
     "consciousness": {
@@ -181,6 +184,16 @@ def _add_config_option(command_parser: argparse.ArgumentParser) -> None:
 def _memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
     memory_cfg = config.get("memory", {})
     return _resolve_path(config_path.parent, memory_cfg.get("json_path"), "./data/kg_state.json")
+
+
+def _runtime_path(config: dict[str, Any], *, config_path: Path) -> Path:
+    runtime_cfg = config.get("runtime", {})
+    return _resolve_path(config_path.parent, runtime_cfg.get("runtime_path"), "./data/runtime")
+
+
+def _event_log_path(config: dict[str, Any], *, config_path: Path) -> Path:
+    runtime_cfg = config.get("runtime", {})
+    return _resolve_path(config_path.parent, runtime_cfg.get("event_log_path"), "./data/runtime/event_log.jsonl")
 
 
 def _build_vectorstore(config: dict[str, Any], *, config_path: Path) -> KGVectorStore | None:
@@ -767,8 +780,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "explain":
-        state = build_identity_state(knowledge_graph)
-        trace_slice = [event for event in state.trace_state if event.event_id == args.trace_id]
+        runtime_path = _runtime_path(config, config_path=config_path)
+        checkpoint_path = runtime_path / "checkpoint.json"
+        event_log = EventLog(_event_log_path(config, config_path=config_path))
+        event = event_log.lookup(args.trace_id)
+        if event is not None:
+            trace_slice = [event]
+        elif checkpoint_path.exists():
+            checkpoint_state = CheckpointManager().load(checkpoint_path)
+            trace_slice = [item for item in checkpoint_state.trace_state if item.event_id == args.trace_id]
+        else:
+            trace_slice = []
         renderer = ExplanationRenderer(_build_chat_client(config)[0])
         _print_json(
             {
