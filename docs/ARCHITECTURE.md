@@ -115,16 +115,16 @@ flowchart LR
 The simulator now supports a universal dynamic calibration layer:
 
 $$
-\Theta_t = \{\text{outcome\_modifiers}, \text{shock\_decay}, \text{edge\_weight\_deltas}\}
+\Theta_t = \{\alpha_t, \lambda_t, \Delta W_t\}
 $$
 
 `ParameterVector` is stored directly on the world state and is preserved by snapshot/clone operations. It lets the system recalibrate a world at `T_1` without rewriting the base ontology generated at `T_0`.
 
 Its three active channels are:
 
-- outcome-level multiplicative scaling
-- global decay of previously accumulated shock state
-- additive adjustment of causal edge weights in resource and actor-state updates
+- $\alpha_t$: outcome-level multiplicative scaling, implemented as `outcome_modifiers`
+- $\lambda_t$: global decay of previously accumulated shock state, implemented as `shock_decay`
+- $\Delta W_t$: additive adjustment of causal edge weights in resource and actor-state updates, implemented as `edge_weight_deltas`
 
 ### Outcome Scoring
 
