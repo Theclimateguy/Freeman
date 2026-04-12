@@ -3,9 +3,14 @@ agent:
   budget_usd_per_day: 0.5
   source_refresh_seconds: 300
   sources: []
+  stream_keywords: []
   bootstrap:
+    mode: "schema_path"
     schema_path:
     policies_path:
+    fallback_schema_path:
+    domain_brief_path:
+    domain_brief: ""
 
 llm:
   provider: ""

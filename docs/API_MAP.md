@@ -198,12 +198,13 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `CheckpointManager`
 - `EventLog`
 - `StreamCursorStore`
-- `climate_stream.main()` (RSS + Ollama long-run loop)
+- `stream_runtime.main()` (generic daemon-like long-run loop)
 
 ### `scripts`
 
 - Live evaluation:
   - `scripts/run_real_llm_e2e.py`
+  - legacy pre-daemon evaluation harness
   - real-LLM signal classification
   - template shock inference
   - simulation interpretation
@@ -261,8 +262,12 @@ Command:
 
 Runtime command:
 
-- `python -m freeman.runtime.climate_stream --config-path config.climate.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --resume --model auto`
-  - long local RSS ingestion with deterministic checkpoint/resume and local Ollama (`chat_json`) updates
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --resume --model auto`
+  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, due-forecast verification, synchronous consciousness refresh, and configurable source adapters
+- `python -m freeman.runtime.stream_runtime --config-path config.climate.yaml --hours 8 --resume --model auto`
+  - the same daemon runtime with a climate-oriented example config
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --resume --model auto`
+  - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package, then run the same daemon loop
 
 ## Benchmark Map
 

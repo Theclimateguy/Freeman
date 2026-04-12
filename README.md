@@ -135,16 +135,55 @@ freeman rerun-domain world_override.json --max-steps 10 --output-path rerun.json
 freeman diff-domain world.json rerun.json --output-path diff.json --config-path config.yaml
 ```
 
-Long local stream run (climate RSS + Ollama):
+Long local stream run (generic daemon-like runtime):
 
 ```bash
-python -m freeman.runtime.climate_stream \
-  --config-path config.climate.yaml \
+python -m freeman.runtime.stream_runtime \
+  --config-path config.yaml \
   --schema-path freeman/domain/profiles/gim15.json \
   --hours 8 \
   --resume \
   --model auto
 ```
+
+Domain-agnostic bootstrap from a natural-language brief:
+
+```bash
+python -m freeman.runtime.stream_runtime \
+  --config-path config.yaml \
+  --bootstrap-mode llm_synthesize \
+  --domain-brief-path domain_brief.md \
+  --hours 8 \
+  --resume \
+  --model auto
+```
+
+The same daemon runtime can be tested on climate RSS by swapping only the config:
+
+```bash
+python -m freeman.runtime.stream_runtime \
+  --config-path config.climate.yaml \
+  --hours 8 \
+  --resume \
+  --model auto
+```
+
+The daemon runtime reads `agent.sources` from config, polls them on the configured interval, and processes a persistent pending queue between polls (plus ex-post forecast verification on each world update). Domain behavior now lives in config and schema/bootstrap inputs, not in separate runtime entrypoints.
+
+It supports two bootstrap modes:
+
+- `schema_path`: start from an explicit schema such as `freeman/domain/profiles/gim15.json`
+- `llm_synthesize`: use the built-in Freeman orchestrator to synthesize and repair a domain schema from a natural-language brief before the stream loop starts
+
+For local models, `llm_synthesize` can fall back to a configured `fallback_schema_path` when the model fails to produce a verifier-clean package.
+
+The consciousness layer stays deterministic. It does not read narrative text back into state. Instead it projects:
+
+- `goal_state` from schema semantics and world polarity
+- `active_hypothesis` from the current posterior over outcomes
+- `identity_trait` and `self_capability` from verified forecast error (`self_observation`)
+
+This keeps the separation strict: `ConsciousState -> LLM -> external world`, never the reverse.
 
 ## Main Commands
 
@@ -189,7 +228,7 @@ This advanced path is the right place if you want an agent that reacts to incomi
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
 - Benchmark notes: [docs/FAAB.md](docs/FAAB.md)
-- Live end-to-end evaluation: [docs/REAL_LLM_E2E.md](docs/REAL_LLM_E2E.md)
+- Legacy live end-to-end evaluation artifact: [docs/REAL_LLM_E2E.md](docs/REAL_LLM_E2E.md)
 
 ## Notes
 

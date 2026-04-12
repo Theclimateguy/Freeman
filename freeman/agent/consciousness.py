@@ -163,13 +163,15 @@ class ConsciousnessEngine:
 
         self.state.self_model_ref = SelfModelGraph(kg)
         self.state.world_ref = f"world:{pipeline_result.world.domain_id}:{pipeline_result.world.t}"
-        self.state.runtime_metadata["last_domain_id"] = str(pipeline_result.world.domain_id)
-        self.state.runtime_metadata["last_world_step"] = int(pipeline_result.world.t)
 
-        for operator in (
-            self._capability_review,
-            self._attention_rebalance,
-            self._trait_consolidation,
+        for operator_name, operator in (
+            ("sync_runtime_metrics", lambda: self._sync_runtime_metrics(pipeline_result)),
+            ("project_goal_state", lambda: self._project_goal_state(pipeline_result)),
+            ("project_active_hypotheses", lambda: self._project_active_hypotheses(pipeline_result)),
+            ("project_identity_traits", self._project_identity_traits),
+            ("capability_review", self._capability_review),
+            ("attention_rebalance", self._attention_rebalance),
+            ("trait_consolidation", self._trait_consolidation),
         ):
             raw_diff = operator()
             rationale = str(raw_diff.get("rationale", "no change"))
@@ -180,7 +182,7 @@ class ConsciousnessEngine:
             }
             self._apply_diff(clean_diff)
             self._write_trace(
-                operator=operator.__name__.lstrip("_"),
+                operator=operator_name,
                 diff=clean_diff,
                 trigger_type="manual",
                 transition_type="external",
@@ -189,6 +191,259 @@ class ConsciousnessEngine:
         if self.state.trace_state:
             self.state.runtime_metadata["last_update_at"] = self.state.trace_state[-1].timestamp.isoformat()
         return self.state
+
+    def refresh_after_epistemic_update(
+        self,
+        *,
+        world_ref: str,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> ConsciousState:
+        """Recompute self-model operators after forecast verification updates the KG."""
+
+        self.state.world_ref = str(world_ref)
+        for operator_name, operator in (
+            (
+                "epistemic_refresh",
+                (
+                    lambda: {
+                        "runtime_metadata": deep_copy_jsonable(runtime_metadata or {}),
+                        "rationale": "epistemic refresh",
+                    }
+                    if runtime_metadata
+                    else {"rationale": "no change"}
+                ),
+            ),
+            ("project_identity_traits", self._project_identity_traits),
+            ("capability_review", self._capability_review),
+            ("attention_rebalance", self._attention_rebalance),
+            ("trait_consolidation", self._trait_consolidation),
+        ):
+            raw_diff = operator()
+            rationale = str(raw_diff.get("rationale", "no change"))
+            clean_diff = {
+                key: value
+                for key, value in raw_diff.items()
+                if key != "rationale" and value not in ({}, [], None)
+            }
+            self._apply_diff(clean_diff)
+            self._write_trace(
+                operator=operator_name,
+                diff=clean_diff,
+                trigger_type="manual",
+                transition_type="external",
+                rationale=rationale if clean_diff else "no change",
+            )
+        if self.state.trace_state:
+            self.state.runtime_metadata["last_update_at"] = self.state.trace_state[-1].timestamp.isoformat()
+        return self.state
+
+    def _sync_runtime_metrics(self, pipeline_result: Any) -> dict[str, Any]:
+        disagreement_snapshot = deep_copy_jsonable(pipeline_result.metadata.get("disagreement_snapshot", {}))
+        confidence_gap = 0.0
+        if disagreement_snapshot:
+            confidence_gap = max(
+                abs(float(payload.get("confidence_weighted_gap", 0.0)))
+                for payload in disagreement_snapshot.values()
+            )
+        return {
+            "runtime_metadata": {
+                "last_domain_id": str(pipeline_result.world.domain_id),
+                "last_world_step": int(pipeline_result.world.t),
+                "last_dominant_outcome": str(pipeline_result.dominant_outcome or ""),
+                "confidence_gap": float(confidence_gap),
+            },
+            "rationale": "synced runtime metrics from pipeline result",
+        }
+
+    def _project_goal_state(self, pipeline_result: Any) -> dict[str, Any]:
+        final_probs = {
+            str(outcome_id): float(probability)
+            for outcome_id, probability in pipeline_result.simulation.get("final_outcome_probs", {}).items()
+        }
+        desired_outcomes = self._desired_goal_outcomes(
+            pipeline_result.world.metadata,
+            pipeline_result.raw_scores,
+            available_outcomes=set(pipeline_result.world.outcomes),
+        )
+        if not desired_outcomes:
+            return {"rationale": "no change"}
+
+        nodes: list[dict[str, Any]] = []
+        goal_ids: list[str] = []
+        remove_node_ids = [
+            node.node_id
+            for node in self.state.self_model_ref.get_nodes_by_type("goal_state")
+            if str(node.domain or "") == str(pipeline_result.world.domain_id)
+        ]
+        for outcome_id in desired_outcomes:
+            node_id = f"sm:goal_state:{pipeline_result.world.domain_id}:{outcome_id}"
+            urgency = min(max(1.0 - float(final_probs.get(outcome_id, 0.0)), 0.0), 1.0)
+            existing = self._node_by_id(node_id)
+            node = SelfModelNode(
+                node_id=node_id,
+                node_type="goal_state",
+                domain=str(pipeline_result.world.domain_id),
+                payload={
+                    "domain": str(pipeline_result.world.domain_id),
+                    "outcome_id": outcome_id,
+                    "current_probability": float(final_probs.get(outcome_id, 0.0)),
+                    "urgency": urgency,
+                },
+                confidence=max(urgency, 1.0e-6),
+                created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0),
+                updated_at=datetime.now(timezone.utc).replace(microsecond=0),
+                source_trace_id=self.state.trace_state[-1].event_id if self.state.trace_state else None,
+            )
+            if self._node_changed(existing, node):
+                nodes.append(node.to_dict())
+            goal_ids.append(node_id)
+            if node_id in remove_node_ids:
+                remove_node_ids.remove(node_id)
+        diff: dict[str, Any] = {
+            "goal_state": goal_ids,
+            "rationale": "projected goal state from schema semantics",
+        }
+        if nodes:
+            diff["nodes"] = nodes
+        if remove_node_ids:
+            diff["remove_node_ids"] = remove_node_ids
+        return diff
+
+    def _project_active_hypotheses(self, pipeline_result: Any) -> dict[str, Any]:
+        final_probs = {
+            str(outcome_id): float(probability)
+            for outcome_id, probability in pipeline_result.simulation.get("final_outcome_probs", {}).items()
+        }
+        if not final_probs:
+            return {"rationale": "no change"}
+
+        domain_id = str(pipeline_result.world.domain_id)
+        selected = {
+            outcome_id: probability
+            for outcome_id, probability in final_probs.items()
+            if probability >= 0.15
+        }
+        if not selected:
+            outcome_id = max(final_probs, key=final_probs.get)
+            selected = {outcome_id: final_probs[outcome_id]}
+
+        stale_node_ids = [
+            node.node_id
+            for node in self.state.self_model_ref.get_nodes_by_type("active_hypothesis")
+            if str(node.domain or "") == domain_id
+        ]
+        nodes: list[dict[str, Any]] = []
+        active_ids: list[str] = []
+        for outcome_id, probability in sorted(selected.items()):
+            node_id = f"sm:active_hypothesis:{domain_id}:{outcome_id}"
+            existing = self._node_by_id(node_id)
+            age_steps = 0.0
+            if existing is not None and str(existing.payload.get("outcome_id", "")) == outcome_id:
+                prior_probability = float(existing.payload.get("probability", existing.confidence))
+                age_steps = 0.0 if abs(prior_probability - probability) > 1.0e-6 else float(existing.payload.get("age_steps", 0.0))
+            node = SelfModelNode(
+                node_id=node_id,
+                node_type="active_hypothesis",
+                domain=domain_id,
+                payload={
+                    "domain": domain_id,
+                    "outcome_id": outcome_id,
+                    "probability": probability,
+                    "analysis_node_id": f"analysis:{domain_id}:{pipeline_result.world.t}",
+                    "age_steps": age_steps,
+                    "last_world_step": int(pipeline_result.world.t),
+                },
+                confidence=probability,
+                created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0),
+                updated_at=datetime.now(timezone.utc).replace(microsecond=0),
+                source_trace_id=self.state.trace_state[-1].event_id if self.state.trace_state else None,
+            )
+            if self._node_changed(existing, node):
+                nodes.append(node.to_dict())
+            active_ids.append(node_id)
+            if node_id in stale_node_ids:
+                stale_node_ids.remove(node_id)
+
+        edges: list[dict[str, Any]] = []
+        hypothesis_ids = sorted(active_ids)
+        for index, left_id in enumerate(hypothesis_ids):
+            for right_id in hypothesis_ids[index + 1 :]:
+                edge_id = f"sm-edge:contradicts:{left_id}:{right_id}"
+                edge = {
+                    "edge_id": edge_id,
+                    "edge_type": "contradicts",
+                    "source_id": left_id,
+                    "target_id": right_id,
+                    "weight": 1.0,
+                    "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                    "trace_id": self.state.trace_state[-1].event_id if self.state.trace_state else None,
+                }
+                if not self._edge_exists(edge_id):
+                    edges.append(edge)
+
+        diff: dict[str, Any] = {"rationale": "projected posterior into active hypotheses"}
+        if nodes:
+            diff["nodes"] = nodes
+        if edges:
+            diff["edges"] = edges
+        if stale_node_ids:
+            diff["remove_node_ids"] = stale_node_ids
+        return diff
+
+    def _project_identity_traits(self) -> dict[str, Any]:
+        per_domain: dict[str, dict[str, float]] = {}
+        for node in self.state.self_model_ref.knowledge_graph.query(node_type="self_observation"):
+            domain_id = str(node.metadata.get("domain_id", "")).strip()
+            if not domain_id:
+                continue
+            n_forecasts = max(float(node.metadata.get("n_forecasts", 0.0)), 0.0)
+            if n_forecasts <= 0.0:
+                continue
+            stats = per_domain.setdefault(
+                domain_id,
+                {"weighted_mae": 0.0, "weighted_bias": 0.0, "n": 0.0},
+            )
+            stats["weighted_mae"] += float(node.metadata.get("mean_abs_error", 0.0)) * n_forecasts
+            stats["weighted_bias"] += float(node.metadata.get("bias", 0.0)) * n_forecasts
+            stats["n"] += n_forecasts
+
+        if not per_domain:
+            return {"rationale": "no change"}
+
+        nodes: list[dict[str, Any]] = []
+        for domain_id, stats in sorted(per_domain.items()):
+            mae = stats["weighted_mae"] / max(stats["n"], 1.0)
+            bias = stats["weighted_bias"] / max(stats["n"], 1.0)
+            node_id = f"sm:identity_trait:calibration:{domain_id}"
+            existing = self._node_by_id(node_id)
+            previous_mae = float(existing.payload.get("mean_abs_error", mae)) if existing is not None else mae
+            trait_support = (
+                float(existing.payload.get("trait_support", existing.confidence))
+                if existing is not None
+                else min(max(1.0 - mae, 0.0), 1.0)
+            )
+            node = SelfModelNode(
+                node_id=node_id,
+                node_type="identity_trait",
+                domain=domain_id,
+                payload={
+                    "domain": domain_id,
+                    "trait_key": "calibration",
+                    "trait_support": trait_support,
+                    "pattern_observed": mae <= 0.25,
+                    "delta_mae": mae - previous_mae,
+                    "mean_abs_error": mae,
+                    "mean_bias": bias,
+                    "n_forecasts": int(stats["n"]),
+                },
+                confidence=trait_support,
+                created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0),
+                updated_at=datetime.now(timezone.utc).replace(microsecond=0),
+                source_trace_id=self.state.trace_state[-1].event_id if self.state.trace_state else None,
+            )
+            if self._node_changed(existing, node):
+                nodes.append(node.to_dict())
+        return {"nodes": nodes, "rationale": "projected calibration traits from verified forecasts" if nodes else "no change"}
 
     def maybe_deliberate(self, now: datetime) -> ConsciousState | None:
         """Run one internal deliberation act if the idle threshold is exceeded."""
@@ -513,6 +768,10 @@ class ConsciousnessEngine:
                 str(domain_id): float(weight)
                 for domain_id, weight in diff["attention_state"].items()
             }
+        if "goal_state" in diff:
+            self.state.goal_state = [str(node_id) for node_id in diff["goal_state"]]
+        if "runtime_metadata" in diff:
+            self.state.runtime_metadata.update(deep_copy_jsonable(diff["runtime_metadata"]))
 
     def _write_trace(
         self,
@@ -556,7 +815,42 @@ class ConsciousnessEngine:
         refs.extend(edge["edge_id"] for edge in diff.get("edges", []) if "edge_id" in edge)
         refs.extend(str(node_id) for node_id in diff.get("remove_node_ids", []))
         refs.extend(f"attention:{domain_id}" for domain_id in diff.get("attention_state", {}))
+        refs.extend(f"goal:{node_id}" for node_id in diff.get("goal_state", []))
+        refs.extend(f"runtime:{key}" for key in diff.get("runtime_metadata", {}))
         return refs
+
+    def _desired_goal_outcomes(
+        self,
+        world_metadata: dict[str, Any],
+        raw_scores: dict[str, float],
+        *,
+        available_outcomes: set[str],
+    ) -> list[str]:
+        for metadata_key in ("goal_outcome_ids", "preferred_outcomes"):
+            candidate = world_metadata.get(metadata_key)
+            if isinstance(candidate, list):
+                selected = [str(item) for item in candidate if str(item) in available_outcomes]
+                if selected:
+                    return sorted(dict.fromkeys(selected))
+        if available_outcomes == {"yes", "no"}:
+            polarity = str(world_metadata.get("domain_polarity", "positive")).strip().lower()
+            return ["no" if polarity == "negative" else "yes"]
+        if raw_scores:
+            return [str(max(raw_scores, key=raw_scores.get))]
+        return []
+
+    def _node_changed(self, existing: SelfModelNode | None, candidate: SelfModelNode) -> bool:
+        if existing is None:
+            return True
+        return (
+            existing.node_type != candidate.node_type
+            or existing.domain != candidate.domain
+            or existing.payload != candidate.payload
+            or abs(existing.confidence - candidate.confidence) > 1.0e-9
+        )
+
+    def _edge_exists(self, edge_id: str) -> bool:
+        return any(edge.edge_id == edge_id for edge in self.state.self_model_ref.get_edges_by_type("contradicts"))
 
     def _select_deliberation_act(self):
         tau_h = 50.0

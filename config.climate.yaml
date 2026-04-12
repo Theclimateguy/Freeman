@@ -1,6 +1,13 @@
+# Example config for testing the generic daemon runtime on climate RSS streams.
 agent:
-  source_refresh_seconds: 300
-  climate_keywords:
+  source_refresh_seconds: 600
+  bootstrap:
+    mode: "schema_path"
+    schema_path: "./freeman/domain/profiles/gim15.json"
+    fallback_schema_path: "./freeman/domain/profiles/gim15.json"
+    domain_brief_path: ""
+    domain_brief: ""
+  stream_keywords:
     - climate
     - warming
     - heatwave
@@ -45,7 +52,7 @@ memory:
 
 runtime:
   mode: "follow"
-  poll_interval_seconds: 300
+  poll_interval_seconds: 600
   checkpoint_every_n_events: 25
   checkpoint_every_n_seconds: 300
   runtime_path: "./data/runtime_climate"

@@ -1,5 +1,7 @@
 # FAAB Benchmark
 
+> Legacy note: this document describes a benchmark/research harness from an earlier Freeman iteration. It remains useful for evaluation history, but it is not the operational daemon runtime described in `docs/ARCHITECTURE.md`.
+
 FAAB is the Freeman Autonomous Analyst Benchmark: a longitudinal `T_0 -> T_1` evaluation designed to test whether the full Freeman stack uses memory, attention, and simulation to update its world model more effectively than simpler baselines.
 
 ## Objective

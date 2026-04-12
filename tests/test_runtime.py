@@ -13,6 +13,7 @@ from freeman.memory.knowledgegraph import KnowledgeGraph
 from freeman.memory.selfmodel import SelfModelGraph
 from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime import stream_runtime
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
 import yaml
@@ -190,3 +191,70 @@ def test_explain_cli_resolves_from_event_log(tmp_path, capsys) -> None:
     assert exit_code == 0
     assert payload["found"] is True
     assert payload["explanation"]
+
+
+def test_stream_runtime_llm_bootstrap_falls_back_to_schema(tmp_path, monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    fallback_schema = repo_root / "freeman" / "domain" / "profiles" / "gim15.json"
+    runtime_path = Path(tmp_path) / "runtime"
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {
+                    "bootstrap": {
+                        "mode": "llm_synthesize",
+                        "fallback_schema_path": str(fallback_schema),
+                        "domain_brief": "Compact climate-risk domain for deterministic fallback testing.",
+                    },
+                    "sources": [{"type": "rss", "url": "https://example.invalid/feed.xml"}],
+                },
+                "llm": {
+                    "provider": "ollama",
+                    "model": "fake-model",
+                    "base_url": "http://127.0.0.1:11434",
+                    "timeout_seconds": 1.0,
+                },
+                "memory": {"json_path": str(kg_path)},
+                "runtime": {
+                    "runtime_path": str(runtime_path),
+                    "event_log_path": str(runtime_path / "event_log.jsonl"),
+                },
+                "sim": {"max_steps": 2},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeClient:
+        def repair_schema(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("repair_schema should not be called directly in fallback test")
+
+    monkeypatch.setattr(stream_runtime, "_build_chat_client", lambda **kwargs: _FakeClient())
+    monkeypatch.setattr(stream_runtime, "_source_configs", lambda config, default_sources=None: [])
+    monkeypatch.setattr(
+        stream_runtime.DeepSeekFreemanOrchestrator,
+        "compile_and_repair",
+        lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("synthetic bootstrap failure")),
+    )
+
+    exit_code = stream_runtime.main(
+        [
+            "--config-path",
+            str(config_path),
+            "--hours",
+            "0.00005",
+            "--analysis-interval-seconds",
+            "0.1",
+            "--poll-seconds",
+            "60",
+            "--log-level",
+            "WARNING",
+        ]
+    )
+
+    payload = json.loads((runtime_path / "bootstrap_package.json").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["bootstrap_mode"] == "llm_synthesize_fallback"

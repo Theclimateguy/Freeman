@@ -11,7 +11,7 @@ Freeman is organized into seven layers:
 3. `freeman.memory`: long-term knowledge graph, semantic vector store, session log, confidence reconciliation, self-model feedback, `SelfModelGraph`.
 4. `freeman.agent`: signal ingestion, signal memory, obligation-driven attention scheduling, end-to-end analysis pipeline, forecast tracking, proactive emission, cost governance.
 5. `freeman.agent.consciousness`: `ConsciousState`, deterministic metacognitive operators, idle deliberation scheduling, trace generation.
-6. `freeman.runtime`: local foreground runtime, checkpointing, stream cursor persistence, and climate stream loop.
+6. `freeman.runtime`: local foreground runtime, checkpointing, stream cursor persistence, and generic daemon-like stream execution.
 7. `freeman.interface`: CLI, REST endpoints, identity/explanation views, export, override and diff utilities.
 
 ## High-Level Flow
@@ -347,12 +347,21 @@ flowchart LR
 
 After reconciliation, `AnalysisPipeline` now invokes `ConsciousnessEngine.post_pipeline_update()` without altering the pipeline result payload. The consciousness layer is deterministic and additive:
 
-1. read rolling `self_observation` nodes and derive `self_capability`
-2. rebalance `attention_focus`
-3. consolidate `identity_trait`
-4. append one `TraceEvent` per operator, including empty diffs with rationale `no change`
+1. sync runtime metrics such as `confidence_gap`
+2. project `goal_state` from schema semantics and world polarity
+3. project `active_hypothesis` from the current posterior over outcomes
+4. project `identity_trait` from verified forecast error history
+5. read rolling `self_observation` nodes and derive `self_capability`
+6. rebalance `attention_focus`
+7. consolidate `identity_trait`
+8. append one `TraceEvent` per operator, including empty diffs with rationale `no change`
 
 The resulting `ConsciousState` remains separate from the simulator output. LLM-facing components may render this state, but may not mutate it.
+
+Two design constraints matter here:
+
+- no raw LLM narrative is written back into `ConsciousState`
+- ex-post forecast verification is the only path that updates calibration-sensitive self-model inputs such as `self_observation` and derived `identity_trait`
 
 `IdleScheduler` and `ConsciousnessEngine.maybe_deliberate()` provide synchronous idle deliberation with no background threads. Internal acts currently include:
 
@@ -363,19 +372,28 @@ Both operate only on structured self-model state and emit trace entries for repl
 
 ### Runtime Stream Loop
 
-`freeman.runtime.climate_stream` provides an operational long-run loop for local learning on RSS climate signals.
+`freeman.runtime.stream_runtime` provides the operational daemon-like loop for local learning on arbitrary configured signal streams. Domain-specific behavior is supplied only through config (`agent.sources`, `agent.stream_keywords`) and bootstrap inputs, not through separate runtime modules.
+
+Bootstrap modes:
+
+- `schema_path`: compile a caller-supplied Freeman schema
+- `llm_synthesize`: run the existing Freeman orchestrator (`DeepSeekFreemanOrchestrator`) to synthesize, verify, and repair a schema from a natural-language brief, then persist `bootstrap_package.json`
 
 Flow:
 
-1. fetch signals from configured RSS sources (`freeman-connectors`)
-2. classify shock and trigger mode via `SignalIngestionEngine` + local `OllamaChatClient`
-3. on `ANALYZE/DEEP_DIVE`, estimate `ParameterVector` and run `AnalysisPipeline.update()`
-4. append trace events to `EventLog`
-5. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`)
+1. fetch signals from configured sources via adapters in `freeman-connectors`
+2. enqueue non-duplicate items into a persistent pending queue
+3. classify shock and trigger mode via `SignalIngestionEngine` + local `OllamaChatClient`
+4. on `ANALYZE/DEEP_DIVE`, estimate `ParameterVector` and run `AnalysisPipeline.update()`
+5. verify due forecasts (`ForecastRegistry.due`) against the current posterior and persist epistemic/self-model updates
+6. trigger a synchronous consciousness refresh so `self_capability` / `identity_trait` reflect the new verification state immediately
+7. append trace events to `EventLog`
+8. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`, `pending_signals.json`)
 
 Resume semantics:
 
 - `--resume` restores `ConsciousState`, `WorldState`, committed `signal_id` cursor set, and `SignalMemory`
+- `--resume` restores pending queue and forecast registry state
 - duplicate signals are suppressed by at-least-once + idempotent cursor dedup
 - shutdown on `SIGINT/SIGTERM` persists runtime state before exit
 

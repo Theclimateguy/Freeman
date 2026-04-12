@@ -201,6 +201,38 @@ def test_operator_writes_trace_event(tmp_path, water_market_schema) -> None:
     assert len(pipeline.conscious_state.trace_state) >= before + 1
 
 
+def test_pipeline_projects_goal_state_and_active_hypotheses(tmp_path, water_market_schema) -> None:
+    pipeline = AnalysisPipeline(
+        knowledge_graph=KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True),
+    )
+
+    result = pipeline.run(water_market_schema)
+
+    goal_nodes = pipeline.conscious_state.self_model_ref.get_nodes_by_type("goal_state")
+    hypothesis_nodes = pipeline.conscious_state.self_model_ref.get_nodes_by_type("active_hypothesis")
+
+    assert result.dominant_outcome is not None
+    assert pipeline.conscious_state.goal_state
+    assert goal_nodes
+    assert hypothesis_nodes
+
+
+def test_epistemic_refresh_projects_identity_traits_and_capability(tmp_path) -> None:
+    kg, state = _state_with_kg(tmp_path)
+    kg.add_node(_self_observation("water", mae=0.2, n_forecasts=12))
+    engine = ConsciousnessEngine(state, {})
+
+    refreshed = engine.refresh_after_epistemic_update(world_ref="world:water:12")
+
+    capability_nodes = refreshed.self_model_ref.get_nodes_by_type("self_capability")
+    trait_nodes = refreshed.self_model_ref.get_nodes_by_type("identity_trait")
+
+    assert capability_nodes
+    assert trait_nodes
+    assert capability_nodes[0].domain == "water"
+    assert trait_nodes[0].domain == "water"
+
+
 def test_pipeline_output_unchanged(tmp_path, water_market_schema, monkeypatch) -> None:
     baseline_pipeline = AnalysisPipeline(
         knowledge_graph=KnowledgeGraph(json_path=tmp_path / "baseline.json", auto_load=False, auto_save=True),

@@ -43,9 +43,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "budget_usd_per_day": 0.50,
         "source_refresh_seconds": 300,
         "sources": [],
+        "stream_keywords": [],
         "bootstrap": {
+            "mode": "schema_path",
             "schema_path": None,
             "policies_path": None,
+            "fallback_schema_path": None,
+            "domain_brief_path": None,
+            "domain_brief": "",
         },
     },
     "llm": {

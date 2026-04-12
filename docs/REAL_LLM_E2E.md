@@ -1,5 +1,7 @@
 # Real LLM E2E Evaluation
 
+> Legacy note: this document describes an earlier pre-daemon Freeman evaluation path. It is kept as a research artifact and historical reference, not as the current operational runtime architecture.
+
 This document records a live end-to-end evaluation of Freeman using a real DeepSeek chat model loaded from the local `DS.txt` key file and a local Ollama embedding backend. The run used:
 
 - live LLM calls for signal classification

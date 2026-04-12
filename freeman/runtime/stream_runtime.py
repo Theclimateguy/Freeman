@@ -1,11 +1,4 @@
-"""Run Freeman against climate-news RSS streams with local Ollama chat models.
-
-This script is designed for long local runs with checkpoint/resume:
-- fetch RSS signals on a polling interval
-- classify/analyze with Ollama via chat_json
-- update Freeman world + consciousness state
-- persist world, trace, cursor, and signal memory after each committed signal
-"""
+"""Run Freeman against configurable signal streams with checkpoint/resume."""
 
 from __future__ import annotations
 
@@ -38,57 +31,19 @@ except ImportError:
 
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.consciousness import ConsciousState, ConsciousnessEngine, TraceEvent
+from freeman.agent.forecastregistry import ForecastRegistry
 from freeman.agent.parameterestimator import ParameterEstimator
 from freeman.agent.signalingestion import ManualSignalSource, Signal, SignalIngestionEngine, SignalMemory
 from freeman.game.runner import SimConfig
-from freeman.llm import OllamaChatClient
+from freeman.llm import DeepSeekChatClient, OllamaChatClient, OpenAIChatClient
+from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator
 from freeman.memory.knowledgegraph import KnowledgeGraph
 from freeman.core.world import WorldState
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
 
-LOGGER = logging.getLogger("climate_stream")
-
-DEFAULT_CLIMATE_SOURCES: list[dict[str, Any]] = [
-    {
-        "type": "rss",
-        "url": "https://www.carbonbrief.org/feed/",
-        "default_topic": "climate_news",
-        "max_entries": 20,
-        "source_type": "rss_carbonbrief",
-    },
-    {
-        "type": "rss",
-        "url": "https://www.theguardian.com/environment/rss",
-        "default_topic": "climate_news",
-        "max_entries": 20,
-        "source_type": "rss_guardian_env",
-    },
-    {
-        "type": "rss",
-        "url": "https://www.noaa.gov/rss.xml",
-        "default_topic": "climate_news",
-        "max_entries": 20,
-        "source_type": "rss_noaa",
-    },
-]
-
-DEFAULT_CLIMATE_KEYWORDS = [
-    "climate",
-    "warming",
-    "heatwave",
-    "drought",
-    "flood",
-    "wildfire",
-    "emissions",
-    "carbon",
-    "co2",
-    "extreme weather",
-    "sea level",
-    "adaptation",
-    "mitigation",
-]
+LOGGER = logging.getLogger("stream_runtime")
 
 
 def _utc_now() -> datetime:
@@ -122,6 +77,15 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _read_optional_text(path: str | Path | None) -> str:
+    if path is None:
+        return ""
+    target = Path(path).resolve()
+    if not target.exists():
+        return ""
+    return target.read_text(encoding="utf-8").strip()
 
 
 def _load_model_tags(base_url: str) -> list[str]:
@@ -160,6 +124,43 @@ def _select_ollama_model(base_url: str, requested: str) -> str:
     return available[0]
 
 
+def _build_chat_client(
+    *,
+    provider: str,
+    model: str,
+    base_url: str,
+    timeout_seconds: float,
+) -> Any:
+    provider_name = str(provider).strip().lower()
+    if provider_name in {"", "ollama"}:
+        return OllamaChatClient(
+            model=model or "qwen2.5-coder:14b",
+            base_url=base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+            timeout_seconds=timeout_seconds,
+        )
+    if provider_name == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("DEEPSEEK_API_KEY or LLM_API_KEY is required for deepseek bootstrap mode.")
+        return DeepSeekChatClient(
+            api_key=api_key,
+            model=model or "deepseek-chat",
+            base_url=base_url or "https://api.deepseek.com",
+            timeout_seconds=timeout_seconds,
+        )
+    if provider_name == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY or LLM_API_KEY is required for openai bootstrap mode.")
+        return OpenAIChatClient(
+            api_key=api_key,
+            model=model or "gpt-4o-mini",
+            base_url=base_url or "https://api.openai.com/v1",
+            timeout_seconds=timeout_seconds,
+        )
+    raise ValueError(f"Unsupported llm provider for runtime: {provider}")
+
+
 def _build_sim_config(config: dict[str, Any]) -> SimConfig:
     sim_cfg = config.get("sim", {})
     return SimConfig(
@@ -176,8 +177,15 @@ def _build_sim_config(config: dict[str, Any]) -> SimConfig:
     )
 
 
-def _keywords_from_config(config: dict[str, Any]) -> list[str]:
-    raw = config.get("agent", {}).get("climate_keywords", DEFAULT_CLIMATE_KEYWORDS)
+def _keywords_from_config(config: dict[str, Any], default_keywords: list[str] | None = None) -> list[str]:
+    agent_cfg = config.get("agent", {})
+    raw = (
+        agent_cfg.get("stream_keywords")
+        or agent_cfg.get("keywords")
+        or agent_cfg.get("climate_keywords")
+        or default_keywords
+        or []
+    )
     return [str(item).strip().lower() for item in raw if str(item).strip()]
 
 
@@ -195,11 +203,11 @@ def _signal_matches_keywords(signal_payload: Signal, keywords: list[str]) -> boo
     return any(keyword in haystack for keyword in keywords)
 
 
-def _source_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+def _source_configs(config: dict[str, Any], default_sources: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     configured = config.get("agent", {}).get("sources", [])
     if isinstance(configured, list) and configured:
         return [dict(item) for item in configured if isinstance(item, dict)]
-    return [dict(item) for item in DEFAULT_CLIMATE_SOURCES]
+    return [dict(item) for item in (default_sources or [])]
 
 
 def _append_unlogged_trace_events(
@@ -240,6 +248,44 @@ def _save_signal_memory(memory: SignalMemory, path: Path) -> None:
     _atomic_write_json(path, {"records": memory.snapshot()})
 
 
+def _signal_to_dict(signal_payload: Signal) -> dict[str, Any]:
+    return {
+        "signal_id": str(signal_payload.signal_id),
+        "source_type": str(signal_payload.source_type),
+        "text": str(signal_payload.text),
+        "topic": str(signal_payload.topic),
+        "entities": list(signal_payload.entities),
+        "sentiment": float(signal_payload.sentiment),
+        "timestamp": str(signal_payload.timestamp),
+        "metadata": dict(signal_payload.metadata),
+    }
+
+
+def _signal_from_dict(payload: dict[str, Any]) -> Signal:
+    return Signal(
+        signal_id=str(payload["signal_id"]),
+        source_type=str(payload["source_type"]),
+        text=str(payload["text"]),
+        topic=str(payload["topic"]),
+        entities=[str(value) for value in payload.get("entities", [])],
+        sentiment=float(payload.get("sentiment", 0.0)),
+        timestamp=str(payload.get("timestamp", _utc_now().isoformat())),
+        metadata=dict(payload.get("metadata", {})),
+    )
+
+
+def _load_pending_queue(path: Path) -> list[Signal]:
+    source = Path(path).resolve()
+    if not source.exists():
+        return []
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    return [_signal_from_dict(item) for item in payload.get("signals", [])]
+
+
+def _save_pending_queue(signals: list[Signal], path: Path) -> None:
+    _atomic_write_json(path, {"signals": [_signal_to_dict(item) for item in signals]})
+
+
 def _persist_runtime_state(
     *,
     pipeline: AnalysisPipeline,
@@ -248,11 +294,13 @@ def _persist_runtime_state(
     checkpoint_manager: CheckpointManager,
     cursor_store: StreamCursorStore,
     signal_memory: SignalMemory,
+    pending_signals: list[Signal],
 ) -> None:
     runtime_path.mkdir(parents=True, exist_ok=True)
     pipeline.knowledge_graph.save()
     _atomic_write_json(runtime_path / "world_state.json", world_state.snapshot())
     _save_signal_memory(signal_memory, runtime_path / "signal_memory.json")
+    _save_pending_queue(pending_signals, runtime_path / "pending_signals.json")
     checkpoint_manager.save(pipeline.conscious_state, runtime_path / "checkpoint.json")
     cursor_store.save(runtime_path / "cursors.json")
 
@@ -293,12 +341,43 @@ def _runtime_trace_for_signal(
     )
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run Freeman on climate RSS streams with local Ollama.")
-    parser.add_argument("--config-path", default="config.climate.yaml")
-    parser.add_argument("--schema-path", default="freeman/domain/profiles/gim15.json")
+def _runtime_trace_for_verification(
+    *,
+    state: ConsciousState,
+    verified_count: int,
+    verified_ids: list[str],
+    mean_abs_error: float | None,
+) -> TraceEvent:
+    index = len(state.trace_state)
+    diff: dict[str, Any] = {
+        "verified_count": int(verified_count),
+        "verified_ids": list(verified_ids),
+    }
+    if mean_abs_error is not None:
+        diff["mean_abs_error"] = float(mean_abs_error)
+    return TraceEvent(
+        event_id=f"trace:verify:{_utc_now().isoformat()}",
+        timestamp=_utc_now(),
+        transition_type="external",
+        trigger_type="manual",
+        operator="runtime_forecast_verify",
+        pre_state_ref=f"state:{index}",
+        post_state_ref=f"state:{index + 1}",
+        input_refs=[f"forecast:{item}" for item in verified_ids],
+        diff=diff,
+        rationale=f"verified {verified_count} due forecasts",
+    )
+
+
+def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run Freeman on configurable signal streams.")
+    parser.add_argument("--config-path", default=default_config_path)
+    parser.add_argument("--schema-path", default=None)
+    parser.add_argument("--bootstrap-mode", choices=["schema_path", "llm_synthesize"], default=None)
+    parser.add_argument("--domain-brief-path", default=None)
     parser.add_argument("--hours", type=float, default=8.0)
     parser.add_argument("--poll-seconds", type=float, default=None)
+    parser.add_argument("--analysis-interval-seconds", type=float, default=1.0)
     parser.add_argument("--model", default="auto")
     parser.add_argument("--ollama-base-url", default=None)
     parser.add_argument("--max-signals-per-poll", type=int, default=30)
@@ -309,8 +388,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+def main(
+    argv: list[str] | None = None,
+    *,
+    default_config_path: str = "config.yaml",
+    default_sources: list[dict[str, Any]] | None = None,
+    default_keywords: list[str] | None = None,
+) -> int:
+    args = _build_parser(default_config_path=default_config_path).parse_args(argv)
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -323,13 +408,13 @@ def main(argv: list[str] | None = None) -> int:
     memory_cfg = config.get("memory", {})
     llm_cfg = config.get("llm", {})
     agent_cfg = config.get("agent", {})
+    bootstrap_cfg = agent_cfg.get("bootstrap", {})
 
-    runtime_path = _resolve_path(config_base, runtime_cfg.get("runtime_path"), "./data/runtime_climate")
+    runtime_path = _resolve_path(config_base, runtime_cfg.get("runtime_path"), "./data/runtime")
     event_log_path = _resolve_path(config_base, runtime_cfg.get("event_log_path"), str(runtime_path / "event_log.jsonl"))
     kg_path = _resolve_path(config_base, memory_cfg.get("json_path"), "./data/kg_state.json")
-    schema_path = Path(args.schema_path).resolve()
-    if not schema_path.exists():
-        raise FileNotFoundError(f"Schema path not found: {schema_path}")
+    schema_path_arg = getattr(args, "schema_path", None)
+    schema_path = _resolve_path(config_base, schema_path_arg, schema_path_arg) if schema_path_arg else None
 
     poll_seconds = float(
         args.poll_seconds
@@ -339,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     keywords = (
         [str(item).strip().lower() for item in args.keyword if str(item).strip()]
         if args.keyword
-        else _keywords_from_config(config)
+        else _keywords_from_config(config, default_keywords)
     )
 
     ollama_base_url = str(
@@ -347,24 +432,37 @@ def main(argv: list[str] | None = None) -> int:
         or llm_cfg.get("base_url")
         or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
     )
-    model_name = _select_ollama_model(ollama_base_url, str(args.model or llm_cfg.get("model", "auto")))
-    llm_client = OllamaChatClient(
+    provider = str(llm_cfg.get("provider", "ollama") or "ollama")
+    requested_model = str(args.model or llm_cfg.get("model", "auto"))
+    model_name = (
+        _select_ollama_model(ollama_base_url, requested_model)
+        if provider.strip().lower() in {"", "ollama"}
+        else requested_model
+    )
+    llm_client = _build_chat_client(
+        provider=provider,
         model=model_name,
         base_url=ollama_base_url,
         timeout_seconds=float(llm_cfg.get("timeout_seconds", 120.0)),
     )
 
-    LOGGER.info("Using Ollama model=%s base_url=%s", model_name, ollama_base_url)
+    LOGGER.info("Using llm provider=%s model=%s base_url=%s", provider, model_name, ollama_base_url)
     LOGGER.info("Knowledge graph path=%s runtime path=%s", kg_path, runtime_path)
 
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    forecast_registry = ForecastRegistry(
+        json_path=runtime_path / "forecasts.json",
+        auto_load=bool(args.resume),
+        auto_save=True,
+    )
     knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=True, auto_save=True)
     pipeline = AnalysisPipeline(
         knowledge_graph=knowledge_graph,
         sim_config=_build_sim_config(config),
+        forecast_registry=forecast_registry,
         config_path=config_path,
     )
 
-    runtime_path.mkdir(parents=True, exist_ok=True)
     checkpoint_manager = CheckpointManager()
     cursor_store = StreamCursorStore()
     if args.resume:
@@ -372,22 +470,110 @@ def main(argv: list[str] | None = None) -> int:
     event_log = EventLog(event_log_path)
     logged_event_ids = _load_logged_ids_and_backfill_cursor(event_log, cursor_store)
     signal_memory = _load_signal_memory(runtime_path / "signal_memory.json") if args.resume else SignalMemory()
+    pending_signals = _load_pending_queue(runtime_path / "pending_signals.json") if args.resume else []
+    queued_signal_ids = {str(item.signal_id) for item in pending_signals}
 
     if args.resume and (runtime_path / "checkpoint.json").exists():
         loaded_state = checkpoint_manager.load(runtime_path / "checkpoint.json")
         pipeline.conscious_state = ConsciousState.from_dict(loaded_state.to_dict(), knowledge_graph)
         LOGGER.info("Loaded consciousness checkpoint.")
+    if pending_signals:
+        LOGGER.info("Loaded pending queue length=%d", len(pending_signals))
 
     current_world: WorldState | None = None
     world_state_path = runtime_path / "world_state.json"
     if args.resume and world_state_path.exists():
         current_world = WorldState.from_snapshot(json.loads(world_state_path.read_text(encoding="utf-8")))
         LOGGER.info("Loaded world checkpoint domain_id=%s step=%s", current_world.domain_id, current_world.t)
-    schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    bootstrap_mode = str(
+        args.bootstrap_mode
+        or bootstrap_cfg.get("mode")
+        or ("schema_path" if schema_path is not None else "llm_synthesize")
+    ).strip().lower()
+    package_path = runtime_path / "bootstrap_package.json"
+    domain_brief_path = (
+        _resolve_path(config_base, args.domain_brief_path, args.domain_brief_path)
+        if args.domain_brief_path
+        else (
+            _resolve_path(config_base, bootstrap_cfg.get("domain_brief_path"), bootstrap_cfg.get("domain_brief_path"))
+            if bootstrap_cfg.get("domain_brief_path")
+            else None
+        )
+    )
+    domain_brief_inline = str(bootstrap_cfg.get("domain_brief", "")).strip()
+    synthesized_package: dict[str, Any] | None = None
+
+    if package_path.exists():
+        synthesized_package = json.loads(package_path.read_text(encoding="utf-8"))
+
+    if synthesized_package is None and bootstrap_mode == "schema_path":
+        if schema_path is None:
+            candidate = bootstrap_cfg.get("schema_path")
+            if candidate:
+                schema_path = _resolve_path(config_base, candidate, candidate)
+        if schema_path is None or not schema_path.exists():
+            raise FileNotFoundError("bootstrap.mode=schema_path requires an existing schema_path.")
+        schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
+        synthesized_package = {
+            "schema": schema_payload,
+            "policies": [],
+            "assumptions": [],
+            "bootstrap_mode": "schema_path",
+        }
+    elif synthesized_package is None and bootstrap_mode == "llm_synthesize":
+        domain_brief = domain_brief_inline or _read_optional_text(domain_brief_path)
+        if not domain_brief:
+            raise RuntimeError("bootstrap.mode=llm_synthesize requires agent.bootstrap.domain_brief or domain_brief_path.")
+        if not hasattr(llm_client, "repair_schema"):
+            raise RuntimeError(
+                f"Configured llm provider '{provider}' does not expose repair_schema(); "
+                "use ollama or deepseek for llm_synthesize bootstrap."
+        )
+        LOGGER.info("Synthesizing bootstrap schema from domain brief.")
+        orchestrator = DeepSeekFreemanOrchestrator(llm_client)
+        try:
+            package, world_id, attempts, repair_history = orchestrator.compile_and_repair(
+                domain_brief,
+                max_retries=int(bootstrap_cfg.get("max_retries", 5)),
+                trial_steps=int(bootstrap_cfg.get("trial_steps", 3)),
+                config=_build_sim_config(config),
+            )
+            synthesized_package = {
+                **package,
+                "bootstrap_mode": "llm_synthesize",
+                "world_id": world_id,
+                "synthesis_attempts": attempts,
+                "repair_history": repair_history,
+                "domain_brief": domain_brief,
+            }
+            _atomic_write_json(package_path, synthesized_package)
+            LOGGER.info("Synthesized bootstrap package attempts=%d saved=%s", attempts, package_path)
+        except Exception as exc:  # noqa: BLE001
+            fallback_candidate = bootstrap_cfg.get("fallback_schema_path")
+            if not fallback_candidate:
+                raise
+            LOGGER.warning("LLM bootstrap failed: %s. Falling back to schema_path=%s", exc, fallback_candidate)
+            schema_path = _resolve_path(config_base, fallback_candidate, fallback_candidate)
+            schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
+            synthesized_package = {
+                "schema": schema_payload,
+                "policies": [],
+                "assumptions": [],
+                "bootstrap_mode": "llm_synthesize_fallback",
+                "domain_brief": domain_brief,
+                "bootstrap_error": str(exc),
+                "fallback_schema_path": str(schema_path),
+            }
+            _atomic_write_json(package_path, synthesized_package)
+    elif synthesized_package is None:
+        raise ValueError(f"Unsupported bootstrap mode: {bootstrap_mode}")
+
+    schema_payload = dict(synthesized_package["schema"])
+    bootstrap_policies = list(synthesized_package.get("policies", []))
     base_world_template = pipeline.compiler.compile(schema_payload)
 
     if current_world is None:
-        bootstrap_result = pipeline.run(schema_payload, policies=[])
+        bootstrap_result = pipeline.run(schema_payload, policies=bootstrap_policies)
         current_world = bootstrap_result.world.clone()
         _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
         _persist_runtime_state(
@@ -397,14 +583,16 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint_manager=checkpoint_manager,
             cursor_store=cursor_store,
             signal_memory=signal_memory,
+            pending_signals=pending_signals,
         )
         LOGGER.info(
-            "Bootstrap completed domain_id=%s dominant_outcome=%s",
+            "Bootstrap completed mode=%s domain_id=%s dominant_outcome=%s",
+            bootstrap_mode,
             bootstrap_result.world.domain_id,
             bootstrap_result.dominant_outcome,
         )
 
-    sources = [build_signal_source(cfg) for cfg in _source_configs(config)]
+    sources = [build_signal_source(cfg) for cfg in _source_configs(config, default_sources)]
     LOGGER.info("Configured source count=%d", len(sources))
 
     estimator = ParameterEstimator(
@@ -428,9 +616,13 @@ def main(argv: list[str] | None = None) -> int:
 
     started_at = _utc_now()
     deadline = None if float(args.hours) <= 0.0 else started_at + timedelta(hours=float(args.hours))
+    next_poll_at = started_at
+    analysis_interval_seconds = max(float(args.analysis_interval_seconds), 0.1)
     processed_count = 0
     updated_count = 0
     update_failures = 0
+    verified_forecasts_count = 0
+    idle_deliberations = 0
     skipped_watch_count = 0
     seen_count = 0
 
@@ -441,27 +633,52 @@ def main(argv: list[str] | None = None) -> int:
                 LOGGER.info("Reached duration limit (hours=%s).", args.hours)
                 break
 
-            fetched: list[Signal] = []
-            for source in sources:
-                try:
-                    source_signals = source.fetch()
-                    fetched.extend(source_signals)
-                except Exception as exc:  # noqa: BLE001
-                    LOGGER.warning("Source fetch failed (%s): %s", getattr(source, "url", "unknown"), exc)
-            if keywords:
-                fetched = [item for item in fetched if _signal_matches_keywords(item, keywords)]
-            fetched.sort(key=lambda item: item.timestamp)
+            if now >= next_poll_at:
+                fetched: list[Signal] = []
+                for source in sources:
+                    try:
+                        source_signals = source.fetch()
+                        fetched.extend(source_signals)
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("Source fetch failed (%s): %s", getattr(source, "url", "unknown"), exc)
+                if keywords:
+                    fetched = [item for item in fetched if _signal_matches_keywords(item, keywords)]
+                fetched.sort(key=lambda item: item.timestamp)
 
-            processed_this_poll = 0
-            for signal_payload in fetched:
-                if stop_requested:
-                    break
-                if processed_this_poll >= int(args.max_signals_per_poll):
-                    break
+                enqueued = 0
+                for signal_payload in fetched:
+                    if enqueued >= int(args.max_signals_per_poll):
+                        break
+                    signal_id = str(signal_payload.signal_id)
+                    if cursor_store.is_committed(signal_id):
+                        continue
+                    if signal_id in queued_signal_ids:
+                        continue
+                    pending_signals.append(signal_payload)
+                    queued_signal_ids.add(signal_id)
+                    seen_count += 1
+                    enqueued += 1
+                next_poll_at = now + timedelta(seconds=float(poll_seconds))
+                if enqueued > 0:
+                    LOGGER.info("Enqueued %d new signals. queue_len=%d", enqueued, len(pending_signals))
+                    _persist_runtime_state(
+                        pipeline=pipeline,
+                        world_state=current_world,
+                        runtime_path=runtime_path,
+                        checkpoint_manager=checkpoint_manager,
+                        cursor_store=cursor_store,
+                        signal_memory=signal_memory,
+                        pending_signals=pending_signals,
+                    )
+                else:
+                    LOGGER.info("No new eligible signals this poll.")
+
+            if pending_signals:
+                signal_payload = pending_signals.pop(0)
                 signal_id = str(signal_payload.signal_id)
+                queued_signal_ids.discard(signal_id)
                 if cursor_store.is_committed(signal_id):
                     continue
-                seen_count += 1
                 triggers = ingestion_engine.ingest(
                     ManualSignalSource([signal_payload]),
                     classifier=llm_client,
@@ -482,13 +699,22 @@ def main(argv: list[str] | None = None) -> int:
                     logged_event_ids.add(runtime_event.event_id)
                     cursor_store.commit(signal_id)
                     processed_count += 1
-                    processed_this_poll += 1
+                    _persist_runtime_state(
+                        pipeline=pipeline,
+                        world_state=current_world,
+                        runtime_path=runtime_path,
+                        checkpoint_manager=checkpoint_manager,
+                        cursor_store=cursor_store,
+                        signal_memory=signal_memory,
+                        pending_signals=pending_signals,
+                    )
                     continue
 
                 trigger = triggers[0]
                 should_update = trigger.mode in {"ANALYZE", "DEEP_DIVE"}
                 llm_update_attempted = should_update
                 update_error: str | None = None
+                result = None
                 if should_update:
                     try:
                         parameter_vector = estimator.estimate(current_world, signal_payload.text)
@@ -514,6 +740,50 @@ def main(argv: list[str] | None = None) -> int:
                             current_world = result.world.clone()
                             updated_count += 1
                             update_error = f"primary_update_failed: {primary_exc}; fallback=base_world"
+
+                        if pipeline.forecast_registry is not None and result is not None:
+                            due = pipeline.forecast_registry.due(current_world.t)
+                            if due:
+                                verified_ids: list[str] = []
+                                verification_errors: list[float] = []
+                                current_probs = {
+                                    key: float(value)
+                                    for key, value in result.simulation.get("final_outcome_probs", {}).items()
+                                }
+                                for forecast in due:
+                                    verified = pipeline.verify_forecast(
+                                        forecast.forecast_id,
+                                        actual_prob=float(current_probs.get(forecast.outcome_id, 0.0)),
+                                        verified_at=_utc_now(),
+                                    )
+                                    verified_ids.append(verified.forecast_id)
+                                    if verified.error is not None:
+                                        verification_errors.append(float(verified.error))
+                                if verified_ids:
+                                    verified_forecasts_count += len(verified_ids)
+                                    verify_trace = _runtime_trace_for_verification(
+                                        state=pipeline.conscious_state,
+                                        verified_count=len(verified_ids),
+                                        verified_ids=verified_ids,
+                                        mean_abs_error=(
+                                            sum(verification_errors) / len(verification_errors)
+                                            if verification_errors
+                                            else None
+                                        ),
+                                    )
+                                    pipeline.conscious_state.trace_state.append(verify_trace)
+                                    event_log.append(verify_trace)
+                                    logged_event_ids.add(verify_trace.event_id)
+                                    engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
+                                    engine.refresh_after_epistemic_update(
+                                        world_ref=f"world:{current_world.domain_id}:{current_world.t}",
+                                        runtime_metadata={
+                                            "last_domain_id": str(current_world.domain_id),
+                                            "last_world_step": int(current_world.t),
+                                        },
+                                    )
+                                    pipeline.conscious_state = engine.state
+
                         engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
                         engine.maybe_deliberate(_utc_now())
                         pipeline.conscious_state = engine.state
@@ -545,34 +815,41 @@ def main(argv: list[str] | None = None) -> int:
                     checkpoint_manager=checkpoint_manager,
                     cursor_store=cursor_store,
                     signal_memory=signal_memory,
+                    pending_signals=pending_signals,
                 )
                 processed_count += 1
-                processed_this_poll += 1
                 LOGGER.info(
-                    "Processed signal_id=%s mode=%s world_t=%s dominant=%s",
+                    "Processed signal_id=%s mode=%s world_t=%s queue_len=%d",
                     signal_id,
                     trigger.mode,
                     current_world.t,
-                    current_world.metadata.get("dominant_outcome"),
+                    len(pending_signals),
                 )
+                continue
 
-            if processed_this_poll == 0:
-                LOGGER.info("No new eligible climate signals this poll.")
+            engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
+            if engine.maybe_deliberate(now) is not None:
+                idle_deliberations += 1
+                pipeline.conscious_state = engine.state
+                _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
+                _persist_runtime_state(
+                    pipeline=pipeline,
+                    world_state=current_world,
+                    runtime_path=runtime_path,
+                    checkpoint_manager=checkpoint_manager,
+                    cursor_store=cursor_store,
+                    signal_memory=signal_memory,
+                    pending_signals=pending_signals,
+                )
+                continue
 
-            if stop_requested:
-                break
-
+            sleep_seconds = analysis_interval_seconds
             if deadline is not None:
-                remaining = (deadline - _utc_now()).total_seconds()
-                if remaining <= 0.0:
-                    break
-                sleep_seconds = min(float(poll_seconds), remaining)
-            else:
-                sleep_seconds = float(poll_seconds)
-
-            wait_until = _utc_now() + timedelta(seconds=sleep_seconds)
-            while not stop_requested and _utc_now() < wait_until:
-                time.sleep(0.25)
+                sleep_seconds = min(sleep_seconds, max((deadline - _utc_now()).total_seconds(), 0.0))
+            if next_poll_at is not None:
+                sleep_seconds = min(sleep_seconds, max((next_poll_at - _utc_now()).total_seconds(), 0.0))
+            if sleep_seconds > 0.0:
+                time.sleep(sleep_seconds)
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
@@ -585,6 +862,7 @@ def main(argv: list[str] | None = None) -> int:
                 checkpoint_manager=checkpoint_manager,
                 cursor_store=cursor_store,
                 signal_memory=signal_memory,
+                pending_signals=pending_signals,
             )
 
     summary = {
@@ -592,13 +870,19 @@ def main(argv: list[str] | None = None) -> int:
         "started_at": started_at.isoformat(),
         "ended_at": _utc_now().isoformat(),
         "hours_requested": float(args.hours),
+        "bootstrap_mode": bootstrap_mode,
+        "bootstrap_package_path": str(package_path) if package_path.exists() else None,
         "model": model_name,
+        "llm_provider": provider,
         "runtime_path": str(runtime_path),
         "event_log_path": str(event_log_path),
         "signals_seen": seen_count,
         "signals_committed": processed_count,
         "world_updates": updated_count,
         "world_update_failures": update_failures,
+        "verified_forecasts": verified_forecasts_count,
+        "idle_deliberations": idle_deliberations,
+        "queue_len": len(pending_signals),
         "watch_skipped": skipped_watch_count,
         "trace_events": len(pipeline.conscious_state.trace_state),
     }

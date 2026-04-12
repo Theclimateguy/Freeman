@@ -10,6 +10,22 @@ from typing import Any, Dict, Iterable, List
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+REPAIR_SYSTEM_PROMPT = """You repair Freeman simulation packages using structured verifier feedback.
+
+Return exactly one JSON object with:
+- schema: corrected Freeman domain schema
+- policies: corrected Freeman Policy snapshots
+- assumptions: short list of assumptions
+
+Rules:
+- Preserve the domain semantics and actor/resource naming unless the feedback requires otherwise.
+- Repair only the fields implicated by the feedback when possible.
+- Use the violation details, including field names, observed values, expected bounds, and repair_targets.
+- Keep the package compact and numerically stable.
+- Use only Freeman-supported evolution types: linear, stock_flow, logistic, threshold, coupled.
+- Return JSON only.
+"""
+
 
 def _coerce_embedding_list(values: Iterable[Any]) -> List[float]:
     return [float(value) for value in values]
@@ -102,6 +118,27 @@ class OllamaChatClient:
             json_mode=False,
         )
         return str(response.get("message", {}).get("content", "")).strip()
+
+    def repair_schema(
+        self,
+        package: Dict[str, Any],
+        violations: List[Dict[str, Any]],
+        *,
+        domain_description: str = "",
+        max_tokens: int = 4000,
+    ) -> Dict[str, Any]:
+        """Repair a Freeman package using structured verifier feedback."""
+
+        prompt_payload = {
+            "domain_description": domain_description,
+            "package": package,
+            "violations": violations,
+        }
+        messages = [
+            {"role": "system", "content": REPAIR_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+        ]
+        return self.chat_json(messages, temperature=0.1, max_tokens=max_tokens)
 
     def _request(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         request = Request(
