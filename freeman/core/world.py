@@ -88,10 +88,12 @@ class WorldGraph:
     seed: int = 42
     metadata: Dict[str, Any] = field(default_factory=dict)
     parameter_vector: ParameterVector = field(default_factory=ParameterVector)
+    runtime_step: int = 0
     _outcome_registry: OutcomeRegistry = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.t = int(self.t)
+        self.runtime_step = int(self.runtime_step)
         self.seed = int(self.seed)
         if isinstance(self.outcomes, OutcomeRegistry):
             self._outcome_registry = self.outcomes.clone()
@@ -197,6 +199,7 @@ class WorldGraph:
         return {
             "domain_id": self.domain_id,
             "t": self.t,
+            "runtime_step": self.runtime_step,
             "actors": {actor_id: actor.snapshot() for actor_id, actor in self.actors.items()},
             "resources": {res_id: resource.snapshot() for res_id, resource in self.resources.items()},
             "relations": [relation.snapshot() for relation in self.relations],
@@ -215,6 +218,7 @@ class WorldGraph:
         return cls(
             domain_id=data["domain_id"],
             t=data["t"],
+            runtime_step=int(data.get("runtime_step", 0)),
             actors={actor_id: Actor.from_snapshot(actor) for actor_id, actor in data["actors"].items()},
             resources={
                 resource_id: Resource.from_snapshot(resource)

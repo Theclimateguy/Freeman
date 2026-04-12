@@ -96,6 +96,7 @@ class DeepSeekFreemanOrchestrator:
 
     def __init__(self, client: DeepSeekChatClient) -> None:
         self.client = client
+        self.last_bootstrap_attempts: List[Dict[str, Any]] = []
 
     def _synthesis_messages(self, domain_description: str) -> List[Dict[str, str]]:
         """Build the initial prompt sequence for Freeman package synthesis."""
@@ -121,6 +122,27 @@ class DeepSeekFreemanOrchestrator:
         normalized.setdefault("policies", [])
         normalized.setdefault("assumptions", [])
         return normalized
+
+    def _verifier_schema_spec(self) -> Dict[str, Any]:
+        """Return the structural contract a package must satisfy to be verifier-clean."""
+
+        return {
+            "required_top_level_keys": ["domain_id", "actors", "resources", "relations", "outcomes", "causal_dag"],
+            "supported_evolution_types": ["linear", "stock_flow", "logistic", "threshold", "coupled"],
+            "compact_domain_bounds": {
+                "actors": [3, 5],
+                "resources": [4, 7],
+                "outcomes": [2, 4],
+                "causal_edges": [3, 8],
+            },
+            "repair_rules": [
+                "actor ids and policy actor references must agree",
+                "resource ids and scoring_weights references must agree",
+                "causal_dag signs must match the effective coupling directions",
+                "resource dynamics must remain numerically stable under level1/level2 verification",
+                "return a full corrected package, not a patch",
+            ],
+        }
 
     def _coerce_policies(self, package: Dict[str, Any]) -> List[Policy]:
         """Convert synthesized policy snapshots into ``Policy`` objects."""
@@ -150,6 +172,29 @@ class DeepSeekFreemanOrchestrator:
         """Serialize verifier violations into structured repair feedback."""
 
         return [{"phase": phase, **violation.snapshot()} for violation in violations]
+
+    def _feedback_summary(self, feedback: List[Dict[str, Any]]) -> str:
+        """Compress structured feedback into one deterministic summary line."""
+
+        if not feedback:
+            return "no verifier error"
+        head = feedback[0]
+        check_name = str(head.get("check_name", "unknown"))
+        description = str(head.get("description", "")).strip()
+        details = head.get("details", {}) or {}
+        field_name = details.get("field") or details.get("repair_targets") or details.get("edge")
+        if field_name:
+            return f"{check_name}: {field_name} | {description}".strip()
+        return f"{check_name}: {description}".strip()
+
+    def _repair_stage(self, attempt: int) -> str:
+        """Escalate repair context as attempts accumulate."""
+
+        if attempt <= 3:
+            return "standard"
+        if attempt <= 8:
+            return "accumulated"
+        return "schema_aware"
 
     def _trial_level0_violations(
         self,
@@ -188,33 +233,79 @@ class DeepSeekFreemanOrchestrator:
             self.client.chat_json(self._synthesis_messages(domain_description), temperature=0.2, max_tokens=4000)
         )
         repair_history: List[Dict[str, Any]] = []
+        self.last_bootstrap_attempts = []
 
         for attempt in range(1, max_retries + 1):
             try:
                 world = DomainCompiler().compile(package["schema"])
             except Exception as exc:  # noqa: BLE001
                 feedback = self._compiler_feedback(exc)
-                repair_history.append({"attempt": attempt, "phase": "compile", "feedback": feedback})
+                attempt_record = {
+                    "attempt": attempt,
+                    "phase": "compile",
+                    "verifier_error": self._feedback_summary(feedback),
+                    "feedback": feedback,
+                    "repair_stage": self._repair_stage(attempt + 1),
+                }
+                repair_history.append(attempt_record)
+                self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
                 package = self._normalize_package(
-                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                    self.client.repair_schema(
+                        package,
+                        feedback,
+                        domain_description=domain_description,
+                        error_history=repair_history,
+                        verifier_schema_spec=self._verifier_schema_spec(),
+                        repair_stage=self._repair_stage(attempt + 1),
+                    )
                 )
                 continue
 
             l1_violations = level1_check(world.clone(), sim_config)
             if l1_violations:
                 feedback = self._violation_feedback("level1", l1_violations)
-                repair_history.append({"attempt": attempt, "phase": "level1", "feedback": feedback})
+                attempt_record = {
+                    "attempt": attempt,
+                    "phase": "level1",
+                    "verifier_error": self._feedback_summary(feedback),
+                    "feedback": feedback,
+                    "repair_stage": self._repair_stage(attempt + 1),
+                }
+                repair_history.append(attempt_record)
+                self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
                 package = self._normalize_package(
-                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                    self.client.repair_schema(
+                        package,
+                        feedback,
+                        domain_description=domain_description,
+                        error_history=repair_history,
+                        verifier_schema_spec=self._verifier_schema_spec(),
+                        repair_stage=self._repair_stage(attempt + 1),
+                    )
                 )
                 continue
 
             trial_violations = self._trial_level0_violations(package, trial_steps=trial_steps, dt=sim_config.dt)
             if trial_violations:
                 feedback = self._violation_feedback("level0_trial", trial_violations)
-                repair_history.append({"attempt": attempt, "phase": "level0_trial", "feedback": feedback})
+                attempt_record = {
+                    "attempt": attempt,
+                    "phase": "level0_trial",
+                    "verifier_error": self._feedback_summary(feedback),
+                    "feedback": feedback,
+                    "repair_stage": self._repair_stage(attempt + 1),
+                }
+                repair_history.append(attempt_record)
+                self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
                 package = self._normalize_package(
-                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                    self.client.repair_schema(
+                        package,
+                        feedback,
+                        domain_description=domain_description,
+                        error_history=repair_history,
+                        verifier_schema_spec=self._verifier_schema_spec(),
+                        repair_stage=self._repair_stage(attempt + 1),
+                    )
                 )
                 continue
 
@@ -226,15 +317,32 @@ class DeepSeekFreemanOrchestrator:
             )
             if l2_violations:
                 feedback = self._violation_feedback("level2", l2_violations)
-                repair_history.append({"attempt": attempt, "phase": "level2", "feedback": feedback})
+                attempt_record = {
+                    "attempt": attempt,
+                    "phase": "level2",
+                    "verifier_error": self._feedback_summary(feedback),
+                    "feedback": feedback,
+                    "repair_stage": self._repair_stage(attempt + 1),
+                }
+                repair_history.append(attempt_record)
+                self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
                 package = self._normalize_package(
-                    self.client.repair_schema(package, feedback, domain_description=domain_description)
+                    self.client.repair_schema(
+                        package,
+                        feedback,
+                        domain_description=domain_description,
+                        error_history=repair_history,
+                        verifier_schema_spec=self._verifier_schema_spec(),
+                        repair_stage=self._repair_stage(attempt + 1),
+                    )
                 )
                 continue
 
             compile_result = freeman_compile_domain(package["schema"])
+            self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
             return package, compile_result["world_id"], attempt, repair_history
 
+        self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
         raise SchemaRepairFailed(f"DeepSeek did not produce a verifier-clean Freeman package after {max_retries} attempts.")
 
     def synthesize_package(self, domain_description: str, max_attempts: int = 3) -> tuple[Dict[str, Any], str, int]:

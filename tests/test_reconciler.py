@@ -9,7 +9,7 @@ import json
 import pytest
 
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
-from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
+from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import KGDelta, SessionLog
 
@@ -247,6 +247,106 @@ def test_reconciler_merge_forces_reembed_when_vectorstore_present(tmp_path) -> N
     assert adapter.calls == ["Water stress is rising.", "Water stress is rising."]
     assert len(store.upserted) >= 2
     assert store.upserted[-1][0] == "claim_water"
+
+
+def test_reconciler_semantic_merge_threshold_merges_similar_claims(tmp_path) -> None:
+    adapter = MappingEmbeddingAdapter(
+        {
+            "Water stress is rising quickly.": [1.0, 0.0, 0.0],
+            "Water stress is increasing rapidly.": [0.95, 0.05, 0.0],
+            "Water stress is rising quickly.\nWater stress is increasing rapidly.": [0.975, 0.025, 0.0],
+        }
+    )
+    kg = KnowledgeGraph(
+        json_path=tmp_path / "kg.json",
+        auto_load=False,
+        auto_save=True,
+        llm_adapter=adapter,
+    )
+    existing = KGNode(
+        id="claim_water",
+        label="Water Stress",
+        content="Water stress is rising quickly.",
+        confidence=0.7,
+        metadata={"claim_key": "water_stress"},
+    )
+    kg.add_node(existing)
+    incoming = KGNode(
+        id="claim_water_variant",
+        label="Water Stress",
+        content="Water stress is increasing rapidly.",
+        confidence=0.75,
+        metadata={"claim_key": "water_stress"},
+    )
+    session = SessionLog(session_id="semantic-merge")
+    session.add_kg_delta(KGDelta(operation="add_node", payload={"node": incoming.snapshot()}))
+
+    result = Reconciler(merge_threshold=0.82).reconcile(kg, session)
+    merged = kg.get_node("claim_water")
+
+    assert result.split_nodes == {}
+    assert merged is not None
+    assert "Water stress is rising quickly." in merged.content
+    assert "Water stress is increasing rapidly." in merged.content
+    assert merged.metadata["semantic_merge_similarity"] > 0.82
+    assert not any("__split_" in node.id for node in kg.nodes(lazy_embed=False))
+
+
+def test_reconciler_compacts_redundant_split_nodes_and_reports_health(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True)
+    base = KGNode(
+        id="claim_inflation",
+        label="Inflation Outlook",
+        content="Inflation will rise.",
+        confidence=0.8,
+        metadata={"claim_key": "inflation"},
+    )
+    peer = KGNode(
+        id="macro_anchor",
+        label="Macro Anchor",
+        content="Macro conditions are tightening.",
+        confidence=0.7,
+    )
+    kg.add_node(base)
+    kg.add_node(peer)
+    kg.add_edge(
+        KGEdge(
+            source="macro_anchor",
+            target="claim_inflation",
+            relation_type="supports",
+            confidence=0.9,
+            weight=1.0,
+        )
+    )
+
+    conflicting = KGNode(
+        id="claim_inflation_down",
+        label="Inflation Outlook",
+        content="Inflation will fall.",
+        confidence=0.8,
+        metadata={"claim_key": "inflation"},
+    )
+    split_session = SessionLog(session_id="split-session")
+    split_session.add_kg_delta(KGDelta(operation="add_node", payload={"node": conflicting.snapshot()}))
+
+    split_result = Reconciler(compaction_interval=20).reconcile(kg, split_session, step_index=1, last_compaction_step=-1)
+    assert split_result.split_nodes["claim_inflation"] == ["claim_inflation__split_1", "claim_inflation_down"]
+
+    compact_result = Reconciler(compaction_interval=20).reconcile(
+        kg,
+        SessionLog(session_id="compact-session"),
+        step_index=20,
+        last_compaction_step=-1,
+    )
+    restored_parent = kg.get_node("claim_inflation")
+
+    assert "claim_inflation__split_1" in compact_result.compacted_node_ids
+    assert kg.get_node("claim_inflation__split_1") is None
+    assert restored_parent is not None
+    assert restored_parent.status == "active"
+    assert kg.get_node("claim_inflation_down") is not None
+    assert compact_result.kg_health["split_node_count"] == 0
+    assert compact_result.kg_health["compaction_last_step"] == 20
 
 
 def test_reconciler_update_self_model_accumulates_mae_and_bias(tmp_path) -> None:

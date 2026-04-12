@@ -4,6 +4,10 @@ agent:
   source_refresh_seconds: 300
   sources: []
   stream_keywords: []
+  stream_filter:
+    min_relevance_score: 0.0
+    min_keyword_matches: 0
+    agent_min_relevance_score: 0.25
   bootstrap:
     mode: "schema_path"
     schema_path:
@@ -53,6 +57,9 @@ memory:
   retrieval_top_k: 15
   max_context_nodes: 30
   session_log_path: "./data/sessions/"
+  reconciler:
+    merge_threshold: 0.82
+    compaction_interval: 20
 
 runtime:
   mode: "follow"

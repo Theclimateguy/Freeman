@@ -29,6 +29,8 @@ class ReconciliationResult:
     split_nodes: Dict[str, List[str]] = field(default_factory=dict)
     archived_node_ids: List[str] = field(default_factory=list)
     conflict_node_ids: List[str] = field(default_factory=list)
+    compacted_node_ids: List[str] = field(default_factory=list)
+    kg_health: Dict[str, float | int] = field(default_factory=dict)
 
 
 class Reconciler:
@@ -45,6 +47,8 @@ class Reconciler:
         w_conflict: float = 1.0,
         gamma: float = 0.0,
         clip_eps: float = 1.0e-9,
+        merge_threshold: float = 0.82,
+        compaction_interval: int = 20,
     ) -> None:
         self.thresholds = thresholds or ConfidenceThresholds()
         self.mode = str(mode).strip().lower()
@@ -54,8 +58,32 @@ class Reconciler:
         self.w_conflict = float(w_conflict)
         self.gamma = max(float(gamma), 0.0)
         self.clip_eps = min(max(float(clip_eps), 1.0e-12), 1.0e-3)
+        self.merge_threshold = float(merge_threshold)
+        self.compaction_interval = max(int(compaction_interval), 0)
         if self.mode not in {"legacy", "log_odds"}:
             raise ValueError(f"Unsupported reconciler mode: {mode}")
+
+    @classmethod
+    def from_config(cls, config_path: str | None = None) -> "Reconciler":
+        """Instantiate a reconciler from config.yaml when available."""
+
+        from pathlib import Path
+
+        import yaml
+
+        config_file = (
+            Path(config_path).resolve()
+            if config_path is not None
+            else Path(__file__).resolve().parents[2] / "config.yaml"
+        )
+        if not config_file.exists():
+            return cls()
+        payload = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        reconciler_cfg = ((payload.get("memory") or {}).get("reconciler") or {})
+        return cls(
+            merge_threshold=float(reconciler_cfg.get("merge_threshold", 0.82)),
+            compaction_interval=int(reconciler_cfg.get("compaction_interval", 20)),
+        )
 
     def beta_update(
         self,
@@ -122,7 +150,14 @@ class Reconciler:
             return "review"
         return "archived"
 
-    def reconcile(self, knowledge_graph: KnowledgeGraph, session_log: SessionLog) -> ReconciliationResult:
+    def reconcile(
+        self,
+        knowledge_graph: KnowledgeGraph,
+        session_log: SessionLog,
+        *,
+        step_index: int | None = None,
+        last_compaction_step: int | None = None,
+    ) -> ReconciliationResult:
         """Merge all KG deltas from a session into the graph."""
 
         result = ReconciliationResult()
@@ -141,6 +176,12 @@ class Reconciler:
                 knowledge_graph.archive(node.id, reason="below_threshold")
                 result.archived_node_ids.append(node.id)
 
+        compaction_last_step = int(last_compaction_step) if last_compaction_step is not None else -1
+        if self.compaction_interval > 0 and step_index is not None and int(step_index) > 0 and int(step_index) % self.compaction_interval == 0:
+            result.compacted_node_ids = self.kg_compact(knowledge_graph)
+            compaction_last_step = int(step_index)
+
+        result.kg_health = self.kg_health(knowledge_graph, compaction_last_step)
         knowledge_graph.save()
         return result
 
@@ -161,6 +202,15 @@ class Reconciler:
                 if knowledge_graph.vectorstore is not None and knowledge_graph.llm_adapter is not None:
                     merged.embedding = []
                     merged.metadata["_force_reembed"] = True
+                knowledge_graph.add_node(merged)
+                result.merged_node_ids.append(merged.id)
+                return
+            similarity = self._claim_similarity(knowledge_graph, candidate, incoming)
+            if similarity is not None and similarity >= self.merge_threshold:
+                merged = self._merge_nodes(candidate, incoming)
+                merged.metadata["semantic_merge_similarity"] = similarity
+                merged.confidence = self.beta_update(merged.confidence, delta.support, delta.contradiction)
+                merged.status = self.classify_status(merged.confidence)
                 knowledge_graph.add_node(merged)
                 result.merged_node_ids.append(merged.id)
                 return
@@ -225,21 +275,107 @@ class Reconciler:
     def _same_claim(self, existing: KGNode, incoming: KGNode) -> bool:
         return existing.content.strip().lower() == incoming.content.strip().lower()
 
+    def _claim_similarity(self, knowledge_graph: KnowledgeGraph, existing: KGNode, incoming: KGNode) -> float | None:
+        return knowledge_graph.cosine_similarity(existing, incoming)
+
     def _merge_nodes(self, existing: KGNode, incoming: KGNode) -> KGNode:
         evidence = list(dict.fromkeys([*existing.evidence, *incoming.evidence]))
         sources = list(dict.fromkeys([*existing.sources, *incoming.sources]))
         metadata = {**existing.metadata, **incoming.metadata}
+        claim_variants = [text for text in [existing.content.strip(), incoming.content.strip()] if text]
+        metadata["claim_variants"] = list(dict.fromkeys([*existing.metadata.get("claim_variants", []), *claim_variants]))
+        merged_content = "\n".join(metadata["claim_variants"])
         return KGNode(
             id=existing.id,
             label=incoming.label or existing.label,
             node_type=incoming.node_type or existing.node_type,
-            content=incoming.content or existing.content,
+            content=merged_content or incoming.content or existing.content,
             confidence=max(existing.confidence, incoming.confidence),
             evidence=evidence,
             sources=sources,
             metadata=metadata,
             created_at=existing.created_at,
         )
+
+    def kg_compact(self, knowledge_graph: KnowledgeGraph) -> List[str]:
+        """Merge redundant ``__split_*`` nodes back into their archived parent."""
+
+        compacted: List[str] = []
+        split_nodes = [node for node in knowledge_graph.nodes(lazy_embed=False) if "__split_" in node.id]
+        for split_node in split_nodes:
+            parent_ids = self._split_parents(knowledge_graph, split_node.id)
+            if len(parent_ids) != 1:
+                continue
+            parent_id = parent_ids[0]
+            parent = knowledge_graph.get_node(parent_id, lazy_embed=False)
+            if parent is None:
+                continue
+            sibling_ids = self._split_children(knowledge_graph, parent_id)
+            if split_node.id not in sibling_ids:
+                continue
+            if not self._is_redundant_split(knowledge_graph, parent_id, split_node.id, sibling_ids):
+                continue
+            merged_parent = self._merge_nodes(parent, split_node)
+            merged_parent.status = self.classify_status(merged_parent.confidence)
+            merged_parent.archived_at = None
+            merged_parent.metadata.pop("archive_reason", None)
+            compacted_from = list(merged_parent.metadata.get("compacted_split_ids", []))
+            compacted_from.append(split_node.id)
+            merged_parent.metadata["compacted_split_ids"] = list(dict.fromkeys(compacted_from))
+            knowledge_graph.add_node(merged_parent)
+            knowledge_graph.remove_node(split_node.id)
+            compacted.append(split_node.id)
+        return compacted
+
+    def kg_health(self, knowledge_graph: KnowledgeGraph, compaction_last_step: int) -> Dict[str, float | int]:
+        """Return a compact health summary for checkpoint/runtime inspection."""
+
+        live_nodes = [node_id for node_id, attrs in knowledge_graph.graph.nodes(data=True) if attrs.get("status") != "archived"]
+        if live_nodes:
+            avg_node_degree = sum(float(knowledge_graph.graph.degree(node_id)) for node_id in live_nodes) / len(live_nodes)
+        else:
+            avg_node_degree = 0.0
+        split_node_count = sum(1 for node_id in knowledge_graph.graph.nodes if "__split_" in str(node_id))
+        return {
+            "split_node_count": int(split_node_count),
+            "avg_node_degree": float(avg_node_degree),
+            "compaction_last_step": int(compaction_last_step),
+        }
+
+    def _split_parents(self, knowledge_graph: KnowledgeGraph, node_id: str) -> List[str]:
+        return [
+            str(source)
+            for source, _target, _key, attrs in knowledge_graph.graph.in_edges(node_id, keys=True, data=True)
+            if attrs.get("relation_type") == "split_into"
+        ]
+
+    def _split_children(self, knowledge_graph: KnowledgeGraph, parent_id: str) -> List[str]:
+        return [
+            str(target)
+            for _source, target, _key, attrs in knowledge_graph.graph.out_edges(parent_id, keys=True, data=True)
+            if attrs.get("relation_type") == "split_into"
+        ]
+
+    def _is_redundant_split(
+        self,
+        knowledge_graph: KnowledgeGraph,
+        parent_id: str,
+        split_node_id: str,
+        sibling_ids: List[str],
+    ) -> bool:
+        outgoing = self._edge_signature_set(knowledge_graph, split_node_id)
+        comparison_targets = [parent_id, *[node_id for node_id in sibling_ids if node_id != split_node_id]]
+        baseline: set[tuple[str, str]] = set()
+        for candidate_id in comparison_targets:
+            baseline.update(self._edge_signature_set(knowledge_graph, candidate_id))
+        return outgoing.issubset(baseline)
+
+    def _edge_signature_set(self, knowledge_graph: KnowledgeGraph, node_id: str) -> set[tuple[str, str]]:
+        return {
+            (str(attrs.get("relation_type")), str(target))
+            for _source, target, _key, attrs in knowledge_graph.graph.out_edges(node_id, keys=True, data=True)
+            if attrs.get("relation_type") != "split_into"
+        }
 
     def update_self_model(self, knowledge_graph: KnowledgeGraph, forecast: "Forecast") -> KGNode:
         """Accumulate verified forecast errors into a self-observation KG node."""

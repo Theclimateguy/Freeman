@@ -2,36 +2,33 @@
 agent:
   source_refresh_seconds: 600
   bootstrap:
-    mode: "schema_path"
-    schema_path: "./freeman/domain/profiles/gim15.json"
+    mode: "llm_synthesize"
+    schema_path:
     fallback_schema_path: "./freeman/domain/profiles/gim15.json"
-    domain_brief_path: ""
+    domain_brief_path: "./domain_brief_climate_news.md"
     domain_brief: ""
+    max_retries: 10
+    trial_steps: 3
   stream_keywords:
     - climate
-    - warming
-    - heatwave
-    - drought
-    - flood
-    - wildfire
     - emissions
-    - carbon
     - co2
-    - extreme weather
+    - temperature
+    - ipcc
     - sea level
+    - extreme weather
     - adaptation
     - mitigation
+  stream_filter:
+    min_keyword_matches: 2
+    min_relevance_score: 0.10
+    agent_min_relevance_score: 0.25
   sources:
     - type: rss
       url: "https://www.carbonbrief.org/feed/"
       default_topic: "climate_news"
       max_entries: 25
       source_type: "rss_carbonbrief"
-    - type: rss
-      url: "https://www.theguardian.com/environment/rss"
-      default_topic: "climate_news"
-      max_entries: 25
-      source_type: "rss_guardian_env"
     - type: rss
       url: "https://www.noaa.gov/rss.xml"
       default_topic: "climate_news"
@@ -49,6 +46,9 @@ memory:
   json_path: "./data/kg_climate.json"
   embedding_provider: "hashing"
   hashing_embedding_dimension: 384
+  reconciler:
+    merge_threshold: 0.82
+    compaction_interval: 20
 
 runtime:
   mode: "follow"

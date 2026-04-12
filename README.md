@@ -175,7 +175,21 @@ It supports two bootstrap modes:
 - `schema_path`: start from an explicit schema such as `freeman/domain/profiles/gim15.json`
 - `llm_synthesize`: use the built-in Freeman orchestrator to synthesize and repair a domain schema from a natural-language brief before the stream loop starts
 
-For local models, `llm_synthesize` can fall back to a configured `fallback_schema_path` when the model fails to produce a verifier-clean package.
+`llm_synthesize` now runs a verifier-guided repair loop. `bootstrap_package.json` persists `bootstrap_attempts` with per-attempt verifier errors, and local models can still fall back to `fallback_schema_path` if they never produce a verifier-clean package.
+
+The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
+
+Stream ingestion is two-phase:
+
+- phase 1 hard filter from config: `agent.stream_keywords` + `agent.stream_filter.min_keyword_matches` + `agent.stream_filter.min_relevance_score`
+- phase 2 agent-side relevance filter after self-calibration begins (`self_observation` exists), with soft-reject trace events and `stream_relevance` tracked as a `self_capability`
+
+The reconciler is also configurable through `memory.reconciler`:
+
+- `merge_threshold`: cosine-similarity threshold for semantic merge instead of eager claim splitting
+- `compaction_interval`: periodic `__split_*` compaction cadence
+
+`checkpoint.json` now includes `runtime_metadata.kg_health`, including split-node count, average live-node degree, and the last compaction step.
 
 The consciousness layer stays deterministic. It does not read narrative text back into state. Instead it projects:
 

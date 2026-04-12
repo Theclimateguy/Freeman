@@ -237,6 +237,49 @@ class ConsciousnessEngine:
             self.state.runtime_metadata["last_update_at"] = self.state.trace_state[-1].timestamp.isoformat()
         return self.state
 
+    def refresh_after_runtime_feedback(
+        self,
+        *,
+        world_ref: str,
+        runtime_metadata: dict[str, Any] | None = None,
+    ) -> ConsciousState:
+        """Refresh capability and attention after non-world runtime feedback."""
+
+        self.state.world_ref = str(world_ref)
+        for operator_name, operator in (
+            (
+                "runtime_feedback_refresh",
+                (
+                    lambda: {
+                        "runtime_metadata": deep_copy_jsonable(runtime_metadata or {}),
+                        "rationale": "runtime feedback refresh",
+                    }
+                    if runtime_metadata
+                    else {"rationale": "no change"}
+                ),
+            ),
+            ("capability_review", self._capability_review),
+            ("attention_rebalance", self._attention_rebalance),
+        ):
+            raw_diff = operator()
+            rationale = str(raw_diff.get("rationale", "no change"))
+            clean_diff = {
+                key: value
+                for key, value in raw_diff.items()
+                if key != "rationale" and value not in ({}, [], None)
+            }
+            self._apply_diff(clean_diff)
+            self._write_trace(
+                operator=operator_name,
+                diff=clean_diff,
+                trigger_type="manual",
+                transition_type="external",
+                rationale=rationale if clean_diff else "no change",
+            )
+        if self.state.trace_state:
+            self.state.runtime_metadata["last_update_at"] = self.state.trace_state[-1].timestamp.isoformat()
+        return self.state
+
     def _sync_runtime_metrics(self, pipeline_result: Any) -> dict[str, Any]:
         disagreement_snapshot = deep_copy_jsonable(pipeline_result.metadata.get("disagreement_snapshot", {}))
         confidence_gap = 0.0
@@ -476,6 +519,7 @@ class ConsciousnessEngine:
         alpha = float(cfg.get("alpha", 2.0))
         beta = float(cfg.get("beta", 4.0))
         per_domain: dict[str, dict[str, float]] = {}
+        total_self_observations = 0.0
         for node in self.state.self_model_ref.knowledge_graph.query(node_type="self_observation"):
             domain_id = str(node.metadata.get("domain_id", "")).strip()
             if not domain_id:
@@ -484,6 +528,7 @@ class ConsciousnessEngine:
             n_forecasts = max(float(node.metadata.get("n_forecasts", 0.0)), 0.0)
             if n_forecasts <= 0.0:
                 continue
+            total_self_observations += n_forecasts
             stats = per_domain.setdefault(domain_id, {"weighted_mae": 0.0, "n": 0.0})
             stats["weighted_mae"] += mean_abs_error * n_forecasts
             stats["n"] += n_forecasts
@@ -504,6 +549,36 @@ class ConsciousnessEngine:
                 node_type="self_capability",
                 domain=domain_id,
                 payload=payload,
+                confidence=capability,
+                created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0),
+                updated_at=datetime.now(timezone.utc).replace(microsecond=0),
+                source_trace_id=self.state.trace_state[-1].event_id if self.state.trace_state else None,
+            )
+            nodes.append(node.to_dict())
+
+        stream_stats = dict(self.state.runtime_metadata.get("stream_relevance", {}) or {})
+        if total_self_observations > 0.0 and int(stream_stats.get("scored_count", 0)) > 0:
+            calibration_factor = min(total_self_observations / 10.0, 1.0)
+            mean_score = float(stream_stats.get("mean_score", 0.0))
+            accepted = max(int(stream_stats.get("accepted_count", 0)), 0)
+            rejected = max(int(stream_stats.get("rejected_count", 0)), 0)
+            acceptance_rate = accepted / max(accepted + rejected, 1)
+            capability = min(max(calibration_factor * (0.7 * mean_score + 0.3 * acceptance_rate), 0.0), 1.0)
+            existing = self._self_model_node("self_capability", "stream_relevance")
+            node = SelfModelNode(
+                node_id="sm:self_capability:stream_relevance",
+                node_type="self_capability",
+                domain="stream_relevance",
+                payload={
+                    "domain": "stream_relevance",
+                    "capability": capability,
+                    "mean_relevance_score": mean_score,
+                    "acceptance_rate": acceptance_rate,
+                    "scored_count": int(stream_stats.get("scored_count", 0)),
+                    "accepted_count": accepted,
+                    "rejected_count": rejected,
+                    "self_calibrated": True,
+                },
                 confidence=capability,
                 created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0),
                 updated_at=datetime.now(timezone.utc).replace(microsecond=0),

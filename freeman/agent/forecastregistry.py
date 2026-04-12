@@ -39,6 +39,7 @@ class Forecast:
     horizon_steps: int
     created_at: datetime
     created_step: int = 0
+    created_runtime_step: int | None = None
     verified_at: datetime | None = None
     actual_prob: float | None = None
     error: float | None = None
@@ -49,6 +50,8 @@ class Forecast:
         self.predicted_prob = float(self.predicted_prob)
         self.horizon_steps = int(self.horizon_steps)
         self.created_step = int(self.created_step)
+        if self.created_runtime_step is not None:
+            self.created_runtime_step = int(self.created_runtime_step)
         if self.actual_prob is not None:
             self.actual_prob = float(self.actual_prob)
         if self.error is not None:
@@ -58,7 +61,8 @@ class Forecast:
 
     @property
     def deadline_step(self) -> int:
-        return self.created_step + self.horizon_steps
+        base_step = self.created_runtime_step if self.created_runtime_step is not None else self.created_step
+        return int(base_step) + self.horizon_steps
 
     def snapshot(self) -> dict:
         return {
@@ -70,6 +74,7 @@ class Forecast:
             "horizon_steps": self.horizon_steps,
             "created_at": _serialize_dt(self.created_at),
             "created_step": self.created_step,
+            "created_runtime_step": self.created_runtime_step,
             "verified_at": _serialize_dt(self.verified_at),
             "actual_prob": self.actual_prob,
             "error": self.error,
@@ -91,6 +96,11 @@ class Forecast:
             horizon_steps=int(data["horizon_steps"]),
             created_at=created_at,
             created_step=int(data.get("created_step", 0)),
+            created_runtime_step=(
+                int(data["created_runtime_step"])
+                if data.get("created_runtime_step") is not None
+                else None
+            ),
             verified_at=_parse_dt(data.get("verified_at")),
             actual_prob=data.get("actual_prob"),
             error=data.get("error"),

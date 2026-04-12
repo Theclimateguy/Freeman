@@ -100,7 +100,7 @@ class AnalysisPipeline:
         self.verifier = Verifier(verifier_config or self.sim_config)
         self.runner = GameRunner(self.sim_config)
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
-        self.reconciler = reconciler or Reconciler()
+        self.reconciler = reconciler or Reconciler.from_config(config_path)
         self.forecast_registry = forecast_registry
         self.emitter = emitter
         self.config = config or AnalysisPipelineConfig.from_config(config_path)
@@ -375,7 +375,13 @@ class AnalysisPipeline:
                         metadata={"epistemic_event_type": "belief_conflict"},
                     )
                 )
-        reconciliation = self.reconciler.reconcile(self.knowledge_graph, session_log)
+        prior_kg_health = self.conscious_state.runtime_metadata.get("kg_health", {})
+        reconciliation = self.reconciler.reconcile(
+            self.knowledge_graph,
+            session_log,
+            step_index=int(getattr(final_world, "runtime_step", final_world.t)),
+            last_compaction_step=int(prior_kg_health.get("compaction_last_step", -1)),
+        )
 
         result = AnalysisPipelineResult(
             world=final_world,
@@ -409,6 +415,7 @@ class AnalysisPipeline:
             result.proactive_events = self.emitter.evaluate(result, prev_probs=prev_probs)
         engine = ConsciousnessEngine(self.conscious_state, self.consciousness_config)
         self.conscious_state = engine.post_pipeline_update(result, self.knowledge_graph)
+        self.conscious_state.runtime_metadata["kg_health"] = dict(reconciliation.kg_health)
         if sim_result.final_outcome_probs:
             self._previous_outcome_probs[final_world.domain_id] = {
                 outcome_id: float(prob)
@@ -521,11 +528,13 @@ class AnalysisPipeline:
                 horizon_steps=self.sim_config.max_steps,
                 created_at=datetime.now(timezone.utc).replace(microsecond=0),
                 created_step=int(final_world.t),
+                created_runtime_step=int(final_world.runtime_step),
                 metadata={
                     "analysis_node_id": analysis_node_id,
                     "belief_confidence": float(belief_confidence),
                     "rationale_at_time": final_world.parameter_vector.rationale,
                     "parameter_vector": final_world.parameter_vector.snapshot(),
+                    "created_runtime_step": int(final_world.runtime_step),
                     "reference_prob": reference_prob,
                     "reference_gap": reference_gap,
                     "confidence_weighted_gap": confidence_weighted_gap,

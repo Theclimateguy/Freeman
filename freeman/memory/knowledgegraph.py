@@ -238,6 +238,25 @@ class KnowledgeGraph:
         self.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
         self._maybe_save()
 
+    def remove_edge(self, edge_id: str) -> None:
+        """Remove one edge by id if present."""
+
+        for source, target, key in list(self.graph.edges(keys=True)):
+            if key == edge_id:
+                self.graph.remove_edge(source, target, key=key)
+                self._maybe_save()
+                return
+
+    def remove_node(self, node_id: str) -> None:
+        """Remove one node and all incident edges."""
+
+        if node_id not in self.graph:
+            return
+        if self.vectorstore is not None:
+            self.vectorstore.delete(node_id)
+        self.graph.remove_node(node_id)
+        self._maybe_save()
+
     def edges(self) -> List[KGEdge]:
         """Return all edges."""
 
@@ -574,6 +593,28 @@ class KnowledgeGraph:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(html, encoding="utf-8")
         return target
+
+    def cosine_similarity(self, left: KGNode, right: KGNode) -> float | None:
+        """Return cosine similarity between two node embeddings when available."""
+
+        left_node = KGNode.from_snapshot(left.snapshot())
+        right_node = KGNode.from_snapshot(right.snapshot())
+        if not left_node.embedding and left_node.id in self.graph:
+            stored = self.get_node(left_node.id, lazy_embed=True)
+            if stored is not None:
+                left_node = stored
+        if not right_node.embedding and self.llm_adapter is not None and right_node.content:
+            right_node.embedding = [float(value) for value in self.llm_adapter.embed(right_node.content)]
+        if not left_node.embedding or not right_node.embedding:
+            return None
+        if len(left_node.embedding) != len(right_node.embedding):
+            return None
+        left_norm = sum(value * value for value in left_node.embedding) ** 0.5
+        right_norm = sum(value * value for value in right_node.embedding) ** 0.5
+        if left_norm == 0.0 or right_norm == 0.0:
+            return None
+        dot = sum(a * b for a, b in zip(left_node.embedding, right_node.embedding))
+        return float(dot / (left_norm * right_norm))
 
     def _prepare_node(self, node: KGNode, previous: KGNode | None) -> KGNode:
         prepared = KGNode.from_snapshot(node.snapshot())

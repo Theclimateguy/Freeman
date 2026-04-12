@@ -23,6 +23,8 @@ Rules:
 - Use the violation details, including field names, observed values, expected bounds, and repair_targets.
 - Keep the package compact and numerically stable.
 - Use only Freeman-supported evolution types: linear, stock_flow, logistic, threshold, coupled.
+- Use the verifier schema spec when provided. A verifier-clean package matters more than preserving a broken field.
+- If error history is provided, avoid repeating earlier rejected structures.
 - Return JSON only.
 """
 
@@ -125,6 +127,9 @@ class OllamaChatClient:
         violations: List[Dict[str, Any]],
         *,
         domain_description: str = "",
+        error_history: List[Dict[str, Any]] | None = None,
+        verifier_schema_spec: Dict[str, Any] | None = None,
+        repair_stage: str = "standard",
         max_tokens: int = 4000,
     ) -> Dict[str, Any]:
         """Repair a Freeman package using structured verifier feedback."""
@@ -133,6 +138,9 @@ class OllamaChatClient:
             "domain_description": domain_description,
             "package": package,
             "violations": violations,
+            "repair_stage": repair_stage,
+            "error_history": error_history or [],
+            "verifier_schema_spec": verifier_schema_spec or {},
         }
         messages = [
             {"role": "system", "content": REPAIR_SYSTEM_PROMPT},

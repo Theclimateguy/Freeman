@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import signal
 import sys
 import time
@@ -34,6 +35,7 @@ from freeman.agent.consciousness import ConsciousState, ConsciousnessEngine, Tra
 from freeman.agent.forecastregistry import ForecastRegistry
 from freeman.agent.parameterestimator import ParameterEstimator
 from freeman.agent.signalingestion import ManualSignalSource, Signal, SignalIngestionEngine, SignalMemory
+from freeman.core.scorer import score_outcomes
 from freeman.game.runner import SimConfig
 from freeman.llm import DeepSeekChatClient, OllamaChatClient, OpenAIChatClient
 from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator
@@ -189,9 +191,20 @@ def _keywords_from_config(config: dict[str, Any], default_keywords: list[str] | 
     return [str(item).strip().lower() for item in raw if str(item).strip()]
 
 
-def _signal_matches_keywords(signal_payload: Signal, keywords: list[str]) -> bool:
-    if not keywords:
-        return True
+def _stream_filter_config(config: dict[str, Any]) -> dict[str, Any]:
+    agent_cfg = config.get("agent", {})
+    runtime_cfg = config.get("runtime", {})
+    filter_cfg = dict(agent_cfg.get("stream_filter", {}) or {})
+    if "min_relevance_score" not in filter_cfg:
+        filter_cfg["min_relevance_score"] = float(agent_cfg.get("min_relevance_score", runtime_cfg.get("min_relevance_score", 0.0)) or 0.0)
+    if "min_keyword_matches" not in filter_cfg:
+        filter_cfg["min_keyword_matches"] = int(agent_cfg.get("min_keyword_matches", runtime_cfg.get("min_keyword_matches", 0)) or 0)
+    if "agent_min_relevance_score" not in filter_cfg:
+        filter_cfg["agent_min_relevance_score"] = float(filter_cfg.get("min_relevance_score", 0.0))
+    return filter_cfg
+
+
+def _signal_haystack(signal_payload: Signal) -> str:
     haystack = " ".join(
         [
             signal_payload.topic,
@@ -200,7 +213,97 @@ def _signal_matches_keywords(signal_payload: Signal, keywords: list[str]) -> boo
             json.dumps(signal_payload.metadata, ensure_ascii=False),
         ]
     ).lower()
-    return any(keyword in haystack for keyword in keywords)
+    return haystack
+
+
+def _keyword_match_details(signal_payload: Signal, keywords: list[str]) -> tuple[int, list[str]]:
+    if not keywords:
+        return 0, []
+    haystack = _signal_haystack(signal_payload)
+    matched = [keyword for keyword in keywords if keyword in haystack]
+    return len(matched), matched
+
+
+def _tokenize_text(text: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9_]+", str(text).lower()) if len(token) >= 3}
+
+
+def _world_ontology_terms(world: WorldState | None) -> set[str]:
+    if world is None:
+        return set()
+    terms = _tokenize_text(world.domain_id)
+    for actor in world.actors.values():
+        terms.update(_tokenize_text(actor.id))
+        terms.update(_tokenize_text(getattr(actor, "name", "")))
+    for resource in world.resources.values():
+        terms.update(_tokenize_text(resource.id))
+        terms.update(_tokenize_text(getattr(resource, "name", "")))
+    for outcome in world.outcomes.values():
+        terms.update(_tokenize_text(outcome.id))
+        terms.update(_tokenize_text(getattr(outcome, "name", "")))
+    return terms
+
+
+def _active_hypothesis_terms(state: ConsciousState) -> set[str]:
+    terms: set[str] = set()
+    for node in state.self_model_ref.get_nodes_by_type("active_hypothesis"):
+        terms.update(_tokenize_text(str(node.payload.get("outcome_id", ""))))
+        terms.update(_tokenize_text(str(node.payload.get("domain", node.domain or ""))))
+    for node_id in state.goal_state:
+        terms.update(_tokenize_text(node_id))
+    return terms
+
+
+def _relevance_score(
+    signal_payload: Signal,
+    *,
+    keywords: list[str],
+    ontology_terms: set[str],
+    hypothesis_terms: set[str],
+) -> tuple[float, dict[str, Any]]:
+    signal_tokens = _tokenize_text(_signal_haystack(signal_payload))
+    keyword_hits, matched_keywords = _keyword_match_details(signal_payload, keywords)
+    keyword_score = (keyword_hits / max(len(keywords), 1)) if keywords else 0.0
+    ontology_overlap = len(signal_tokens & ontology_terms)
+    ontology_score = ontology_overlap / max(min(len(ontology_terms), 12), 1) if ontology_terms else 0.0
+    hypothesis_overlap = len(signal_tokens & hypothesis_terms)
+    hypothesis_score = hypothesis_overlap / max(min(len(hypothesis_terms), 8), 1) if hypothesis_terms else 0.0
+    score = max(0.0, min(1.0, 0.45 * keyword_score + 0.35 * ontology_score + 0.20 * hypothesis_score))
+    return score, {
+        "keyword_hits": keyword_hits,
+        "matched_keywords": matched_keywords,
+        "ontology_overlap": ontology_overlap,
+        "hypothesis_overlap": hypothesis_overlap,
+        "score": score,
+    }
+
+
+def _signal_matches_keywords(signal_payload: Signal, keywords: list[str], min_keyword_matches: int = 1) -> bool:
+    if not keywords:
+        return True
+    keyword_hits, _matched = _keyword_match_details(signal_payload, keywords)
+    return keyword_hits >= max(int(min_keyword_matches), 1)
+
+
+def _self_calibration_started(pipeline: AnalysisPipeline) -> bool:
+    return bool(pipeline.knowledge_graph.query(node_type="self_observation"))
+
+
+def _update_stream_relevance_stats(state: ConsciousState, *, score: float, accepted: bool) -> dict[str, Any]:
+    previous = dict(state.runtime_metadata.get("stream_relevance", {}) or {})
+    scored = int(previous.get("scored_count", 0)) + 1
+    accepted_count = int(previous.get("accepted_count", 0)) + (1 if accepted else 0)
+    rejected_count = int(previous.get("rejected_count", 0)) + (0 if accepted else 1)
+    total_score = float(previous.get("total_score", 0.0)) + float(score)
+    return {
+        "scored_count": scored,
+        "accepted_count": accepted_count,
+        "rejected_count": rejected_count,
+        "total_score": total_score,
+        "mean_score": total_score / max(scored, 1),
+        "last_score": float(score),
+        "last_decision": "accept" if accepted else "reject",
+    }
 
 
 def _source_configs(config: dict[str, Any], default_sources: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
@@ -313,6 +416,7 @@ def _runtime_trace_for_signal(
     llm_used: bool,
     updated_world: bool,
     update_error: str | None = None,
+    extra_diff: dict[str, Any] | None = None,
 ) -> TraceEvent:
     timestamp = _to_datetime(signal_payload.timestamp)
     index = len(state.trace_state)
@@ -327,6 +431,8 @@ def _runtime_trace_for_signal(
     }
     if update_error:
         diff["update_error"] = str(update_error)
+    if extra_diff:
+        diff.update(json.loads(json.dumps(extra_diff, ensure_ascii=False)))
     return TraceEvent(
         event_id=f"trace:signal:{signal_id}",
         timestamp=timestamp,
@@ -367,6 +473,59 @@ def _runtime_trace_for_verification(
         diff=diff,
         rationale=f"verified {verified_count} due forecasts",
     )
+
+
+def _verify_due_forecasts(
+    *,
+    pipeline: AnalysisPipeline,
+    state: ConsciousState,
+    event_log: EventLog,
+    logged_event_ids: set[str],
+    current_world: WorldState,
+    current_probs: dict[str, float],
+) -> int:
+    """Verify all due forecasts against the current posterior using monotonic runtime_step."""
+
+    if pipeline.forecast_registry is None:
+        return 0
+    due = pipeline.forecast_registry.due(current_world.runtime_step)
+    if not due:
+        return 0
+
+    verified_ids: list[str] = []
+    verification_errors: list[float] = []
+    for forecast in due:
+        verified = pipeline.verify_forecast(
+            forecast.forecast_id,
+            actual_prob=float(current_probs.get(forecast.outcome_id, 0.0)),
+            verified_at=_utc_now(),
+        )
+        verified_ids.append(verified.forecast_id)
+        if verified.error is not None:
+            verification_errors.append(float(verified.error))
+    if not verified_ids:
+        return 0
+
+    verify_trace = _runtime_trace_for_verification(
+        state=state,
+        verified_count=len(verified_ids),
+        verified_ids=verified_ids,
+        mean_abs_error=(sum(verification_errors) / len(verification_errors) if verification_errors else None),
+    )
+    pipeline.conscious_state.trace_state.append(verify_trace)
+    event_log.append(verify_trace)
+    logged_event_ids.add(verify_trace.event_id)
+    engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
+    engine.refresh_after_epistemic_update(
+        world_ref=f"world:{current_world.domain_id}:{current_world.t}",
+        runtime_metadata={
+            "last_domain_id": str(current_world.domain_id),
+            "last_world_step": int(current_world.t),
+            "last_runtime_step": int(current_world.runtime_step),
+        },
+    )
+    pipeline.conscious_state = engine.state
+    return len(verified_ids)
 
 
 def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
@@ -426,6 +585,10 @@ def main(
         if args.keyword
         else _keywords_from_config(config, default_keywords)
     )
+    stream_filter_cfg = _stream_filter_config(config)
+    min_relevance_score = float(stream_filter_cfg.get("min_relevance_score", 0.0))
+    min_keyword_matches = int(stream_filter_cfg.get("min_keyword_matches", 0))
+    agent_min_relevance_score = float(stream_filter_cfg.get("agent_min_relevance_score", min_relevance_score))
 
     ollama_base_url = str(
         args.ollama_base_url
@@ -484,7 +647,12 @@ def main(
     world_state_path = runtime_path / "world_state.json"
     if args.resume and world_state_path.exists():
         current_world = WorldState.from_snapshot(json.loads(world_state_path.read_text(encoding="utf-8")))
-        LOGGER.info("Loaded world checkpoint domain_id=%s step=%s", current_world.domain_id, current_world.t)
+        LOGGER.info(
+            "Loaded world checkpoint domain_id=%s step=%s runtime_step=%s",
+            current_world.domain_id,
+            current_world.t,
+            current_world.runtime_step,
+        )
     bootstrap_mode = str(
         args.bootstrap_mode
         or bootstrap_cfg.get("mode")
@@ -534,15 +702,19 @@ def main(
         try:
             package, world_id, attempts, repair_history = orchestrator.compile_and_repair(
                 domain_brief,
-                max_retries=int(bootstrap_cfg.get("max_retries", 5)),
+                max_retries=int(bootstrap_cfg.get("max_retries", 10)),
                 trial_steps=int(bootstrap_cfg.get("trial_steps", 3)),
                 config=_build_sim_config(config),
+            )
+            bootstrap_attempts = json.loads(
+                json.dumps(orchestrator.last_bootstrap_attempts or repair_history, ensure_ascii=False)
             )
             synthesized_package = {
                 **package,
                 "bootstrap_mode": "llm_synthesize",
                 "world_id": world_id,
                 "synthesis_attempts": attempts,
+                "bootstrap_attempts": bootstrap_attempts,
                 "repair_history": repair_history,
                 "domain_brief": domain_brief,
             }
@@ -562,6 +734,9 @@ def main(
                 "bootstrap_mode": "llm_synthesize_fallback",
                 "domain_brief": domain_brief,
                 "bootstrap_error": str(exc),
+                "bootstrap_attempts": json.loads(
+                    json.dumps(getattr(orchestrator, "last_bootstrap_attempts", []), ensure_ascii=False)
+                ),
                 "fallback_schema_path": str(schema_path),
             }
             _atomic_write_json(package_path, synthesized_package)
@@ -575,6 +750,7 @@ def main(
     if current_world is None:
         bootstrap_result = pipeline.run(schema_payload, policies=bootstrap_policies)
         current_world = bootstrap_result.world.clone()
+        current_world.runtime_step = 0
         _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
         _persist_runtime_state(
             pipeline=pipeline,
@@ -625,6 +801,7 @@ def main(
     idle_deliberations = 0
     skipped_watch_count = 0
     seen_count = 0
+    filtered_out_count = 0
 
     try:
         while not stop_requested:
@@ -641,8 +818,37 @@ def main(
                         fetched.extend(source_signals)
                     except Exception as exc:  # noqa: BLE001
                         LOGGER.warning("Source fetch failed (%s): %s", getattr(source, "url", "unknown"), exc)
-                if keywords:
-                    fetched = [item for item in fetched if _signal_matches_keywords(item, keywords)]
+                ontology_terms = _world_ontology_terms(current_world)
+                eligible: list[Signal] = []
+                poll_filtered_out = 0
+                for item in fetched:
+                    if keywords and not _signal_matches_keywords(
+                        item,
+                        keywords,
+                        min_keyword_matches=max(min_keyword_matches, 1),
+                    ):
+                        poll_filtered_out += 1
+                        continue
+                    relevance_score, details = _relevance_score(
+                        item,
+                        keywords=keywords,
+                        ontology_terms=ontology_terms,
+                        hypothesis_terms=set(),
+                    )
+                    if relevance_score < min_relevance_score:
+                        poll_filtered_out += 1
+                        continue
+                    item.metadata = {
+                        **dict(item.metadata),
+                        "external_relevance": {
+                            **details,
+                            "min_relevance_score": min_relevance_score,
+                            "min_keyword_matches": min_keyword_matches,
+                        },
+                    }
+                    eligible.append(item)
+                filtered_out_count += poll_filtered_out
+                fetched = eligible
                 fetched.sort(key=lambda item: item.timestamp)
 
                 enqueued = 0
@@ -660,7 +866,12 @@ def main(
                     enqueued += 1
                 next_poll_at = now + timedelta(seconds=float(poll_seconds))
                 if enqueued > 0:
-                    LOGGER.info("Enqueued %d new signals. queue_len=%d", enqueued, len(pending_signals))
+                    LOGGER.info(
+                        "Enqueued %d new signals. queue_len=%d filtered_out_count=%d",
+                        enqueued,
+                        len(pending_signals),
+                        poll_filtered_out,
+                    )
                     _persist_runtime_state(
                         pipeline=pipeline,
                         world_state=current_world,
@@ -671,7 +882,7 @@ def main(
                         pending_signals=pending_signals,
                     )
                 else:
-                    LOGGER.info("No new eligible signals this poll.")
+                    LOGGER.info("No new eligible signals this poll. filtered_out_count=%d", poll_filtered_out)
 
             if pending_signals:
                 signal_payload = pending_signals.pop(0)
@@ -679,6 +890,60 @@ def main(
                 queued_signal_ids.discard(signal_id)
                 if cursor_store.is_committed(signal_id):
                     continue
+                current_world.runtime_step += 1
+                if _self_calibration_started(pipeline):
+                    agent_score, agent_details = _relevance_score(
+                        signal_payload,
+                        keywords=keywords,
+                        ontology_terms=_world_ontology_terms(current_world),
+                        hypothesis_terms=_active_hypothesis_terms(pipeline.conscious_state),
+                    )
+                    stream_relevance_stats = _update_stream_relevance_stats(
+                        pipeline.conscious_state,
+                        score=agent_score,
+                        accepted=agent_score >= agent_min_relevance_score,
+                    )
+                    engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
+                    pipeline.conscious_state = engine.refresh_after_runtime_feedback(
+                        world_ref=f"world:{current_world.domain_id}:{current_world.t}",
+                        runtime_metadata={
+                            "stream_relevance": stream_relevance_stats,
+                            "last_runtime_step": int(current_world.runtime_step),
+                        },
+                    )
+                    if agent_score < agent_min_relevance_score:
+                        filtered_out_count += 1
+                        runtime_event = _runtime_trace_for_signal(
+                            state=pipeline.conscious_state,
+                            signal_payload=signal_payload,
+                            trigger_mode="FILTERED_OUT",
+                            llm_used=False,
+                            updated_world=False,
+                            update_error=None,
+                            extra_diff={
+                                "filtered_out": True,
+                                "filter_phase": "agent",
+                                "relevance_score": agent_score,
+                                "agent_min_relevance_score": agent_min_relevance_score,
+                                "relevance_details": agent_details,
+                                "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+                            },
+                        )
+                        pipeline.conscious_state.trace_state.append(runtime_event)
+                        event_log.append(runtime_event)
+                        logged_event_ids.add(runtime_event.event_id)
+                        cursor_store.commit(signal_id)
+                        processed_count += 1
+                        _persist_runtime_state(
+                            pipeline=pipeline,
+                            world_state=current_world,
+                            runtime_path=runtime_path,
+                            checkpoint_manager=checkpoint_manager,
+                            cursor_store=cursor_store,
+                            signal_memory=signal_memory,
+                            pending_signals=pending_signals,
+                        )
+                        continue
                 triggers = ingestion_engine.ingest(
                     ManualSignalSource([signal_payload]),
                     classifier=llm_client,
@@ -693,10 +958,24 @@ def main(
                         llm_used=False,
                         updated_world=False,
                         update_error=None,
+                        extra_diff={
+                            "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+                        },
                     )
                     pipeline.conscious_state.trace_state.append(runtime_event)
                     event_log.append(runtime_event)
                     logged_event_ids.add(runtime_event.event_id)
+                    verified_forecasts_count += _verify_due_forecasts(
+                        pipeline=pipeline,
+                        state=pipeline.conscious_state,
+                        event_log=event_log,
+                        logged_event_ids=logged_event_ids,
+                        current_world=current_world,
+                        current_probs={
+                            outcome_id: float(probability)
+                            for outcome_id, probability in score_outcomes(current_world).items()
+                        },
+                    )
                     cursor_store.commit(signal_id)
                     processed_count += 1
                     _persist_runtime_state(
@@ -715,6 +994,7 @@ def main(
                 llm_update_attempted = should_update
                 update_error: str | None = None
                 result = None
+                verification_probs: dict[str, float] | None = None
                 if should_update:
                     try:
                         parameter_vector = estimator.estimate(current_world, signal_payload.text)
@@ -732,8 +1012,10 @@ def main(
                                 signal_id,
                                 primary_exc,
                             )
+                            fallback_world = base_world_template.clone()
+                            fallback_world.runtime_step = current_world.runtime_step
                             result = pipeline.update(
-                                base_world_template.clone(),
+                                fallback_world,
                                 parameter_vector,
                                 signal_text=signal_payload.text,
                             )
@@ -741,48 +1023,19 @@ def main(
                             updated_count += 1
                             update_error = f"primary_update_failed: {primary_exc}; fallback=base_world"
 
-                        if pipeline.forecast_registry is not None and result is not None:
-                            due = pipeline.forecast_registry.due(current_world.t)
-                            if due:
-                                verified_ids: list[str] = []
-                                verification_errors: list[float] = []
-                                current_probs = {
-                                    key: float(value)
-                                    for key, value in result.simulation.get("final_outcome_probs", {}).items()
-                                }
-                                for forecast in due:
-                                    verified = pipeline.verify_forecast(
-                                        forecast.forecast_id,
-                                        actual_prob=float(current_probs.get(forecast.outcome_id, 0.0)),
-                                        verified_at=_utc_now(),
-                                    )
-                                    verified_ids.append(verified.forecast_id)
-                                    if verified.error is not None:
-                                        verification_errors.append(float(verified.error))
-                                if verified_ids:
-                                    verified_forecasts_count += len(verified_ids)
-                                    verify_trace = _runtime_trace_for_verification(
-                                        state=pipeline.conscious_state,
-                                        verified_count=len(verified_ids),
-                                        verified_ids=verified_ids,
-                                        mean_abs_error=(
-                                            sum(verification_errors) / len(verification_errors)
-                                            if verification_errors
-                                            else None
-                                        ),
-                                    )
-                                    pipeline.conscious_state.trace_state.append(verify_trace)
-                                    event_log.append(verify_trace)
-                                    logged_event_ids.add(verify_trace.event_id)
-                                    engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
-                                    engine.refresh_after_epistemic_update(
-                                        world_ref=f"world:{current_world.domain_id}:{current_world.t}",
-                                        runtime_metadata={
-                                            "last_domain_id": str(current_world.domain_id),
-                                            "last_world_step": int(current_world.t),
-                                        },
-                                    )
-                                    pipeline.conscious_state = engine.state
+                        if result is not None:
+                            verification_probs = {
+                                key: float(value)
+                                for key, value in result.simulation.get("final_outcome_probs", {}).items()
+                            }
+                            verified_forecasts_count += _verify_due_forecasts(
+                                pipeline=pipeline,
+                                state=pipeline.conscious_state,
+                                event_log=event_log,
+                                logged_event_ids=logged_event_ids,
+                                current_world=current_world,
+                                current_probs=verification_probs,
+                            )
 
                         engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
                         engine.maybe_deliberate(_utc_now())
@@ -795,6 +1048,19 @@ def main(
                 elif not args.include_watch:
                     skipped_watch_count += 1
 
+                if verification_probs is None:
+                    verified_forecasts_count += _verify_due_forecasts(
+                        pipeline=pipeline,
+                        state=pipeline.conscious_state,
+                        event_log=event_log,
+                        logged_event_ids=logged_event_ids,
+                        current_world=current_world,
+                        current_probs={
+                            outcome_id: float(probability)
+                            for outcome_id, probability in score_outcomes(current_world).items()
+                        },
+                    )
+
                 _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
                 runtime_event = _runtime_trace_for_signal(
                     state=pipeline.conscious_state,
@@ -803,6 +1069,10 @@ def main(
                     llm_used=llm_update_attempted,
                     updated_world=should_update,
                     update_error=update_error,
+                    extra_diff={
+                        "filtered_out": False,
+                        "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+                    },
                 )
                 pipeline.conscious_state.trace_state.append(runtime_event)
                 event_log.append(runtime_event)
@@ -819,10 +1089,11 @@ def main(
                 )
                 processed_count += 1
                 LOGGER.info(
-                    "Processed signal_id=%s mode=%s world_t=%s queue_len=%d",
+                    "Processed signal_id=%s mode=%s world_t=%s runtime_step=%s queue_len=%d",
                     signal_id,
                     trigger.mode,
                     current_world.t,
+                    current_world.runtime_step,
                     len(pending_signals),
                 )
                 continue
@@ -881,9 +1152,11 @@ def main(
         "world_updates": updated_count,
         "world_update_failures": update_failures,
         "verified_forecasts": verified_forecasts_count,
+        "runtime_step": int(current_world.runtime_step) if current_world is not None else 0,
         "idle_deliberations": idle_deliberations,
         "queue_len": len(pending_signals),
         "watch_skipped": skipped_watch_count,
+        "filtered_out_count": filtered_out_count,
         "trace_events": len(pipeline.conscious_state.trace_state),
     }
     print(json.dumps(summary, indent=2, sort_keys=True))

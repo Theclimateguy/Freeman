@@ -307,9 +307,16 @@ So support multiplies posterior odds, conflict divides them, and $e^{-\gamma}$ d
 Conflict handling:
 
 - same `claim_key` + same content: merge
-- same `claim_key` + conflicting content: split the node and archive the previous aggregate
+- same `claim_key` + high cosine similarity (`>= memory.reconciler.merge_threshold`): semantic merge instead of splitting
+- same `claim_key` + genuinely conflicting content: split the node and archive the previous aggregate
 - confidence below threshold: archive
 - verified forecast errors: update rolling `self_observation` nodes keyed by `(domain_id, outcome_id)`
+
+To control graph bloat, the reconciler now also performs periodic split compaction. Every `memory.reconciler.compaction_interval` runtime steps, redundant `__split_*` children with no unique downstream structure are merged back into their parent. The resulting health summary is persisted through `ConsciousState.runtime_metadata.kg_health`:
+
+- `split_node_count`
+- `avg_node_degree`
+- `compaction_last_step`
 
 ## Agent Layer
 
@@ -377,18 +384,29 @@ Both operate only on structured self-model state and emit trace entries for repl
 Bootstrap modes:
 
 - `schema_path`: compile a caller-supplied Freeman schema
-- `llm_synthesize`: run the existing Freeman orchestrator (`DeepSeekFreemanOrchestrator`) to synthesize, verify, and repair a schema from a natural-language brief, then persist `bootstrap_package.json`
+- `llm_synthesize`: run the existing Freeman orchestrator (`DeepSeekFreemanOrchestrator`) to synthesize, verify, and repair a schema from a natural-language brief, then persist `bootstrap_package.json` together with `bootstrap_attempts`
+
+The `llm_synthesize` path now uses a verifier-guided repair loop:
+
+- every failed attempt records the verifier error
+- attempts `1–3` use the standard synthesis prompt
+- attempts `4–8` include accumulated error history
+- attempts `9+` also include the verifier schema contract explicitly
+
+If a configured fallback schema is still required, the failure artifact preserves the recorded `bootstrap_attempts` instead of discarding them.
 
 Flow:
 
 1. fetch signals from configured sources via adapters in `freeman-connectors`
-2. enqueue non-duplicate items into a persistent pending queue
-3. classify shock and trigger mode via `SignalIngestionEngine` + local `OllamaChatClient`
-4. on `ANALYZE/DEEP_DIVE`, estimate `ParameterVector` and run `AnalysisPipeline.update()`
-5. verify due forecasts (`ForecastRegistry.due`) against the current posterior and persist epistemic/self-model updates
-6. trigger a synchronous consciousness refresh so `self_capability` / `identity_trait` reflect the new verification state immediately
-7. append trace events to `EventLog`
-8. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`, `pending_signals.json`)
+2. apply phase-1 hard filtering from config (`stream_keywords`, `min_keyword_matches`, `min_relevance_score`)
+3. enqueue non-duplicate items into a persistent pending queue
+4. once self-calibration has started, score each pending signal against active hypotheses + ontology and soft-reject low-relevance items with trace logging
+5. classify shock and trigger mode via `SignalIngestionEngine` + local `OllamaChatClient`
+6. on `ANALYZE/DEEP_DIVE`, estimate `ParameterVector` and run `AnalysisPipeline.update()`
+7. verify due forecasts (`ForecastRegistry.due`) against the current posterior using monotonic `runtime_step`, not simulator `world.t`
+8. trigger a synchronous consciousness refresh so `self_capability` / `identity_trait` reflect the new verification state immediately
+9. append trace events to `EventLog`
+10. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`, `pending_signals.json`)
 
 Resume semantics:
 
@@ -396,6 +414,12 @@ Resume semantics:
 - `--resume` restores pending queue and forecast registry state
 - duplicate signals are suppressed by at-least-once + idempotent cursor dedup
 - shutdown on `SIGINT/SIGTERM` persists runtime state before exit
+
+Operational invariants added in the daemon path:
+
+- `runtime_step` is strictly monotonic across the stream loop, including fallback updates from a base schema
+- `checkpoint.json` carries `runtime_metadata.kg_health`
+- `kg_health.split_node_count` is controlled by semantic merge and periodic split compaction
 
 If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
 

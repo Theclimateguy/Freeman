@@ -263,11 +263,11 @@ Command:
 Runtime command:
 
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --resume --model auto`
-  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, due-forecast verification, synchronous consciousness refresh, and configurable source adapters
+  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, monotonic `runtime_step`, due-forecast verification, synchronous consciousness refresh, and configurable source adapters
 - `python -m freeman.runtime.stream_runtime --config-path config.climate.yaml --hours 8 --resume --model auto`
-  - the same daemon runtime with a climate-oriented example config
+  - the same daemon runtime with a climate-oriented example config and strict phase-1 stream filtering
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --resume --model auto`
-  - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package, then run the same daemon loop
+  - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package and `bootstrap_attempts`, then run the same daemon loop
 
 ## Benchmark Map
 
@@ -490,8 +490,16 @@ diff = api.get_diff(world.domain_id)
 - `sim.fixed_point_alpha`
 - `sim.seed`
 - `multiworld.sync_mode`
+- `agent.stream_keywords`
+- `agent.stream_filter.min_relevance_score`
+- `agent.stream_filter.min_keyword_matches`
+- `agent.stream_filter.agent_min_relevance_score`
+- `agent.bootstrap.max_retries`
+- `agent.bootstrap.trial_steps`
 - `memory.backend`
 - `memory.json_path`
+- `memory.reconciler.merge_threshold`
+- `memory.reconciler.compaction_interval`
 
 ## Test Map
 
