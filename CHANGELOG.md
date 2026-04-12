@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v2.0.0 - 2026-04-12
+
+Second major release of Freeman. This version promotes the repository from a deterministic world-simulation toolkit to a domain-agnostic daemon runtime with deterministic consciousness, persistent stream learning, and trajectory-level self-verification.
+
 ### Added
 
 - Deterministic consciousness layer with `ConsciousState`, `SelfModelGraph`, `ConsciousnessEngine`, `IdleScheduler`, read-only `IdentityNarrator`, and `ExplanationRenderer`.
