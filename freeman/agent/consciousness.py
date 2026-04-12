@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import math
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -41,6 +42,12 @@ DEFAULT_CONSCIOUSNESS_CONFIG: dict[str, Any] = {
             "beta_k": 0.20,
             "min_delta": 0.01,
         },
+    },
+    "anomaly_review": {
+        "trigger_count": 5,
+        "min_cluster_size": 3,
+        "max_age_steps": 50,
+        "similarity_threshold": 0.35,
     },
 }
 
@@ -828,6 +835,112 @@ class ConsciousnessEngine:
         diff["rationale"] = "emitted contradiction uncertainty nodes" if nodes else "no change"
         return diff
 
+    def _anomaly_review(self) -> dict[str, Any]:
+        cfg = deep_copy_jsonable(self.config.get("anomaly_review", {}))
+        min_cluster_size = max(int(cfg.get("min_cluster_size", 3)), 1)
+        max_age_steps = max(int(cfg.get("max_age_steps", 50)), 1)
+        similarity_threshold = float(cfg.get("similarity_threshold", 0.35))
+        current_runtime_step = int(self.state.runtime_metadata.get("last_runtime_step", 0))
+        candidates = [
+            node
+            for node in self.state.self_model_ref.knowledge_graph.query(
+                node_type="anomaly_candidate",
+                metadata_filters={"reviewed": False},
+            )
+            if str(node.metadata.get("domain", node.metadata.get("domain_id", ""))) == "runtime"
+        ]
+        if not candidates:
+            return {"rationale": "no change"}
+
+        clusters = self._cluster_anomaly_candidates(candidates, similarity_threshold)
+        updated_runtime_metadata: dict[str, Any] = {
+            "anomaly_review": {
+                "pending_count": len(candidates),
+                "reviewed_ids": [],
+                "escalated_ids": [],
+                "noise_ids": [],
+                "cluster_count": len(clusters),
+            }
+        }
+        nodes: list[dict[str, Any]] = []
+
+        for cluster in clusters:
+            cluster_ids = [node.id for node in cluster]
+            if len(cluster) >= min_cluster_size:
+                signature = self._anomaly_cluster_signature(cluster)
+                node_id = f"sm:identity_trait:ontology_gap:{signature}"
+                existing = self._node_by_id(node_id)
+                trait_support = min(1.0, max(float(len(cluster)) / float(min_cluster_size), 0.0))
+                identity_trait = SelfModelNode(
+                    node_id=node_id,
+                    node_type="identity_trait",
+                    domain="runtime",
+                    payload={
+                        "domain": "runtime",
+                        "trait_key": "ontology_gap",
+                        "trait_support": trait_support,
+                        "pattern_observed": True,
+                        "delta_mae": 0.0,
+                        "cluster_signature": signature,
+                        "cluster_topics": sorted(
+                            {
+                                str(node.metadata.get("topic", "")).strip()
+                                for node in cluster
+                                if str(node.metadata.get("topic", "")).strip()
+                            }
+                        ),
+                        "cluster_size": len(cluster),
+                        "anomaly_candidate_ids": cluster_ids,
+                        "review_outcome": "escalate",
+                    },
+                    confidence=trait_support,
+                    created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0),
+                    updated_at=datetime.now(timezone.utc).replace(microsecond=0),
+                    source_trace_id=self.state.trace_state[-1].event_id if self.state.trace_state else None,
+                )
+                if self._node_changed(existing, identity_trait):
+                    nodes.append(identity_trait.to_dict())
+                for candidate in cluster:
+                    self._mark_anomaly_candidate_reviewed(
+                        candidate,
+                        review_outcome="escalate",
+                        current_runtime_step=current_runtime_step,
+                        cluster_signature=signature,
+                    )
+                updated_runtime_metadata["anomaly_review"]["reviewed_ids"].extend(cluster_ids)
+                updated_runtime_metadata["anomaly_review"]["escalated_ids"].extend(cluster_ids)
+                continue
+
+            if len(cluster) == 1:
+                candidate = cluster[0]
+                age_steps = current_runtime_step - int(candidate.metadata.get("runtime_step", current_runtime_step))
+                if age_steps >= max_age_steps:
+                    self._mark_anomaly_candidate_reviewed(
+                        candidate,
+                        review_outcome="noise",
+                        current_runtime_step=current_runtime_step,
+                    )
+                    updated_runtime_metadata["anomaly_review"]["reviewed_ids"].append(candidate.id)
+                    updated_runtime_metadata["anomaly_review"]["noise_ids"].append(candidate.id)
+
+        reviewed_count = len(updated_runtime_metadata["anomaly_review"]["reviewed_ids"])
+        updated_runtime_metadata["anomaly_review"]["reviewed_count"] = reviewed_count
+        pending_after = len(
+            self.state.self_model_ref.knowledge_graph.query(
+                node_type="anomaly_candidate",
+                metadata_filters={"reviewed": False},
+            )
+        )
+        updated_runtime_metadata["anomaly_review"]["pending_after"] = pending_after
+
+        diff: dict[str, Any] = {}
+        if nodes:
+            diff["nodes"] = nodes
+        if reviewed_count > 0:
+            diff["runtime_metadata"] = updated_runtime_metadata
+        diff["rationale"] = "reviewed anomaly candidates" if nodes or reviewed_count > 0 else "no change"
+        return diff
+
     def _apply_diff(self, diff: dict[str, Any]) -> None:
         for node_id in diff.get("remove_node_ids", []):
             if node_id in self.state.self_model_ref.knowledge_graph.graph:
@@ -928,6 +1041,16 @@ class ConsciousnessEngine:
         return any(edge.edge_id == edge_id for edge in self.state.self_model_ref.get_edges_by_type("contradicts"))
 
     def _select_deliberation_act(self):
+        anomaly_cfg = deep_copy_jsonable(self.config.get("anomaly_review", {}))
+        anomaly_trigger_count = max(int(anomaly_cfg.get("trigger_count", 5)), 1)
+        pending_anomalies = len(
+            self.state.self_model_ref.knowledge_graph.query(
+                node_type="anomaly_candidate",
+                metadata_filters={"reviewed": False},
+            )
+        )
+        if pending_anomalies >= anomaly_trigger_count:
+            return self._anomaly_review
         tau_h = 50.0
         hypotheses = self.state.self_model_ref.get_nodes_by_type("active_hypothesis")
         mean_age = (
@@ -943,6 +1066,82 @@ class ConsciousnessEngine:
         )
         consistency_urgency = float(contradiction_pairs)
         return self._consistency_check if consistency_urgency > aging_urgency else self._hypothesis_aging
+
+    def _cluster_anomaly_candidates(self, candidates: list[Any], similarity_threshold: float) -> list[list[Any]]:
+        remaining = list(candidates)
+        clusters: list[list[Any]] = []
+        while remaining:
+            seed = remaining.pop(0)
+            cluster = [seed]
+            changed = True
+            while changed:
+                changed = False
+                next_remaining: list[Any] = []
+                for candidate in remaining:
+                    if any(self._anomaly_similarity(candidate, member) >= similarity_threshold for member in cluster):
+                        cluster.append(candidate)
+                        changed = True
+                    else:
+                        next_remaining.append(candidate)
+                remaining = next_remaining
+            clusters.append(cluster)
+        return clusters
+
+    def _anomaly_similarity(self, left: Any, right: Any) -> float:
+        kg = self.state.self_model_ref.knowledge_graph
+        similarity = kg.cosine_similarity(left, right)
+        if similarity is not None:
+            return float(similarity)
+        left_tokens = self._text_tokens_for_anomaly(left)
+        right_tokens = self._text_tokens_for_anomaly(right)
+        if not left_tokens or not right_tokens:
+            return 0.0
+        shared = len(left_tokens & right_tokens)
+        return float(shared / math.sqrt(len(left_tokens) * len(right_tokens)))
+
+    def _text_tokens_for_anomaly(self, node: Any) -> set[str]:
+        topic = str(node.metadata.get("topic", "")).strip().lower()
+        snippet = str(node.metadata.get("text_snippet", node.content)).strip().lower()
+        return {
+            token
+            for token in re.findall(r"[a-z0-9_]+", f"{topic} {snippet}")
+            if len(token) >= 3
+        }
+
+    def _anomaly_cluster_signature(self, cluster: list[Any]) -> str:
+        token_counts: dict[str, int] = {}
+        for candidate in cluster:
+            for token in self._text_tokens_for_anomaly(candidate):
+                token_counts[token] = token_counts.get(token, 0) + 1
+        if not token_counts:
+            return "runtime"
+        ordered = sorted(token_counts.items(), key=lambda item: (-item[1], item[0]))
+        return "-".join(token for token, _count in ordered[:3])
+
+    def _mark_anomaly_candidate_reviewed(
+        self,
+        candidate: Any,
+        *,
+        review_outcome: str,
+        current_runtime_step: int,
+        cluster_signature: str | None = None,
+    ) -> None:
+        updated = candidate
+        updated.metadata = deep_copy_jsonable(candidate.metadata)
+        updated.metadata["reviewed"] = True
+        updated.metadata["review_outcome"] = str(review_outcome)
+        updated.metadata["reviewed_at_runtime_step"] = int(current_runtime_step)
+        updated.metadata["payload"] = {
+            **deep_copy_jsonable(updated.metadata.get("payload", {})),
+            "reviewed": True,
+            "review_outcome": str(review_outcome),
+            "reviewed_at_runtime_step": int(current_runtime_step),
+        }
+        if cluster_signature is not None:
+            updated.metadata["cluster_signature"] = str(cluster_signature)
+            updated.metadata["payload"]["cluster_signature"] = str(cluster_signature)
+        updated.updated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        self.state.self_model_ref.knowledge_graph.update_node(updated)
 
     def _merge_config(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = deep_copy_jsonable(base)

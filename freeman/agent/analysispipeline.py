@@ -459,7 +459,15 @@ class AnalysisPipeline:
             return payload
         loaded = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         consciousness_cfg = loaded.get("consciousness", {})
-        return self._merge_config_tree(payload, consciousness_cfg)
+        agent_stream_filter = ((loaded.get("agent") or {}).get("stream_filter") or {})
+        anomaly_review_cfg = {
+            "min_cluster_size": int(agent_stream_filter.get("anomaly_candidate_min_cluster_size", 3)),
+            "max_age_steps": int(agent_stream_filter.get("anomaly_candidate_max_age_steps", 50)),
+            "trigger_count": int(agent_stream_filter.get("anomaly_review_trigger_count", 5)),
+        }
+        merged = self._merge_config_tree(payload, consciousness_cfg)
+        merged["anomaly_review"] = self._merge_config_tree(merged.get("anomaly_review", {}), anomaly_review_cfg)
+        return merged
 
     def _merge_config_tree(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
         """Recursively merge nested config dictionaries."""
@@ -854,6 +862,51 @@ class AnalysisPipeline:
         )
         self.reconciler.reconcile(self.knowledge_graph, session_log)
         return forecast
+
+    def record_anomaly_candidate(
+        self,
+        signal_id: str,
+        signal_text: str,
+        signal_topic: str,
+        runtime_step: int,
+    ) -> str:
+        """Persist one ontology-blind runtime signal for later anomaly review."""
+
+        snippet = str(signal_text).strip()[:200]
+        node_id = f"anomaly_candidate:{signal_id}"
+        existing = self.knowledge_graph.get_node(node_id, lazy_embed=False)
+        metadata = {
+            "domain": "runtime",
+            "domain_id": "runtime",
+            "signal_id": str(signal_id),
+            "topic": str(signal_topic),
+            "text_snippet": snippet,
+            "runtime_step": int(runtime_step),
+            "reviewed": False,
+            "review_outcome": None,
+            "claim_key": f"anomaly_candidate:{signal_id}",
+            "payload": {
+                "signal_id": str(signal_id),
+                "topic": str(signal_topic),
+                "text_snippet": snippet,
+                "runtime_step": int(runtime_step),
+                "reviewed": False,
+                "review_outcome": None,
+            },
+        }
+        node = KGNode(
+            id=node_id,
+            label=f"Anomaly candidate: {signal_topic or signal_id}",
+            node_type="anomaly_candidate",
+            content=snippet,
+            confidence=existing.confidence if existing is not None else 0.75,
+            metadata=metadata,
+            sources=[str(signal_id)],
+            evidence=[snippet] if snippet else [],
+            created_at=existing.created_at if existing is not None else datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        )
+        self.knowledge_graph.add_node(node)
+        return node_id
 
     def _momentum_reference(
         self,

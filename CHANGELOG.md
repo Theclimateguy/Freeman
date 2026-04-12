@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Ontology-blind soft-filtered signals are now preserved as `anomaly_candidate` nodes in the KG instead of being silently discarded.
+- `ConsciousnessEngine` can now review accumulated anomaly candidates, escalate repeated clusters into `identity_trait` signals with `trait_key=ontology_gap`, and close stale singletons as `noise`.
+
+### Changed
+
+- Agent-side stream filtering now splits low-relevance signals into `FILTERED_OUT` versus `ANOMALY_CANDIDATE` based on ontology and hypothesis overlap.
+
 ## v2.0.0 - 2026-04-12
 
 Second major release of Freeman. This version promotes the repository from a deterministic world-simulation toolkit to a domain-agnostic daemon runtime with deterministic consciousness, persistent stream learning, and trajectory-level self-verification.

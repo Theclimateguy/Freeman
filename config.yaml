@@ -8,6 +8,9 @@ agent:
     min_relevance_score: 0.0
     min_keyword_matches: 0
     agent_min_relevance_score: 0.25
+    anomaly_candidate_min_cluster_size: 3
+    anomaly_candidate_max_age_steps: 50
+    anomaly_review_trigger_count: 5
   bootstrap:
     mode: "schema_path"
     schema_path:

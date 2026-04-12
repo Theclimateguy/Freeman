@@ -1101,6 +1101,50 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
             },
         )
         if agent_score < agent_min_relevance_score:
+            ontology_overlap = int(agent_details.get("ontology_overlap", 0))
+            hypothesis_overlap = int(agent_details.get("hypothesis_overlap", 0))
+            if ontology_overlap == 0 and hypothesis_overlap == 0:
+                anomaly_node_id = ctx.pipeline.record_anomaly_candidate(
+                    signal_id=signal_id,
+                    signal_text=signal_payload.text,
+                    signal_topic=signal_payload.topic,
+                    runtime_step=int(ctx.current_world.runtime_step),
+                )
+                result.processed = 1
+                result.verified_forecasts += _verify_due_forecasts(
+                    pipeline=ctx.pipeline,
+                    state=ctx.pipeline.conscious_state,
+                    event_log=ctx.event_log,
+                    logged_event_ids=ctx.logged_event_ids,
+                    current_world=ctx.current_world,
+                    current_probs={outcome_id: float(probability) for outcome_id, probability in score_outcomes(ctx.current_world).items()},
+                    current_signal_id=signal_id,
+                )
+                runtime_event = _runtime_trace_for_signal(
+                    state=ctx.pipeline.conscious_state,
+                    signal_payload=signal_payload,
+                    trigger_mode="ANOMALY_CANDIDATE",
+                    llm_used=False,
+                    updated_world=False,
+                    update_error=None,
+                    extra_diff={
+                        "filtered_out": False,
+                        "anomaly_candidate": True,
+                        "anomaly_candidate_node_id": anomaly_node_id,
+                        "filter_phase": "agent",
+                        "relevance_score": agent_score,
+                        "agent_min_relevance_score": agent_min_relevance_score,
+                        "relevance_details": agent_details,
+                        "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+                    },
+                )
+                ctx.pipeline.conscious_state.trace_state.append(runtime_event)
+                ctx.event_log.append(runtime_event)
+                ctx.logged_event_ids.add(runtime_event.event_id)
+                ctx.cursor_store.commit(signal_id)
+                _persist_context(ctx)
+                return result
+
             result.processed = 1
             result.filtered_out = 1
             runtime_event = _runtime_trace_for_signal(

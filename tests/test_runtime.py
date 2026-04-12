@@ -626,7 +626,7 @@ def test_stream_runtime_agent_relevance_soft_rejects_and_updates_self_model(tmp_
         Signal(
             signal_id="noise-2",
             source_type="manual",
-            text="Celebrity cartoon gala and restaurant awards.",
+            text="Water cooperation celebrity cartoon gala and restaurant awards.",
             topic="noise",
             timestamp="2026-04-12T12:00:00+00:00",
         ),
@@ -676,3 +676,108 @@ def test_stream_runtime_agent_relevance_soft_rejects_and_updates_self_model(tmp_
     assert filtered_events[-1]["diff"]["filtered_out"] is True
     assert filtered_events[-1]["diff"]["filter_phase"] == "agent"
     assert relevance_nodes
+
+
+def test_anomaly_candidate_preserved(tmp_path, monkeypatch, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    kg_path = Path(tmp_path) / "kg.json"
+    schema_path = Path(tmp_path) / "schema.json"
+    schema_path.write_text(json.dumps(water_market_schema), encoding="utf-8")
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {
+                    "bootstrap": {"mode": "schema_path", "schema_path": str(schema_path)},
+                    "stream_filter": {
+                        "min_relevance_score": 0.0,
+                        "agent_min_relevance_score": 0.25,
+                        "anomaly_review_trigger_count": 10,
+                    },
+                    "sources": [{"type": "rss", "url": "https://example.invalid/feed.xml"}],
+                },
+                "llm": {"provider": "ollama", "model": "fake-model", "base_url": "http://127.0.0.1:11434", "timeout_seconds": 1.0},
+                "memory": {"json_path": str(kg_path)},
+                "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+                "sim": {"max_steps": 1},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    kg = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    kg.add_node(
+        KGNode(
+            id="self:forecast_error:water_market:cooperation",
+            label="Self-model: water_market/cooperation",
+            node_type="self_observation",
+            content="n=12 forecasts; MAE=0.12; bias=+0.01",
+            confidence=0.9,
+            metadata={
+                "domain_id": "water_market",
+                "outcome_id": "cooperation",
+                "mean_abs_error": 0.12,
+                "bias": 0.01,
+                "n_forecasts": 12,
+                "errors_json": json.dumps([0.1, -0.08, 0.12]),
+            },
+        )
+    )
+
+    signals = [
+        Signal(
+            signal_id="anomaly-1",
+            source_type="manual",
+            text="Novel zoonotic biosurveillance alert from polar wastewater sampling network.",
+            topic="biosurveillance",
+            timestamp="2026-04-12T12:00:00+00:00",
+        ),
+    ]
+
+    class _Source:
+        def __init__(self, values):
+            self._values = list(values)
+            self._done = False
+
+        def fetch(self):
+            if self._done:
+                return []
+            self._done = True
+            return list(self._values)
+
+    class _FakeClient:
+        def chat_json(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return {}
+
+    monkeypatch.setattr(stream_runtime, "_build_chat_client", lambda **kwargs: _FakeClient())
+    monkeypatch.setattr(stream_runtime, "_source_configs", lambda config, default_sources=None: [{"type": "manual"}])
+    monkeypatch.setattr(stream_runtime, "build_signal_source", lambda cfg: _Source(signals))
+
+    exit_code = stream_runtime.main(
+        [
+            "--config-path",
+            str(config_path),
+            "--hours",
+            "0.00002",
+            "--analysis-interval-seconds",
+            "0.1",
+            "--poll-seconds",
+            "60",
+            "--log-level",
+            "WARNING",
+        ]
+    )
+
+    events = [json.loads(line) for line in (runtime_path / "event_log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    signal_events = [event for event in events if event.get("diff", {}).get("signal_id") == "anomaly-1"]
+    refreshed_kg = KnowledgeGraph(json_path=kg_path, auto_load=True, auto_save=True)
+    anomaly_nodes = refreshed_kg.query(node_type="anomaly_candidate", metadata_filters={"signal_id": "anomaly-1"})
+
+    assert exit_code == 0
+    assert signal_events
+    assert signal_events[-1]["diff"]["filtered_out"] is False
+    assert signal_events[-1]["diff"]["anomaly_candidate"] is True
+    assert signal_events[-1]["diff"]["mode"] == "ANOMALY_CANDIDATE"
+    assert anomaly_nodes
+    assert anomaly_nodes[0].metadata["reviewed"] is False

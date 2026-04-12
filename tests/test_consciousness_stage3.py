@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import time
 
 from freeman.agent.consciousness import ConsciousState, ConsciousnessEngine, IdleScheduler
-from freeman.memory.knowledgegraph import KnowledgeGraph
+from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.selfmodel import SelfModelEdge, SelfModelGraph, SelfModelNode
 
 
@@ -126,3 +126,87 @@ def test_maybe_deliberate_no_thread(tmp_path) -> None:
 
     assert result is state
     assert elapsed < 1.0
+
+
+def test_anomaly_cluster_escalation(tmp_path) -> None:
+    state = _state(tmp_path)
+    state.runtime_metadata["last_runtime_step"] = 100
+    kg = state.self_model_ref.knowledge_graph
+    for index in range(3):
+        kg.add_node(
+            KGNode(
+                id=f"anomaly_candidate:a{index}",
+                label="Anomaly candidate: biosurveillance",
+                node_type="anomaly_candidate",
+                content="Novel biosurveillance anomaly from wastewater monitoring.",
+                confidence=0.8,
+                metadata={
+                    "domain": "runtime",
+                    "signal_id": f"a{index}",
+                    "topic": "biosurveillance",
+                    "text_snippet": "Novel biosurveillance anomaly from wastewater monitoring.",
+                    "runtime_step": 95,
+                    "reviewed": False,
+                    "review_outcome": None,
+                },
+            )
+        )
+
+    engine = ConsciousnessEngine(
+        state,
+        {
+            "idle_scheduler": {"threshold": 0.10},
+            "anomaly_review": {"trigger_count": 3, "min_cluster_size": 3, "max_age_steps": 50},
+        },
+    )
+
+    result = engine.maybe_deliberate(_now() + timedelta(seconds=6000))
+    trait_nodes = [
+        node
+        for node in state.self_model_ref.get_nodes_by_type("identity_trait")
+        if node.payload.get("trait_key") == "ontology_gap"
+    ]
+    anomaly_nodes = kg.query(node_type="anomaly_candidate", metadata_filters={"reviewed": True})
+
+    assert result is state
+    assert trait_nodes
+    assert trait_nodes[0].payload["cluster_size"] == 3
+    assert all(node.metadata["review_outcome"] == "escalate" for node in anomaly_nodes)
+
+
+def test_anomaly_singleton_noise(tmp_path) -> None:
+    state = _state(tmp_path)
+    state.runtime_metadata["last_runtime_step"] = 100
+    kg = state.self_model_ref.knowledge_graph
+    kg.add_node(
+        KGNode(
+            id="anomaly_candidate:singleton",
+            label="Anomaly candidate: stray_topic",
+            node_type="anomaly_candidate",
+            content="Completely novel singleton event.",
+            confidence=0.8,
+            metadata={
+                "domain": "runtime",
+                "signal_id": "singleton",
+                "topic": "stray_topic",
+                "text_snippet": "Completely novel singleton event.",
+                "runtime_step": 1,
+                "reviewed": False,
+                "review_outcome": None,
+            },
+        )
+    )
+    engine = ConsciousnessEngine(
+        state,
+        {
+            "anomaly_review": {"trigger_count": 1, "min_cluster_size": 3, "max_age_steps": 50},
+        },
+    )
+
+    diff = engine._anomaly_review()
+    reviewed = kg.get_node("anomaly_candidate:singleton", lazy_embed=False)
+
+    assert diff["runtime_metadata"]["anomaly_review"]["noise_ids"] == ["anomaly_candidate:singleton"]
+    assert reviewed is not None
+    assert reviewed.metadata["reviewed"] is True
+    assert reviewed.metadata["review_outcome"] == "noise"
