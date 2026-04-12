@@ -1,5 +1,7 @@
 # Consciousness Architecture for Freeman
 
+> Actual note: this is the living design document for the deterministic consciousness layer. The core modules described here are implemented in the current repository: `SelfModelGraph`, `ConsciousState`, `ConsciousnessEngine`, `IdleScheduler`, `IdentityNarrator`, `ExplanationRenderer`, checkpoint/event-log persistence, and synchronous daemon integration. Where this document discusses future extensions, `README.md`, `docs/ARCHITECTURE.md`, and `docs/API_MAP.md` describe the currently operational surface.
+
 This document defines the next development stage for Freeman: a deterministic consciousness layer built on top of the existing world model, knowledge graph, and reconciliation machinery.
 
 The design goal is to keep reasoning, identity, and continuity inside structured state rather than inside an LLM prompt. LLMs remain optional read-only interpreters of that state.
@@ -111,6 +113,23 @@ LLMs are restricted to read-only interpretation tasks:
 - trace slice -> human-readable explanation
 
 LLMs must not directly mutate `ConsciousState`.
+
+## Current Implemented Grounding
+
+The implemented consciousness layer is grounded by deterministic projections from existing Freeman state:
+
+- `goal_state` from schema semantics and world polarity
+- `active_hypothesis` from the current posterior over outcomes
+- `self_observation` from ex-post forecast verification
+- `identity_trait` and `self_capability` from verified error history
+- `attention_focus` from deterministic operator output
+
+Forecast verification is now two-part:
+
+- scalar verification of predicted outcome probabilities
+- causal-path verification using KG trajectory edges (`causes`, `propagates_to`, `threshold_exceeded`)
+
+This keeps self-model updates tied to observed model performance rather than narrative residue.
 
 ## Proposed Runtime Components
 

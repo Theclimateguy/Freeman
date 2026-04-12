@@ -1,5 +1,7 @@
 # Freeman Architecture
 
+> Actual note: this document describes the current operational architecture in `main`. Legacy benchmark and earlier evaluation artifacts are documented separately in `docs/FAAB.md`, `docs/REAL_LLM_E2E.md`, and `PROGRESS.md`.
+
 This document describes the implemented USIM-AGENT architecture in the current repository, with emphasis on data flow, execution stages, verification, memory, and human override paths.
 
 ## System Overview
@@ -258,6 +260,26 @@ sequenceDiagram
 
 When semantic memory is enabled, each `KGNode` also stores an embedding vector and the graph is synchronized with `freeman.memory.vectorstore.KGVectorStore` backed by ChromaDB.
 
+### Causal Trajectory Export
+
+Longitudinal updates now export part of the simulator trajectory into KG edges so later verification can reason over paths, not only scalar probabilities.
+
+Current exported edge sequence:
+
+- `causes`: signal or parameter-delta node initiates a causal change
+- `propagates_to`: parameter change propagates into a state variable
+- `threshold_exceeded`: state variable contributes to an outcome regime crossing
+
+These edges are written during `AnalysisPipeline.update()` and referenced by `Forecast.causal_path`.
+
+`Reconciler.verify_causal_path()` then verifies whether that stored path remains:
+
+- confirmed
+- refuted
+- unknown
+
+This causal verdict is written into `self_observation`, together with scalar forecast error, so the self-model learns from both calibration and failed trajectories.
+
 ### Semantic Retrieval
 
 ```mermaid
@@ -348,7 +370,9 @@ flowchart LR
 1. clones the previous world
 2. replaces its `parameter_vector`
 3. re-runs verify/simulate/score on the preserved ontology
-4. writes the chosen parameter vector into KG metadata for auditability
+4. exports the realized simulation trajectory into KG causal edges
+5. stores a forecast-specific `causal_path` alongside scalar outcome forecasts
+6. writes the chosen parameter vector into KG metadata for auditability
 
 ### Consciousness Layer
 
@@ -408,6 +432,15 @@ Flow:
 9. append trace events to `EventLog`
 10. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`, `pending_signals.json`)
 
+Implementation structure:
+
+- `main()`: thin orchestration entrypoint
+- `_bootstrap()`: load config, state, schema/bootstrap package, and pipeline
+- `_run_poll()`: fetch and hard-filter source signals
+- `_process_one_signal()`: process one queued signal end-to-end
+- `_run_loop()`: foreground daemon loop
+- `RuntimeContext`: explicit container for runtime dependencies and counters
+
 Resume semantics:
 
 - `--resume` restores `ConsciousState`, `WorldState`, committed `signal_id` cursor set, and `SignalMemory`
@@ -420,6 +453,8 @@ Operational invariants added in the daemon path:
 - `runtime_step` is strictly monotonic across the stream loop, including fallback updates from a base schema
 - `checkpoint.json` carries `runtime_metadata.kg_health`
 - `kg_health.split_node_count` is controlled by semantic merge and periodic split compaction
+- runtime signal processing is at-least-once with idempotent `signal_id` dedup through `StreamCursorStore`
+- runtime self-verification is blocked on durable trace/event persistence, not on transient in-memory state
 
 If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
 

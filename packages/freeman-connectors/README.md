@@ -2,6 +2,8 @@
 
 `freeman-connectors` is a separate ingestion package for Freeman. It keeps source adapters out of the core agent while providing universal HTTP-first signal sources that emit native `freeman.agent.signalingestion.Signal` objects.
 
+This package is part of the actual operational runtime path. The daemon loop in `python -m freeman.runtime.stream_runtime` reads `agent.sources` from config and instantiates connectors through `build_signal_source(...)`.
+
 ## Install
 
 From the monorepo:
@@ -59,4 +61,23 @@ source = build_signal_source(
         "field_map": {"text": "headline"},
     }
 )
+```
+
+## Runtime config example
+
+```yaml
+agent:
+  sources:
+    - type: rss
+      url: https://www.carbonbrief.org/feed/
+    - type: webpage
+      url: https://www.noaa.gov/news
+      item_selector: article
+      link_selector: a
+```
+
+These sources can then be consumed directly by:
+
+```bash
+python -m freeman.runtime.stream_runtime --config-path config.yaml --hours 8 --resume --model auto
 ```

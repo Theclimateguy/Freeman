@@ -1,3 +1,5 @@
+<!-- Example brief only. This file is a domain-specific smoke-test asset for llm_synthesize bootstrap, not a required part of the generic runtime. -->
+
 Build a compact Freeman domain for climate-news monitoring from live RSS signals.
 
 The agent will ingest a stream of climate, policy, emissions, extreme-weather, adaptation, and mitigation news.

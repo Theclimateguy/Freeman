@@ -1,5 +1,7 @@
 # Freeman API Map
 
+> Actual note: this map describes the current code in `main`. Legacy research harnesses are listed explicitly as legacy where relevant.
+
 This is the implementation-facing map of modules, classes, and primary functions exposed by the current codebase.
 
 ## Top-Level Packages
@@ -93,7 +95,13 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `ConfidenceThresholds`
   - `ReconciliationResult`
   - `Reconciler`
+  - `Reconciler.verify_causal_path()`
   - `update_self_model()`
+- Self-model:
+  - `SelfModelAccessError`
+  - `SelfModelNode`
+  - `SelfModelEdge`
+  - `SelfModelGraph`
 - Epistemic memory:
   - `EpistemicLog`
   - `EpistemicLog.domain_mae()`
@@ -109,6 +117,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `AnalysisPipelineConfig`
   - `AnalysisPipelineResult`
   - `AnalysisPipeline.update()`
+  - `AnalysisPipeline._export_causal_edges()`
 - Counterfactual planning:
   - `PolicyEvaluator`
   - `PolicyEvalResult`
@@ -116,6 +125,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `ParameterEstimator`
 - Forecasts:
   - `Forecast`
+  - `Forecast.causal_path`
   - `ForecastRegistry`
 - Signals:
   - `Signal`
@@ -144,6 +154,11 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `BudgetPolicy`
   - `BudgetDecision`
   - `CostModel`
+- Consciousness:
+  - `TraceEvent`
+  - `ConsciousState`
+  - `ConsciousnessEngine`
+  - `IdleScheduler`
 
 ### `freeman.interface`
 
@@ -190,6 +205,8 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `OllamaChatClient`
 - `DeepSeekChatClient`
 - `DeepSeekFreemanOrchestrator`
+- `IdentityNarrator`
+- `ExplanationRenderer`
 - `LLMDrivenSimulationRun`
 
 ### `freeman.runtime`
@@ -198,6 +215,12 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `CheckpointManager`
 - `EventLog`
 - `StreamCursorStore`
+- `RuntimePaths`
+- `RuntimeStorage`
+- `BootstrapResult`
+- `RuntimeContext`
+- `SignalResult`
+- `LoopSummary`
 - `stream_runtime.main()` (generic daemon-like long-run loop)
 
 ### `scripts`
@@ -262,11 +285,11 @@ Command:
 
 Runtime command:
 
-- `python -m freeman.runtime.stream_runtime --config-path config.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --resume --model auto`
-  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, monotonic `runtime_step`, due-forecast verification, synchronous consciousness refresh, and configurable source adapters
-- `python -m freeman.runtime.stream_runtime --config-path config.climate.yaml --hours 8 --resume --model auto`
-  - the same daemon runtime with a climate-oriented example config and strict phase-1 stream filtering
-- `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --resume --model auto`
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
+  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, monotonic `runtime_step`, due-forecast verification, causal-path verification, synchronous consciousness refresh, and configurable source adapters
+- `python -m freeman.runtime.stream_runtime --config-path config.climate.yaml --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
+  - the same daemon runtime with a climate-oriented example config only; this is not a separate runtime implementation
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
   - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package and `bootstrap_attempts`, then run the same daemon loop
 
 ## Benchmark Map

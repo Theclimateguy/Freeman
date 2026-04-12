@@ -53,6 +53,12 @@ At a high level, Freeman runs this loop:
 
 This makes Freeman useful for "stateful analysis": the system can accumulate prior cases instead of treating every question as isolated.
 
+Current operational path:
+
+- `python -m freeman.runtime.stream_runtime` is the single daemon-like runtime entrypoint.
+- Domain behavior is supplied by `agent.sources`, `agent.bootstrap`, and the schema or natural-language brief, not by separate runtime modules.
+- The consciousness layer is deterministic and replayable; LLMs may translate state, but do not mutate it.
+
 ## Install
 
 Core package:
@@ -142,6 +148,8 @@ python -m freeman.runtime.stream_runtime \
   --config-path config.yaml \
   --schema-path freeman/domain/profiles/gim15.json \
   --hours 8 \
+  --poll-seconds 600 \
+  --analysis-interval-seconds 1.0 \
   --resume \
   --model auto
 ```
@@ -154,6 +162,8 @@ python -m freeman.runtime.stream_runtime \
   --bootstrap-mode llm_synthesize \
   --domain-brief-path domain_brief.md \
   --hours 8 \
+  --poll-seconds 600 \
+  --analysis-interval-seconds 1.0 \
   --resume \
   --model auto
 ```
@@ -164,6 +174,8 @@ The same daemon runtime can be tested on climate RSS by swapping only the config
 python -m freeman.runtime.stream_runtime \
   --config-path config.climate.yaml \
   --hours 8 \
+  --poll-seconds 600 \
+  --analysis-interval-seconds 1.0 \
   --resume \
   --model auto
 ```
@@ -178,6 +190,17 @@ It supports two bootstrap modes:
 `llm_synthesize` now runs a verifier-guided repair loop. `bootstrap_package.json` persists `bootstrap_attempts` with per-attempt verifier errors, and local models can still fall back to `fallback_schema_path` if they never produce a verifier-clean package.
 
 The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
+
+Longitudinal self-verification now happens on two levels:
+
+- scalar outcome verification against the realized posterior at the verification horizon
+- causal-path verification against KG trajectory edges exported from the simulation
+
+The current causal path uses three edge relations:
+
+- `causes`
+- `propagates_to`
+- `threshold_exceeded`
 
 Stream ingestion is two-phase:
 
@@ -239,10 +262,22 @@ This advanced path is the right place if you want an agent that reacts to incomi
 
 ## Documentation
 
+Actual operational docs:
+
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
+- Consciousness design and invariants: [docs/CONSCIOUSNESS_ARCHITECTURE.md](docs/CONSCIOUSNESS_ARCHITECTURE.md)
+
+Historical / legacy artifacts:
+
 - Benchmark notes: [docs/FAAB.md](docs/FAAB.md)
 - Legacy live end-to-end evaluation artifact: [docs/REAL_LLM_E2E.md](docs/REAL_LLM_E2E.md)
+- Historical implementation log: [PROGRESS.md](PROGRESS.md)
+
+Example assets:
+
+- Climate example config: [config.climate.yaml](config.climate.yaml)
+- Climate example brief for `llm_synthesize`: [domain_brief_climate_news.md](domain_brief_climate_news.md)
 
 ## Notes
 

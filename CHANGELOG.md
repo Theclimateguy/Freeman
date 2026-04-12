@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- Deterministic consciousness layer with `ConsciousState`, `SelfModelGraph`, `ConsciousnessEngine`, `IdleScheduler`, read-only `IdentityNarrator`, and `ExplanationRenderer`.
+- Generic domain-agnostic daemon runtime in `freeman.runtime.stream_runtime` with checkpoint/resume, persistent pending queue, durable event log, and synchronous idle deliberation.
+- Verifier-guided `llm_synthesize` bootstrap with persisted `bootstrap_attempts` and explicit fallback artifact retention.
+- Causal-path export from simulation runs into KG edges (`causes`, `propagates_to`, `threshold_exceeded`) and forecast-level `causal_path` storage.
+- Causal trajectory verification in `Reconciler.verify_causal_path()` with `self_observation` grounded in both scalar error and path confirmation/refutation.
+
+### Changed
+
+- Long-running local execution is now documented around a single runtime entrypoint: `python -m freeman.runtime.stream_runtime`.
+- `runtime_step` is now the monotonic verification clock for forecasts, separate from simulator `world.t`.
+- Runtime stream filtering is two-phase: config hard filter before queueing and agent-side soft reject after self-calibration.
+- `stream_runtime.py` now uses explicit runtime decomposition around `RuntimeContext` instead of a large closure-driven `main()`.
+
+### Documentation
+
+- Refreshed `README.md`, `docs/ARCHITECTURE.md`, `docs/API_MAP.md`, and `docs/CONSCIOUSNESS_ARCHITECTURE.md` to match the current runtime and consciousness implementation.
+- Marked research-only or historical documents explicitly as legacy artifacts.
+
+### Validation
+
+- `pytest -q` -> `190 passed`
+
 ## v1.0.0 - 2026-04-11
 
 First public clean release of Freeman. This version freezes the repository in a stable v1 state around four core capabilities:
