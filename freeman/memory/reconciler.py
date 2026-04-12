@@ -377,7 +377,63 @@ class Reconciler:
             if attrs.get("relation_type") != "split_into"
         }
 
-    def update_self_model(self, knowledge_graph: KnowledgeGraph, forecast: "Forecast") -> KGNode:
+    def verify_causal_path(
+        self,
+        knowledge_graph: KnowledgeGraph,
+        forecast: "Forecast",
+        current_signal_id: str | None,
+    ) -> dict:
+        """Check whether a forecast causal path is still confirmed by the KG."""
+
+        if not forecast.causal_path:
+            return {"confirmed": [], "refuted": [], "unknown": []}
+        edge_records = [
+            {
+                "source": str(source),
+                "target": str(target),
+                "edge_id": str(attrs.get("id", key)),
+                "relation_type": str(attrs.get("relation_type", "")),
+                "metadata": dict(attrs.get("metadata", {}) or {}),
+            }
+            for source, target, key, attrs in knowledge_graph.graph.edges(keys=True, data=True)
+        ]
+        edge_lookup = {record["edge_id"]: record for record in edge_records}
+        current_signal_ref = f"signal:{current_signal_id}" if current_signal_id else None
+        confirmed: List[str] = []
+        refuted: List[str] = []
+        unknown: List[str] = []
+        refuted_at_node: str | None = None
+
+        for edge_id in forecast.causal_path:
+            record = edge_lookup.get(str(edge_id))
+            if record is None:
+                unknown.append(str(edge_id))
+                continue
+            if self._causal_edge_refuted(record, edge_records, current_signal_ref):
+                refuted.append(str(edge_id))
+                if refuted_at_node is None:
+                    refuted_at_node = str(record["target"])
+                continue
+            confirmed.append(str(edge_id))
+
+        payload = {
+            "confirmed": confirmed,
+            "refuted": refuted,
+            "unknown": unknown,
+        }
+        if refuted_at_node is not None:
+            payload["refuted_at_node"] = refuted_at_node
+        if current_signal_ref is not None and refuted:
+            payload["refutation_signal"] = current_signal_ref
+        return payload
+
+    def update_self_model(
+        self,
+        knowledge_graph: KnowledgeGraph,
+        forecast: "Forecast",
+        *,
+        current_signal_id: str | None = None,
+    ) -> KGNode:
         """Accumulate verified forecast errors into a self-observation KG node."""
 
         if forecast.status != "verified":
@@ -393,6 +449,11 @@ class Reconciler:
         errors = errors[-50:]
         mean_abs_error = sum(abs(error) for error in errors) / len(errors)
         bias = sum(errors) / len(errors)
+        causal_verification = self.verify_causal_path(
+            knowledge_graph,
+            forecast,
+            current_signal_id=current_signal_id,
+        )
         node = KGNode(
             id=node_id,
             label=f"Self-model: {forecast.domain_id}/{forecast.outcome_id}",
@@ -406,11 +467,58 @@ class Reconciler:
                 "bias": bias,
                 "n_forecasts": len(errors),
                 "errors_json": json.dumps(errors),
+                "causal_path_confirmed": len(causal_verification["confirmed"]),
+                "causal_path_refuted": len(causal_verification["refuted"]),
+                "causal_path_unknown": len(causal_verification["unknown"]),
+                "causal_path_confirmed_ids": list(causal_verification["confirmed"]),
+                "causal_path_refuted_ids": list(causal_verification["refuted"]),
+                "causal_path_unknown_ids": list(causal_verification["unknown"]),
             },
         )
+        if "refuted_at_node" in causal_verification:
+            node.metadata["refuted_at_node"] = causal_verification["refuted_at_node"]
+        if "refutation_signal" in causal_verification:
+            node.metadata["refutation_signal"] = causal_verification["refutation_signal"]
         knowledge_graph.add_node(node)
         knowledge_graph.save()
         return node
+
+    def _causal_edge_refuted(
+        self,
+        edge_record: Dict[str, object],
+        edge_records: List[Dict[str, object]],
+        current_signal_ref: str | None,
+    ) -> bool:
+        if current_signal_ref is None:
+            return False
+        relation_type = str(edge_record["relation_type"])
+        metadata = dict(edge_record["metadata"])
+        for candidate in edge_records:
+            if str(candidate["relation_type"]) != relation_type:
+                continue
+            if str(candidate["source"]) != current_signal_ref:
+                continue
+            candidate_meta = dict(candidate["metadata"])
+            if relation_type == "causes":
+                if candidate_meta.get("param_name") != metadata.get("param_name"):
+                    continue
+                if float(candidate_meta.get("delta_sign", 0.0)) * float(metadata.get("delta_sign", 0.0)) < 0.0:
+                    return True
+            elif relation_type == "propagates_to":
+                if candidate_meta.get("param_name") != metadata.get("param_name"):
+                    continue
+                if candidate_meta.get("resource_id") != metadata.get("resource_id"):
+                    continue
+                if float(candidate_meta.get("variable_sign", 0.0)) * float(metadata.get("variable_sign", 0.0)) < 0.0:
+                    return True
+            elif relation_type == "threshold_exceeded":
+                if candidate_meta.get("outcome_id") != metadata.get("outcome_id"):
+                    continue
+                if candidate_meta.get("resource_id") != metadata.get("resource_id"):
+                    continue
+                if float(candidate_meta.get("contribution_sign", 0.0)) * float(metadata.get("contribution_sign", 0.0)) < 0.0:
+                    return True
+        return False
 
 
 __all__ = ["ConfidenceThresholds", "ReconciliationResult", "Reconciler"]

@@ -33,7 +33,7 @@ from freeman.domain.compiler import DomainCompiler
 from freeman.game.runner import GameRunner, SimConfig
 from freeman.memory.beliefconflictlog import BeliefConflictLog
 from freeman.memory.epistemiclog import EpistemicLog, infer_world_tags
-from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
+from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler, ReconciliationResult
 from freeman.memory.sessionlog import KGDelta, SessionLog
 from freeman.memory.selfmodel import SelfModelGraph
@@ -175,6 +175,7 @@ class AnalysisPipeline:
         candidate_policies: Iterable[Any] = (),
         policy_evaluator: PolicyEvaluator | None = None,
         signal_text: str | None = None,
+        signal_id: str | None = None,
         session_log: SessionLog | None = None,
     ) -> AnalysisPipelineResult:
         """Apply a new dynamic parameter layer to an existing world and re-run simulation."""
@@ -195,7 +196,8 @@ class AnalysisPipeline:
             session_log=session_log,
             prior_outcome_probs=score_outcomes(previous_world),
             update_signal_text=signal_text,
-            extra_summary_metadata={"parameter_vector": parameter_vector.snapshot()},
+            update_signal_id=signal_id,
+            extra_summary_metadata={"parameter_vector": parameter_vector.snapshot(), "signal_id": signal_id},
         )
 
     def _run_world(
@@ -208,6 +210,7 @@ class AnalysisPipeline:
         session_log: SessionLog | None = None,
         prior_outcome_probs: Dict[str, float] | None = None,
         update_signal_text: str | None = None,
+        update_signal_id: str | None = None,
         extra_summary_metadata: Dict[str, Any] | None = None,
     ) -> AnalysisPipelineResult:
         """Execute the compile/simulate/verify/score/update workflow from an initialized world."""
@@ -251,6 +254,13 @@ class AnalysisPipeline:
             reference_outcome_probs,
             belief_confidence=float(sim_result.confidence),
         )
+        causal_edge_ids = self._export_causal_edges(
+            final_world=final_world,
+            sim_result=sim_result,
+            session_log=session_log,
+            signal_id=update_signal_id,
+            final_outcome_probs=sim_result.final_outcome_probs,
+        )
         recorded_forecasts = self._record_forecasts(
             final_world,
             sim_result.final_outcome_probs,
@@ -258,6 +268,7 @@ class AnalysisPipeline:
             belief_confidence=float(sim_result.confidence),
             reference_outcome_probs=reference_outcome_probs,
             analysis_node_id=analysis_node_id,
+            causal_edge_ids=causal_edge_ids,
         )
         signal_text = self._signal_text(final_world, session_log)
         context_nodes = self._get_context_nodes(signal_text)
@@ -506,6 +517,7 @@ class AnalysisPipeline:
         belief_confidence: float,
         reference_outcome_probs: Dict[str, float],
         analysis_node_id: str,
+        causal_edge_ids: List[str] | None = None,
     ) -> List[Forecast]:
         """Record probabilistic outcome forecasts for later verification."""
 
@@ -529,6 +541,7 @@ class AnalysisPipeline:
                 created_at=datetime.now(timezone.utc).replace(microsecond=0),
                 created_step=int(final_world.t),
                 created_runtime_step=int(final_world.runtime_step),
+                causal_path=self._forecast_causal_path(causal_edge_ids or [], outcome_id=outcome_id),
                 metadata={
                     "analysis_node_id": analysis_node_id,
                     "belief_confidence": float(belief_confidence),
@@ -546,12 +559,260 @@ class AnalysisPipeline:
             recorded.append(forecast)
         return recorded
 
+    def _export_causal_edges(
+        self,
+        *,
+        final_world: WorldState,
+        sim_result: Any,
+        session_log: SessionLog,
+        signal_id: str | None,
+        final_outcome_probs: Dict[str, float],
+    ) -> List[str]:
+        """Persist a deterministic causal trace from signal -> params -> variables -> outcomes."""
+
+        if not signal_id:
+            return []
+        runtime_step = int(final_world.runtime_step)
+        simulation_seed = int(final_world.seed)
+        confidence = max((float(value) for value in final_outcome_probs.values()), default=0.0)
+        edge_ids: List[str] = []
+        param_specs = self._parameter_delta_specs(final_world)
+        if not param_specs:
+            return []
+
+        for spec in param_specs:
+            self._ensure_causal_node(
+                node_id=f"signal:{signal_id}",
+                label=f"Signal {signal_id}",
+                node_type="signal_event",
+                content=str(session_log.metadata.get("signal_text", str(signal_id))),
+                confidence=confidence,
+                metadata={"signal_id": str(signal_id), "domain_id": str(final_world.domain_id)},
+            )
+            self._ensure_causal_node(
+                node_id=spec["node_id"],
+                label=f"Param Delta {spec['param_name']}",
+                node_type="param_delta",
+                content=f"{spec['param_name']} -> {spec['delta_value']:+.6f}",
+                confidence=confidence,
+                metadata={"domain_id": str(final_world.domain_id), **spec},
+            )
+            edge = KGEdge(
+                id=f"causes:{signal_id}:{spec['param_name']}:{spec['delta_value']:+.6f}",
+                source=f"signal:{signal_id}",
+                target=spec["node_id"],
+                relation_type="causes",
+                confidence=confidence,
+                weight=1.0,
+                metadata={
+                    "signal_id": str(signal_id),
+                    "domain_id": str(final_world.domain_id),
+                    "world_step": int(final_world.t),
+                    "runtime_step": runtime_step,
+                    "simulation_seed": simulation_seed,
+                    "confidence": confidence,
+                    **spec,
+                },
+            )
+            self.knowledge_graph.add_edge(edge)
+            session_log.add_kg_delta(KGDelta(operation="add_edge", payload={"edge": edge.snapshot()}))
+            edge_ids.append(edge.id)
+
+        trajectory = [WorldState.from_snapshot(snapshot) for snapshot in sim_result.trajectory]
+        final_variable_nodes: dict[str, str] = {}
+        for previous, current in zip(trajectory, trajectory[1:]):
+            for resource_id, current_resource in current.resources.items():
+                previous_resource = previous.resources.get(resource_id)
+                if previous_resource is None:
+                    continue
+                variable_delta = float(current_resource.value - previous_resource.value)
+                if abs(variable_delta) <= 1.0e-9:
+                    continue
+                variable_node_id = f"variable:{resource_id}:t={int(current.t)}"
+                final_variable_nodes[resource_id] = variable_node_id
+                variable_sign = 1 if variable_delta > 0 else -1
+                self._ensure_causal_node(
+                    node_id=variable_node_id,
+                    label=f"Variable {resource_id} @ t={int(current.t)}",
+                    node_type="variable_state",
+                    content=f"{resource_id} changed by {variable_delta:+.6f} at t={int(current.t)}",
+                    confidence=confidence,
+                    metadata={
+                        "domain_id": str(final_world.domain_id),
+                        "resource_id": resource_id,
+                        "world_step": int(current.t),
+                        "runtime_step": runtime_step,
+                        "variable_delta": variable_delta,
+                    },
+                )
+                for spec in param_specs:
+                    edge = KGEdge(
+                        id=f"propagates_to:{signal_id}:{spec['param_name']}:{resource_id}:t={int(current.t)}",
+                        source=spec["node_id"],
+                        target=variable_node_id,
+                        relation_type="propagates_to",
+                        confidence=confidence,
+                        weight=abs(variable_delta),
+                        metadata={
+                            "signal_id": str(signal_id),
+                            "domain_id": str(final_world.domain_id),
+                            "world_step": int(current.t),
+                            "runtime_step": runtime_step,
+                            "simulation_seed": simulation_seed,
+                            "confidence": confidence,
+                            "resource_id": resource_id,
+                            "variable_delta": variable_delta,
+                            "variable_sign": variable_sign,
+                            **spec,
+                        },
+                    )
+                    self.knowledge_graph.add_edge(edge)
+                    session_log.add_kg_delta(KGDelta(operation="add_edge", payload={"edge": edge.snapshot()}))
+                    edge_ids.append(edge.id)
+
+        for outcome_id, probability in final_outcome_probs.items():
+            if float(probability) <= 0.0:
+                continue
+            outcome = final_world.outcomes.get(outcome_id)
+            if outcome is None:
+                continue
+            for resource_id, weight in outcome.scoring_weights.items():
+                if resource_id not in final_variable_nodes or resource_id not in final_world.resources:
+                    continue
+                contribution = float(weight) * float(final_world.resources[resource_id].value)
+                if abs(contribution) <= 1.0e-9:
+                    continue
+                outcome_node_id = f"outcome:{outcome_id}:p={float(probability):.6f}"
+                self._ensure_causal_node(
+                    node_id=outcome_node_id,
+                    label=f"Outcome {outcome_id}",
+                    node_type="outcome_projection",
+                    content=f"{outcome_id} probability {float(probability):.6f}",
+                    confidence=float(probability),
+                    metadata={
+                        "domain_id": str(final_world.domain_id),
+                        "outcome_id": outcome_id,
+                        "probability": float(probability),
+                        "world_step": int(final_world.t),
+                        "runtime_step": runtime_step,
+                    },
+                )
+                edge = KGEdge(
+                    id=f"threshold_exceeded:{signal_id}:{resource_id}:{outcome_id}:t={int(final_world.t)}",
+                    source=final_variable_nodes[resource_id],
+                    target=outcome_node_id,
+                    relation_type="threshold_exceeded",
+                    confidence=float(probability),
+                    weight=abs(contribution),
+                    metadata={
+                        "signal_id": str(signal_id),
+                        "domain_id": str(final_world.domain_id),
+                        "world_step": int(final_world.t),
+                        "runtime_step": runtime_step,
+                        "simulation_seed": simulation_seed,
+                        "confidence": float(probability),
+                        "resource_id": resource_id,
+                        "outcome_id": outcome_id,
+                        "outcome_probability": float(probability),
+                        "contribution": contribution,
+                        "contribution_sign": 1 if contribution > 0 else -1,
+                    },
+                )
+                self.knowledge_graph.add_edge(edge)
+                session_log.add_kg_delta(KGDelta(operation="add_edge", payload={"edge": edge.snapshot()}))
+                edge_ids.append(edge.id)
+        return edge_ids
+
+    def _ensure_causal_node(
+        self,
+        *,
+        node_id: str,
+        label: str,
+        node_type: str,
+        content: str,
+        confidence: float,
+        metadata: Dict[str, Any],
+    ) -> None:
+        if self.knowledge_graph.get_node(node_id, lazy_embed=False) is not None:
+            return
+        self.knowledge_graph.add_node(
+            KGNode(
+                id=node_id,
+                label=label,
+                node_type=node_type,
+                content=content,
+                confidence=max(float(confidence), 1.0e-6),
+                metadata=metadata,
+            )
+        )
+
+    def _parameter_delta_specs(self, final_world: WorldState) -> List[Dict[str, Any]]:
+        """Return stable parameter-delta descriptors for causal export."""
+
+        specs: List[Dict[str, Any]] = []
+        for outcome_id, delta in sorted(final_world.parameter_vector.outcome_modifiers.items()):
+            delta_value = float(delta)
+            if abs(delta_value) <= 1.0e-9:
+                continue
+            param_name = f"outcome_modifier:{outcome_id}"
+            specs.append(
+                {
+                    "param_name": param_name,
+                    "delta_value": delta_value,
+                    "delta_sign": 1 if delta_value > 0 else -1,
+                    "node_id": f"param_delta:{param_name}:{delta_value:+.6f}",
+                }
+            )
+        shock_delta = float(final_world.parameter_vector.shock_decay - 1.0)
+        if abs(shock_delta) > 1.0e-9:
+            specs.append(
+                {
+                    "param_name": "shock_decay",
+                    "delta_value": shock_delta,
+                    "delta_sign": 1 if shock_delta > 0 else -1,
+                    "node_id": f"param_delta:shock_decay:{shock_delta:+.6f}",
+                }
+            )
+        for edge_id, delta in sorted(final_world.parameter_vector.edge_weight_deltas.items()):
+            delta_value = float(delta)
+            if abs(delta_value) <= 1.0e-9:
+                continue
+            param_name = f"edge_weight:{edge_id}"
+            specs.append(
+                {
+                    "param_name": param_name,
+                    "delta_value": delta_value,
+                    "delta_sign": 1 if delta_value > 0 else -1,
+                    "node_id": f"param_delta:{param_name}:{delta_value:+.6f}",
+                }
+            )
+        return specs
+
+    def _forecast_causal_path(self, edge_ids: List[str], *, outcome_id: str) -> List[str]:
+        """Attach general causal edges plus outcome-specific threshold edges to one forecast."""
+
+        selected: List[str] = []
+        for source, target, key, attrs in self.knowledge_graph.graph.edges(keys=True, data=True):
+            del source, target
+            edge_id = str(attrs.get("id", key))
+            if edge_id not in edge_ids:
+                continue
+            relation_type = str(attrs.get("relation_type", ""))
+            metadata = dict(attrs.get("metadata", {}) or {})
+            if relation_type in {"causes", "propagates_to"}:
+                selected.append(edge_id)
+                continue
+            if relation_type == "threshold_exceeded" and str(metadata.get("outcome_id", "")) == str(outcome_id):
+                selected.append(edge_id)
+        return selected
+
     def verify_forecast(
         self,
         forecast_id: str,
         *,
         actual_prob: float,
         verified_at: datetime,
+        current_signal_id: str | None = None,
         session_log: SessionLog | None = None,
     ) -> Forecast:
         """Verify a forecast and persist an epistemic error trace into the KG."""
@@ -576,7 +837,11 @@ class AnalysisPipeline:
                 metadata={"epistemic_event_type": "forecast_verification"},
             )
         )
-        self_model_node = self.reconciler.update_self_model(self.knowledge_graph, forecast)
+        self_model_node = self.reconciler.update_self_model(
+            self.knowledge_graph,
+            forecast,
+            current_signal_id=current_signal_id,
+        )
         session_log.add_kg_delta(
             KGDelta(
                 operation="add_node",

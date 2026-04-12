@@ -419,3 +419,129 @@ def test_reconciler_update_self_model_trims_error_window_to_50(tmp_path) -> None
     assert node is not None
     assert node.metadata["n_forecasts"] == 50
     assert len(json.loads(node.metadata["errors_json"])) == 50
+
+
+def test_reconciler_update_self_model_verifies_causal_path(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True)
+    registry = ForecastRegistry(auto_load=False, auto_save=False)
+    reconciler = Reconciler()
+
+    for node in (
+        KGNode(id="signal:s1", label="Signal s1", node_type="signal_event", content="signal s1", confidence=0.8),
+        KGNode(
+            id="signal:s2",
+            label="Signal s2",
+            node_type="signal_event",
+            content="signal s2",
+            confidence=0.8,
+        ),
+        KGNode(
+            id="param_delta:outcome_modifier:crisis:+1.000000",
+            label="Param Delta crisis +",
+            node_type="param_delta",
+            content="crisis +1.0",
+            confidence=0.8,
+        ),
+        KGNode(
+            id="param_delta:outcome_modifier:crisis:-0.900000",
+            label="Param Delta crisis -",
+            node_type="param_delta",
+            content="crisis -0.9",
+            confidence=0.6,
+        ),
+        KGNode(
+            id="variable:water_stock:t=1",
+            label="Variable water_stock",
+            node_type="variable_state",
+            content="water_stock at t=1",
+            confidence=0.8,
+        ),
+        KGNode(
+            id="outcome:crisis:p=0.800000",
+            label="Outcome crisis",
+            node_type="outcome_projection",
+            content="crisis p=0.8",
+            confidence=0.8,
+        ),
+    ):
+        kg.add_node(node)
+
+    kg.add_edge(
+        KGEdge(
+            id="causes:s1:param_a",
+            source="signal:s1",
+            target="param_delta:outcome_modifier:crisis:+1.000000",
+            relation_type="causes",
+            confidence=0.8,
+            metadata={"param_name": "outcome_modifier:crisis", "delta_sign": 1, "signal_id": "s1"},
+        )
+    )
+    kg.add_edge(
+        KGEdge(
+            id="propagates_to:s1:param_a:x",
+            source="param_delta:outcome_modifier:crisis:+1.000000",
+            target="variable:water_stock:t=1",
+            relation_type="propagates_to",
+            confidence=0.8,
+            metadata={
+                "param_name": "outcome_modifier:crisis",
+                "resource_id": "water_stock",
+                "variable_sign": -1,
+                "signal_id": "s1",
+            },
+        )
+    )
+    kg.add_edge(
+        KGEdge(
+            id="threshold_exceeded:s1:x:crisis",
+            source="variable:water_stock:t=1",
+            target="outcome:crisis:p=0.800000",
+            relation_type="threshold_exceeded",
+            confidence=0.8,
+            metadata={
+                "resource_id": "water_stock",
+                "outcome_id": "crisis",
+                "contribution_sign": 1,
+                "signal_id": "s1",
+            },
+        )
+    )
+    kg.add_edge(
+        KGEdge(
+            id="causes:s2:param_a",
+            source="signal:s2",
+            target="param_delta:outcome_modifier:crisis:-0.900000",
+            relation_type="causes",
+            confidence=0.6,
+            metadata={"param_name": "outcome_modifier:crisis", "delta_sign": -1, "signal_id": "s2"},
+        )
+    )
+
+    forecast = Forecast(
+        forecast_id="f-causal",
+        domain_id="water",
+        outcome_id="crisis",
+        predicted_prob=0.8,
+        session_id="s1",
+        horizon_steps=3,
+        created_at=datetime(2026, 3, 27, tzinfo=timezone.utc),
+        created_step=0,
+        causal_path=[
+            "causes:s1:param_a",
+            "propagates_to:s1:param_a:x",
+            "threshold_exceeded:s1:x:crisis",
+        ],
+    )
+    registry.record(forecast)
+    verified = registry.verify(
+        forecast.forecast_id,
+        actual_prob=0.4,
+        verified_at=datetime(2026, 3, 30, tzinfo=timezone.utc),
+    )
+
+    node = reconciler.update_self_model(kg, verified, current_signal_id="s2")
+
+    assert node.metadata["causal_path_confirmed"] == 2
+    assert node.metadata["causal_path_refuted"] == 1
+    assert node.metadata["refuted_at_node"] == "param_delta:outcome_modifier:crisis:+1.000000"
+    assert node.metadata["refutation_signal"] == "signal:s2"

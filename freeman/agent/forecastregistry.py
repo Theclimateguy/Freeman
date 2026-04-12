@@ -44,6 +44,7 @@ class Forecast:
     actual_prob: float | None = None
     error: float | None = None
     status: str = "pending"
+    causal_path: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -79,6 +80,7 @@ class Forecast:
             "actual_prob": self.actual_prob,
             "error": self.error,
             "status": self.status,
+            "causal_path": list(self.causal_path),
             "metadata": self.metadata,
         }
 
@@ -105,6 +107,7 @@ class Forecast:
             actual_prob=data.get("actual_prob"),
             error=data.get("error"),
             status=data.get("status", "pending"),
+            causal_path=[str(item) for item in data.get("causal_path", [])],
             metadata=dict(data.get("metadata", {})),
         )
 

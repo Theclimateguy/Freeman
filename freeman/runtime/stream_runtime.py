@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -483,6 +484,7 @@ def _verify_due_forecasts(
     logged_event_ids: set[str],
     current_world: WorldState,
     current_probs: dict[str, float],
+    current_signal_id: str | None = None,
 ) -> int:
     """Verify all due forecasts against the current posterior using monotonic runtime_step."""
 
@@ -499,6 +501,7 @@ def _verify_due_forecasts(
             forecast.forecast_id,
             actual_prob=float(current_probs.get(forecast.outcome_id, 0.0)),
             verified_at=_utc_now(),
+            current_signal_id=current_signal_id,
         )
         verified_ids.append(verified.forecast_id)
         if verified.error is not None:
@@ -528,6 +531,131 @@ def _verify_due_forecasts(
     return len(verified_ids)
 
 
+@dataclass
+class RuntimePaths:
+    config_path: Path
+    config_base: Path
+    runtime_path: Path
+    event_log_path: Path
+    kg_path: Path
+    schema_path: Path | None
+
+
+@dataclass
+class RuntimeStorage:
+    checkpoint_manager: CheckpointManager
+    cursor_store: StreamCursorStore
+    event_log: EventLog
+    logged_event_ids: set[str]
+    signal_memory: SignalMemory
+    pending_signals: list[Signal]
+    queued_signal_ids: set[str]
+
+
+@dataclass
+class BootstrapResult:
+    pipeline: AnalysisPipeline
+    current_world: WorldState
+    base_world_template: WorldState
+    llm_client: Any
+    estimator: ParameterEstimator
+    bootstrap_mode: str
+    provider: str
+    model_name: str
+    package_path: Path
+
+
+@dataclass
+class RuntimeContext:
+    pipeline: AnalysisPipeline
+    current_world: WorldState
+    base_world_template: WorldState
+    estimator: ParameterEstimator
+    ingestion_engine: SignalIngestionEngine
+    llm_client: Any
+    event_log: EventLog
+    logged_event_ids: set[str]
+    cursor_store: StreamCursorStore
+    signal_memory: SignalMemory
+    pending_signals: list[Signal]
+    queued_signal_ids: set[str]
+    checkpoint_manager: CheckpointManager
+    runtime_path: Path
+    keywords: list[str]
+    filter_cfg: dict[str, Any]
+    args: argparse.Namespace
+    package_path: Path
+    bootstrap_mode: str
+    provider: str
+    model_name: str
+    sources: list[Any]
+    poll_seconds: float
+    analysis_interval_seconds: float
+    started_at: datetime
+    deadline: datetime | None
+    stats: dict[str, int] = field(default_factory=dict)
+    stop_requested: bool = False
+
+
+@dataclass
+class SignalResult:
+    processed: int = 0
+    updated: int = 0
+    update_failures: int = 0
+    verified_forecasts: int = 0
+    skipped_watch: int = 0
+    filtered_out: int = 0
+
+
+@dataclass
+class LoopSummary:
+    started_at: datetime
+    ended_at: datetime
+    hours_requested: float
+    bootstrap_mode: str
+    bootstrap_package_path: str | None
+    model: str
+    llm_provider: str
+    runtime_path: str
+    event_log_path: str
+    signals_seen: int
+    signals_committed: int
+    world_updates: int
+    world_update_failures: int
+    verified_forecasts: int
+    runtime_step: int
+    idle_deliberations: int
+    queue_len: int
+    watch_skipped: int
+    filtered_out_count: int
+    trace_events: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": "stopped",
+            "started_at": self.started_at.isoformat(),
+            "ended_at": self.ended_at.isoformat(),
+            "hours_requested": self.hours_requested,
+            "bootstrap_mode": self.bootstrap_mode,
+            "bootstrap_package_path": self.bootstrap_package_path,
+            "model": self.model,
+            "llm_provider": self.llm_provider,
+            "runtime_path": self.runtime_path,
+            "event_log_path": self.event_log_path,
+            "signals_seen": self.signals_seen,
+            "signals_committed": self.signals_committed,
+            "world_updates": self.world_updates,
+            "world_update_failures": self.world_update_failures,
+            "verified_forecasts": self.verified_forecasts,
+            "runtime_step": self.runtime_step,
+            "idle_deliberations": self.idle_deliberations,
+            "queue_len": self.queue_len,
+            "watch_skipped": self.watch_skipped,
+            "filtered_out_count": self.filtered_out_count,
+            "trace_events": self.trace_events,
+        }
+
+
 def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Freeman on configurable signal streams.")
     parser.add_argument("--config-path", default=default_config_path)
@@ -547,56 +675,175 @@ def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
     return parser
 
 
-def main(
-    argv: list[str] | None = None,
-    *,
-    default_config_path: str = "config.yaml",
-    default_sources: list[dict[str, Any]] | None = None,
-    default_keywords: list[str] | None = None,
-) -> int:
-    args = _build_parser(default_config_path=default_config_path).parse_args(argv)
-    logging.basicConfig(
-        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
-    config_path = Path(args.config_path).resolve()
-    config = _load_yaml(config_path)
+def _resolve_runtime_paths(args: argparse.Namespace, config: dict[str, Any], config_path: Path) -> RuntimePaths:
     config_base = config_path.parent
     runtime_cfg = config.get("runtime", {})
     memory_cfg = config.get("memory", {})
-    llm_cfg = config.get("llm", {})
-    agent_cfg = config.get("agent", {})
-    bootstrap_cfg = agent_cfg.get("bootstrap", {})
-
-    runtime_path = _resolve_path(config_base, runtime_cfg.get("runtime_path"), "./data/runtime")
-    event_log_path = _resolve_path(config_base, runtime_cfg.get("event_log_path"), str(runtime_path / "event_log.jsonl"))
-    kg_path = _resolve_path(config_base, memory_cfg.get("json_path"), "./data/kg_state.json")
     schema_path_arg = getattr(args, "schema_path", None)
-    schema_path = _resolve_path(config_base, schema_path_arg, schema_path_arg) if schema_path_arg else None
+    return RuntimePaths(
+        config_path=config_path,
+        config_base=config_base,
+        runtime_path=_resolve_path(config_base, runtime_cfg.get("runtime_path"), "./data/runtime"),
+        event_log_path=_resolve_path(
+            config_base,
+            runtime_cfg.get("event_log_path"),
+            str(_resolve_path(config_base, runtime_cfg.get("runtime_path"), "./data/runtime") / "event_log.jsonl"),
+        ),
+        kg_path=_resolve_path(config_base, memory_cfg.get("json_path"), "./data/kg_state.json"),
+        schema_path=_resolve_path(config_base, schema_path_arg, schema_path_arg) if schema_path_arg else None,
+    )
 
-    poll_seconds = float(
+
+def _initialize_runtime_storage(args: argparse.Namespace, runtime_path: Path, event_log_path: Path) -> RuntimeStorage:
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    checkpoint_manager = CheckpointManager()
+    cursor_store = StreamCursorStore()
+    if args.resume:
+        cursor_store.load(runtime_path / "cursors.json")
+    event_log = EventLog(event_log_path)
+    logged_event_ids = _load_logged_ids_and_backfill_cursor(event_log, cursor_store)
+    signal_memory = _load_signal_memory(runtime_path / "signal_memory.json") if args.resume else SignalMemory()
+    pending_signals = _load_pending_queue(runtime_path / "pending_signals.json") if args.resume else []
+    return RuntimeStorage(
+        checkpoint_manager=checkpoint_manager,
+        cursor_store=cursor_store,
+        event_log=event_log,
+        logged_event_ids=logged_event_ids,
+        signal_memory=signal_memory,
+        pending_signals=pending_signals,
+        queued_signal_ids={str(item.signal_id) for item in pending_signals},
+    )
+
+
+def _persist_context(ctx: RuntimeContext) -> None:
+    _append_unlogged_trace_events(ctx.pipeline.conscious_state, ctx.event_log, ctx.logged_event_ids)
+    _persist_runtime_state(
+        pipeline=ctx.pipeline,
+        world_state=ctx.current_world,
+        runtime_path=ctx.runtime_path,
+        checkpoint_manager=ctx.checkpoint_manager,
+        cursor_store=ctx.cursor_store,
+        signal_memory=ctx.signal_memory,
+        pending_signals=ctx.pending_signals,
+    )
+
+
+def _poll_seconds(args: argparse.Namespace, config: dict[str, Any]) -> float:
+    agent_cfg = config.get("agent", {})
+    runtime_cfg = config.get("runtime", {})
+    return float(
         args.poll_seconds
         if args.poll_seconds is not None
         else agent_cfg.get("source_refresh_seconds", runtime_cfg.get("poll_interval_seconds", 300))
     )
-    keywords = (
-        [str(item).strip().lower() for item in args.keyword if str(item).strip()]
-        if args.keyword
-        else _keywords_from_config(config, default_keywords)
-    )
-    stream_filter_cfg = _stream_filter_config(config)
-    min_relevance_score = float(stream_filter_cfg.get("min_relevance_score", 0.0))
-    min_keyword_matches = int(stream_filter_cfg.get("min_keyword_matches", 0))
-    agent_min_relevance_score = float(stream_filter_cfg.get("agent_min_relevance_score", min_relevance_score))
 
+
+def _runtime_keywords(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    default_keywords: list[str] | None,
+) -> list[str]:
+    if args.keyword:
+        return [str(item).strip().lower() for item in args.keyword if str(item).strip()]
+    return _keywords_from_config(config, default_keywords)
+
+
+def _collect_sources(config: dict[str, Any], default_sources: list[dict[str, Any]] | None = None) -> list[Any]:
+    sources = [build_signal_source(cfg) for cfg in _source_configs(config, default_sources)]
+    LOGGER.info("Configured source count=%d", len(sources))
+    return sources
+
+
+def _initial_runtime_stats() -> dict[str, int]:
+    return {
+        "signals_seen": 0,
+        "signals_committed": 0,
+        "world_updates": 0,
+        "world_update_failures": 0,
+        "verified_forecasts": 0,
+        "idle_deliberations": 0,
+        "watch_skipped": 0,
+        "filtered_out_count": 0,
+    }
+
+
+def _build_runtime_context(
+    *,
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    paths: RuntimePaths,
+    storage: RuntimeStorage,
+    bootstrap: BootstrapResult,
+    default_sources: list[dict[str, Any]] | None,
+    default_keywords: list[str] | None,
+) -> RuntimeContext:
+    started_at = _utc_now()
+    hours_requested = float(args.hours)
+    return RuntimeContext(
+        pipeline=bootstrap.pipeline,
+        current_world=bootstrap.current_world,
+        base_world_template=bootstrap.base_world_template,
+        estimator=bootstrap.estimator,
+        ingestion_engine=SignalIngestionEngine(),
+        llm_client=bootstrap.llm_client,
+        event_log=storage.event_log,
+        logged_event_ids=storage.logged_event_ids,
+        cursor_store=storage.cursor_store,
+        signal_memory=storage.signal_memory,
+        pending_signals=storage.pending_signals,
+        queued_signal_ids=storage.queued_signal_ids,
+        checkpoint_manager=storage.checkpoint_manager,
+        runtime_path=paths.runtime_path,
+        keywords=_runtime_keywords(args, config, default_keywords),
+        filter_cfg=_stream_filter_config(config),
+        args=args,
+        package_path=bootstrap.package_path,
+        bootstrap_mode=bootstrap.bootstrap_mode,
+        provider=bootstrap.provider,
+        model_name=bootstrap.model_name,
+        sources=_collect_sources(config, default_sources),
+        poll_seconds=_poll_seconds(args, config),
+        analysis_interval_seconds=max(float(args.analysis_interval_seconds), 0.1),
+        started_at=started_at,
+        deadline=None if hours_requested <= 0.0 else started_at + timedelta(hours=hours_requested),
+        stats=_initial_runtime_stats(),
+    )
+
+
+def _install_stop_handlers(ctx: RuntimeContext) -> tuple[Any, Any]:
+    def _request_stop(signum, frame):  # noqa: ANN001
+        del signum, frame
+        ctx.stop_requested = True
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+    return previous_sigint, previous_sigterm
+
+
+def _restore_stop_handlers(previous_sigint: Any, previous_sigterm: Any) -> None:
+    signal.signal(signal.SIGINT, previous_sigint)
+    signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+def _bootstrap(
+    *,
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    paths: RuntimePaths,
+    storage: RuntimeStorage,
+) -> BootstrapResult:
+    llm_cfg = config.get("llm", {})
+    agent_cfg = config.get("agent", {})
+    bootstrap_cfg = agent_cfg.get("bootstrap", {})
+    provider = str(llm_cfg.get("provider", "ollama") or "ollama")
+    requested_model = str(args.model or llm_cfg.get("model", "auto"))
     ollama_base_url = str(
         args.ollama_base_url
         or llm_cfg.get("base_url")
         or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
     )
-    provider = str(llm_cfg.get("provider", "ollama") or "ollama")
-    requested_model = str(args.model or llm_cfg.get("model", "auto"))
     model_name = (
         _select_ollama_model(ollama_base_url, requested_model)
         if provider.strip().lower() in {"", "ollama"}
@@ -608,43 +855,31 @@ def main(
         base_url=ollama_base_url,
         timeout_seconds=float(llm_cfg.get("timeout_seconds", 120.0)),
     )
-
     LOGGER.info("Using llm provider=%s model=%s base_url=%s", provider, model_name, ollama_base_url)
-    LOGGER.info("Knowledge graph path=%s runtime path=%s", kg_path, runtime_path)
+    LOGGER.info("Knowledge graph path=%s runtime path=%s", paths.kg_path, paths.runtime_path)
 
-    runtime_path.mkdir(parents=True, exist_ok=True)
     forecast_registry = ForecastRegistry(
-        json_path=runtime_path / "forecasts.json",
+        json_path=paths.runtime_path / "forecasts.json",
         auto_load=bool(args.resume),
         auto_save=True,
     )
-    knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=True, auto_save=True)
+    knowledge_graph = KnowledgeGraph(json_path=paths.kg_path, auto_load=True, auto_save=True)
     pipeline = AnalysisPipeline(
         knowledge_graph=knowledge_graph,
         sim_config=_build_sim_config(config),
         forecast_registry=forecast_registry,
-        config_path=config_path,
+        config_path=paths.config_path,
     )
 
-    checkpoint_manager = CheckpointManager()
-    cursor_store = StreamCursorStore()
-    if args.resume:
-        cursor_store.load(runtime_path / "cursors.json")
-    event_log = EventLog(event_log_path)
-    logged_event_ids = _load_logged_ids_and_backfill_cursor(event_log, cursor_store)
-    signal_memory = _load_signal_memory(runtime_path / "signal_memory.json") if args.resume else SignalMemory()
-    pending_signals = _load_pending_queue(runtime_path / "pending_signals.json") if args.resume else []
-    queued_signal_ids = {str(item.signal_id) for item in pending_signals}
-
-    if args.resume and (runtime_path / "checkpoint.json").exists():
-        loaded_state = checkpoint_manager.load(runtime_path / "checkpoint.json")
+    if args.resume and (paths.runtime_path / "checkpoint.json").exists():
+        loaded_state = storage.checkpoint_manager.load(paths.runtime_path / "checkpoint.json")
         pipeline.conscious_state = ConsciousState.from_dict(loaded_state.to_dict(), knowledge_graph)
         LOGGER.info("Loaded consciousness checkpoint.")
-    if pending_signals:
-        LOGGER.info("Loaded pending queue length=%d", len(pending_signals))
+    if storage.pending_signals:
+        LOGGER.info("Loaded pending queue length=%d", len(storage.pending_signals))
 
     current_world: WorldState | None = None
-    world_state_path = runtime_path / "world_state.json"
+    world_state_path = paths.runtime_path / "world_state.json"
     if args.resume and world_state_path.exists():
         current_world = WorldState.from_snapshot(json.loads(world_state_path.read_text(encoding="utf-8")))
         LOGGER.info(
@@ -653,37 +888,35 @@ def main(
             current_world.t,
             current_world.runtime_step,
         )
+
     bootstrap_mode = str(
         args.bootstrap_mode
         or bootstrap_cfg.get("mode")
-        or ("schema_path" if schema_path is not None else "llm_synthesize")
+        or ("schema_path" if paths.schema_path is not None else "llm_synthesize")
     ).strip().lower()
-    package_path = runtime_path / "bootstrap_package.json"
+    package_path = paths.runtime_path / "bootstrap_package.json"
     domain_brief_path = (
-        _resolve_path(config_base, args.domain_brief_path, args.domain_brief_path)
+        _resolve_path(paths.config_base, args.domain_brief_path, args.domain_brief_path)
         if args.domain_brief_path
         else (
-            _resolve_path(config_base, bootstrap_cfg.get("domain_brief_path"), bootstrap_cfg.get("domain_brief_path"))
+            _resolve_path(paths.config_base, bootstrap_cfg.get("domain_brief_path"), bootstrap_cfg.get("domain_brief_path"))
             if bootstrap_cfg.get("domain_brief_path")
             else None
         )
     )
     domain_brief_inline = str(bootstrap_cfg.get("domain_brief", "")).strip()
-    synthesized_package: dict[str, Any] | None = None
-
-    if package_path.exists():
-        synthesized_package = json.loads(package_path.read_text(encoding="utf-8"))
+    synthesized_package = json.loads(package_path.read_text(encoding="utf-8")) if package_path.exists() else None
 
     if synthesized_package is None and bootstrap_mode == "schema_path":
+        schema_path = paths.schema_path
         if schema_path is None:
             candidate = bootstrap_cfg.get("schema_path")
             if candidate:
-                schema_path = _resolve_path(config_base, candidate, candidate)
+                schema_path = _resolve_path(paths.config_base, candidate, candidate)
         if schema_path is None or not schema_path.exists():
             raise FileNotFoundError("bootstrap.mode=schema_path requires an existing schema_path.")
-        schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
         synthesized_package = {
-            "schema": schema_payload,
+            "schema": json.loads(schema_path.read_text(encoding="utf-8")),
             "policies": [],
             "assumptions": [],
             "bootstrap_mode": "schema_path",
@@ -696,7 +929,7 @@ def main(
             raise RuntimeError(
                 f"Configured llm provider '{provider}' does not expose repair_schema(); "
                 "use ollama or deepseek for llm_synthesize bootstrap."
-        )
+            )
         LOGGER.info("Synthesizing bootstrap schema from domain brief.")
         orchestrator = DeepSeekFreemanOrchestrator(llm_client)
         try:
@@ -706,15 +939,14 @@ def main(
                 trial_steps=int(bootstrap_cfg.get("trial_steps", 3)),
                 config=_build_sim_config(config),
             )
-            bootstrap_attempts = json.loads(
-                json.dumps(orchestrator.last_bootstrap_attempts or repair_history, ensure_ascii=False)
-            )
             synthesized_package = {
                 **package,
                 "bootstrap_mode": "llm_synthesize",
                 "world_id": world_id,
                 "synthesis_attempts": attempts,
-                "bootstrap_attempts": bootstrap_attempts,
+                "bootstrap_attempts": json.loads(
+                    json.dumps(orchestrator.last_bootstrap_attempts or repair_history, ensure_ascii=False)
+                ),
                 "repair_history": repair_history,
                 "domain_brief": domain_brief,
             }
@@ -725,10 +957,9 @@ def main(
             if not fallback_candidate:
                 raise
             LOGGER.warning("LLM bootstrap failed: %s. Falling back to schema_path=%s", exc, fallback_candidate)
-            schema_path = _resolve_path(config_base, fallback_candidate, fallback_candidate)
-            schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
+            schema_path = _resolve_path(paths.config_base, fallback_candidate, fallback_candidate)
             synthesized_package = {
-                "schema": schema_payload,
+                "schema": json.loads(schema_path.read_text(encoding="utf-8")),
                 "policies": [],
                 "assumptions": [],
                 "bootstrap_mode": "llm_synthesize_fallback",
@@ -744,22 +975,20 @@ def main(
         raise ValueError(f"Unsupported bootstrap mode: {bootstrap_mode}")
 
     schema_payload = dict(synthesized_package["schema"])
-    bootstrap_policies = list(synthesized_package.get("policies", []))
     base_world_template = pipeline.compiler.compile(schema_payload)
-
     if current_world is None:
-        bootstrap_result = pipeline.run(schema_payload, policies=bootstrap_policies)
+        bootstrap_result = pipeline.run(schema_payload, policies=list(synthesized_package.get("policies", [])))
         current_world = bootstrap_result.world.clone()
         current_world.runtime_step = 0
-        _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
+        _append_unlogged_trace_events(pipeline.conscious_state, storage.event_log, storage.logged_event_ids)
         _persist_runtime_state(
             pipeline=pipeline,
             world_state=current_world,
-            runtime_path=runtime_path,
-            checkpoint_manager=checkpoint_manager,
-            cursor_store=cursor_store,
-            signal_memory=signal_memory,
-            pending_signals=pending_signals,
+            runtime_path=paths.runtime_path,
+            checkpoint_manager=storage.checkpoint_manager,
+            cursor_store=storage.cursor_store,
+            signal_memory=storage.signal_memory,
+            pending_signals=storage.pending_signals,
         )
         LOGGER.info(
             "Bootstrap completed mode=%s domain_id=%s dominant_outcome=%s",
@@ -768,398 +997,354 @@ def main(
             bootstrap_result.dominant_outcome,
         )
 
-    sources = [build_signal_source(cfg) for cfg in _source_configs(config, default_sources)]
-    LOGGER.info("Configured source count=%d", len(sources))
-
-    estimator = ParameterEstimator(
-        llm_client,
-        epistemic_log=pipeline.epistemic_log,
-        belief_conflict_log=pipeline.belief_conflict_log,
+    return BootstrapResult(
+        pipeline=pipeline,
+        current_world=current_world,
+        base_world_template=base_world_template,
+        llm_client=llm_client,
+        estimator=ParameterEstimator(
+            llm_client,
+            epistemic_log=pipeline.epistemic_log,
+            belief_conflict_log=pipeline.belief_conflict_log,
+        ),
+        bootstrap_mode=bootstrap_mode,
+        provider=provider,
+        model_name=model_name,
+        package_path=package_path,
     )
-    ingestion_engine = SignalIngestionEngine()
 
-    stop_requested = False
 
-    def _request_stop(signum, frame):  # noqa: ANN001
-        del signum, frame
-        nonlocal stop_requested
-        stop_requested = True
+def _run_poll(sources: list[Any], ctx: RuntimeContext) -> int:
+    keywords = ctx.keywords
+    min_relevance_score = float(ctx.filter_cfg.get("min_relevance_score", 0.0))
+    min_keyword_matches = int(ctx.filter_cfg.get("min_keyword_matches", 0))
+    fetched: list[Signal] = []
+    for source in sources:
+        try:
+            fetched.extend(source.fetch())
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Source fetch failed (%s): %s", getattr(source, "url", "unknown"), exc)
+    ontology_terms = _world_ontology_terms(ctx.current_world)
+    eligible: list[Signal] = []
+    poll_filtered_out = 0
+    for item in fetched:
+        if keywords and not _signal_matches_keywords(item, keywords, min_keyword_matches=max(min_keyword_matches, 1)):
+            poll_filtered_out += 1
+            continue
+        relevance_score, details = _relevance_score(
+            item,
+            keywords=keywords,
+            ontology_terms=ontology_terms,
+            hypothesis_terms=set(),
+        )
+        if relevance_score < min_relevance_score:
+            poll_filtered_out += 1
+            continue
+        item.metadata = {
+            **dict(item.metadata),
+            "external_relevance": {
+                **details,
+                "min_relevance_score": min_relevance_score,
+                "min_keyword_matches": min_keyword_matches,
+            },
+        }
+        eligible.append(item)
+    ctx.stats["filtered_out_count"] += poll_filtered_out
+    eligible.sort(key=lambda item: item.timestamp)
 
-    previous_sigint = signal.getsignal(signal.SIGINT)
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGINT, _request_stop)
-    signal.signal(signal.SIGTERM, _request_stop)
+    enqueued = 0
+    for signal_payload in eligible:
+        if enqueued >= int(ctx.args.max_signals_per_poll):
+            break
+        signal_id = str(signal_payload.signal_id)
+        if ctx.cursor_store.is_committed(signal_id) or signal_id in ctx.queued_signal_ids:
+            continue
+        ctx.pending_signals.append(signal_payload)
+        ctx.queued_signal_ids.add(signal_id)
+        ctx.stats["signals_seen"] += 1
+        enqueued += 1
+    if enqueued > 0:
+        LOGGER.info("Enqueued %d new signals. queue_len=%d filtered_out_count=%d", enqueued, len(ctx.pending_signals), poll_filtered_out)
+        _persist_context(ctx)
+    else:
+        LOGGER.info("No new eligible signals this poll. filtered_out_count=%d", poll_filtered_out)
+    return enqueued
 
-    started_at = _utc_now()
-    deadline = None if float(args.hours) <= 0.0 else started_at + timedelta(hours=float(args.hours))
-    next_poll_at = started_at
-    analysis_interval_seconds = max(float(args.analysis_interval_seconds), 0.1)
-    processed_count = 0
-    updated_count = 0
-    update_failures = 0
-    verified_forecasts_count = 0
-    idle_deliberations = 0
-    skipped_watch_count = 0
-    seen_count = 0
-    filtered_out_count = 0
 
-    try:
-        while not stop_requested:
-            now = _utc_now()
-            if deadline is not None and now >= deadline:
-                LOGGER.info("Reached duration limit (hours=%s).", args.hours)
-                break
+def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> SignalResult:
+    result = SignalResult()
+    signal_id = str(signal_payload.signal_id)
+    ctx.queued_signal_ids.discard(signal_id)
+    if ctx.cursor_store.is_committed(signal_id):
+        return result
+    ctx.current_world.runtime_step += 1
+    agent_min_relevance_score = float(ctx.filter_cfg.get("agent_min_relevance_score", ctx.filter_cfg.get("min_relevance_score", 0.0)))
 
-            if now >= next_poll_at:
-                fetched: list[Signal] = []
-                for source in sources:
-                    try:
-                        source_signals = source.fetch()
-                        fetched.extend(source_signals)
-                    except Exception as exc:  # noqa: BLE001
-                        LOGGER.warning("Source fetch failed (%s): %s", getattr(source, "url", "unknown"), exc)
-                ontology_terms = _world_ontology_terms(current_world)
-                eligible: list[Signal] = []
-                poll_filtered_out = 0
-                for item in fetched:
-                    if keywords and not _signal_matches_keywords(
-                        item,
-                        keywords,
-                        min_keyword_matches=max(min_keyword_matches, 1),
-                    ):
-                        poll_filtered_out += 1
-                        continue
-                    relevance_score, details = _relevance_score(
-                        item,
-                        keywords=keywords,
-                        ontology_terms=ontology_terms,
-                        hypothesis_terms=set(),
-                    )
-                    if relevance_score < min_relevance_score:
-                        poll_filtered_out += 1
-                        continue
-                    item.metadata = {
-                        **dict(item.metadata),
-                        "external_relevance": {
-                            **details,
-                            "min_relevance_score": min_relevance_score,
-                            "min_keyword_matches": min_keyword_matches,
-                        },
-                    }
-                    eligible.append(item)
-                filtered_out_count += poll_filtered_out
-                fetched = eligible
-                fetched.sort(key=lambda item: item.timestamp)
-
-                enqueued = 0
-                for signal_payload in fetched:
-                    if enqueued >= int(args.max_signals_per_poll):
-                        break
-                    signal_id = str(signal_payload.signal_id)
-                    if cursor_store.is_committed(signal_id):
-                        continue
-                    if signal_id in queued_signal_ids:
-                        continue
-                    pending_signals.append(signal_payload)
-                    queued_signal_ids.add(signal_id)
-                    seen_count += 1
-                    enqueued += 1
-                next_poll_at = now + timedelta(seconds=float(poll_seconds))
-                if enqueued > 0:
-                    LOGGER.info(
-                        "Enqueued %d new signals. queue_len=%d filtered_out_count=%d",
-                        enqueued,
-                        len(pending_signals),
-                        poll_filtered_out,
-                    )
-                    _persist_runtime_state(
-                        pipeline=pipeline,
-                        world_state=current_world,
-                        runtime_path=runtime_path,
-                        checkpoint_manager=checkpoint_manager,
-                        cursor_store=cursor_store,
-                        signal_memory=signal_memory,
-                        pending_signals=pending_signals,
-                    )
-                else:
-                    LOGGER.info("No new eligible signals this poll. filtered_out_count=%d", poll_filtered_out)
-
-            if pending_signals:
-                signal_payload = pending_signals.pop(0)
-                signal_id = str(signal_payload.signal_id)
-                queued_signal_ids.discard(signal_id)
-                if cursor_store.is_committed(signal_id):
-                    continue
-                current_world.runtime_step += 1
-                if _self_calibration_started(pipeline):
-                    agent_score, agent_details = _relevance_score(
-                        signal_payload,
-                        keywords=keywords,
-                        ontology_terms=_world_ontology_terms(current_world),
-                        hypothesis_terms=_active_hypothesis_terms(pipeline.conscious_state),
-                    )
-                    stream_relevance_stats = _update_stream_relevance_stats(
-                        pipeline.conscious_state,
-                        score=agent_score,
-                        accepted=agent_score >= agent_min_relevance_score,
-                    )
-                    engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
-                    pipeline.conscious_state = engine.refresh_after_runtime_feedback(
-                        world_ref=f"world:{current_world.domain_id}:{current_world.t}",
-                        runtime_metadata={
-                            "stream_relevance": stream_relevance_stats,
-                            "last_runtime_step": int(current_world.runtime_step),
-                        },
-                    )
-                    if agent_score < agent_min_relevance_score:
-                        filtered_out_count += 1
-                        runtime_event = _runtime_trace_for_signal(
-                            state=pipeline.conscious_state,
-                            signal_payload=signal_payload,
-                            trigger_mode="FILTERED_OUT",
-                            llm_used=False,
-                            updated_world=False,
-                            update_error=None,
-                            extra_diff={
-                                "filtered_out": True,
-                                "filter_phase": "agent",
-                                "relevance_score": agent_score,
-                                "agent_min_relevance_score": agent_min_relevance_score,
-                                "relevance_details": agent_details,
-                                "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
-                            },
-                        )
-                        pipeline.conscious_state.trace_state.append(runtime_event)
-                        event_log.append(runtime_event)
-                        logged_event_ids.add(runtime_event.event_id)
-                        cursor_store.commit(signal_id)
-                        processed_count += 1
-                        _persist_runtime_state(
-                            pipeline=pipeline,
-                            world_state=current_world,
-                            runtime_path=runtime_path,
-                            checkpoint_manager=checkpoint_manager,
-                            cursor_store=cursor_store,
-                            signal_memory=signal_memory,
-                            pending_signals=pending_signals,
-                        )
-                        continue
-                triggers = ingestion_engine.ingest(
-                    ManualSignalSource([signal_payload]),
-                    classifier=llm_client,
-                    signal_memory=signal_memory,
-                    skip_duplicates_within_hours=1.0,
-                )
-                if not triggers:
-                    runtime_event = _runtime_trace_for_signal(
-                        state=pipeline.conscious_state,
-                        signal_payload=signal_payload,
-                        trigger_mode="WATCH",
-                        llm_used=False,
-                        updated_world=False,
-                        update_error=None,
-                        extra_diff={
-                            "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
-                        },
-                    )
-                    pipeline.conscious_state.trace_state.append(runtime_event)
-                    event_log.append(runtime_event)
-                    logged_event_ids.add(runtime_event.event_id)
-                    verified_forecasts_count += _verify_due_forecasts(
-                        pipeline=pipeline,
-                        state=pipeline.conscious_state,
-                        event_log=event_log,
-                        logged_event_ids=logged_event_ids,
-                        current_world=current_world,
-                        current_probs={
-                            outcome_id: float(probability)
-                            for outcome_id, probability in score_outcomes(current_world).items()
-                        },
-                    )
-                    cursor_store.commit(signal_id)
-                    processed_count += 1
-                    _persist_runtime_state(
-                        pipeline=pipeline,
-                        world_state=current_world,
-                        runtime_path=runtime_path,
-                        checkpoint_manager=checkpoint_manager,
-                        cursor_store=cursor_store,
-                        signal_memory=signal_memory,
-                        pending_signals=pending_signals,
-                    )
-                    continue
-
-                trigger = triggers[0]
-                should_update = trigger.mode in {"ANALYZE", "DEEP_DIVE"}
-                llm_update_attempted = should_update
-                update_error: str | None = None
-                result = None
-                verification_probs: dict[str, float] | None = None
-                if should_update:
-                    try:
-                        parameter_vector = estimator.estimate(current_world, signal_payload.text)
-                        try:
-                            result = pipeline.update(
-                                current_world,
-                                parameter_vector,
-                                signal_text=signal_payload.text,
-                            )
-                            current_world = result.world.clone()
-                            updated_count += 1
-                        except Exception as primary_exc:  # noqa: BLE001
-                            LOGGER.warning(
-                                "Primary update failed for signal_id=%s: %s; retrying from base world.",
-                                signal_id,
-                                primary_exc,
-                            )
-                            fallback_world = base_world_template.clone()
-                            fallback_world.runtime_step = current_world.runtime_step
-                            result = pipeline.update(
-                                fallback_world,
-                                parameter_vector,
-                                signal_text=signal_payload.text,
-                            )
-                            current_world = result.world.clone()
-                            updated_count += 1
-                            update_error = f"primary_update_failed: {primary_exc}; fallback=base_world"
-
-                        if result is not None:
-                            verification_probs = {
-                                key: float(value)
-                                for key, value in result.simulation.get("final_outcome_probs", {}).items()
-                            }
-                            verified_forecasts_count += _verify_due_forecasts(
-                                pipeline=pipeline,
-                                state=pipeline.conscious_state,
-                                event_log=event_log,
-                                logged_event_ids=logged_event_ids,
-                                current_world=current_world,
-                                current_probs=verification_probs,
-                            )
-
-                        engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
-                        engine.maybe_deliberate(_utc_now())
-                        pipeline.conscious_state = engine.state
-                    except Exception as exc:  # noqa: BLE001
-                        update_failures += 1
-                        update_error = str(exc)
-                        should_update = False
-                        LOGGER.warning("World update failed for signal_id=%s: %s", signal_id, exc)
-                elif not args.include_watch:
-                    skipped_watch_count += 1
-
-                if verification_probs is None:
-                    verified_forecasts_count += _verify_due_forecasts(
-                        pipeline=pipeline,
-                        state=pipeline.conscious_state,
-                        event_log=event_log,
-                        logged_event_ids=logged_event_ids,
-                        current_world=current_world,
-                        current_probs={
-                            outcome_id: float(probability)
-                            for outcome_id, probability in score_outcomes(current_world).items()
-                        },
-                    )
-
-                _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
-                runtime_event = _runtime_trace_for_signal(
-                    state=pipeline.conscious_state,
-                    signal_payload=signal_payload,
-                    trigger_mode=trigger.mode,
-                    llm_used=llm_update_attempted,
-                    updated_world=should_update,
-                    update_error=update_error,
-                    extra_diff={
-                        "filtered_out": False,
-                        "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
-                    },
-                )
-                pipeline.conscious_state.trace_state.append(runtime_event)
-                event_log.append(runtime_event)
-                logged_event_ids.add(runtime_event.event_id)
-                cursor_store.commit(signal_id)
-                _persist_runtime_state(
-                    pipeline=pipeline,
-                    world_state=current_world,
-                    runtime_path=runtime_path,
-                    checkpoint_manager=checkpoint_manager,
-                    cursor_store=cursor_store,
-                    signal_memory=signal_memory,
-                    pending_signals=pending_signals,
-                )
-                processed_count += 1
-                LOGGER.info(
-                    "Processed signal_id=%s mode=%s world_t=%s runtime_step=%s queue_len=%d",
-                    signal_id,
-                    trigger.mode,
-                    current_world.t,
-                    current_world.runtime_step,
-                    len(pending_signals),
-                )
-                continue
-
-            engine = ConsciousnessEngine(pipeline.conscious_state, pipeline.consciousness_config)
-            if engine.maybe_deliberate(now) is not None:
-                idle_deliberations += 1
-                pipeline.conscious_state = engine.state
-                _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
-                _persist_runtime_state(
-                    pipeline=pipeline,
-                    world_state=current_world,
-                    runtime_path=runtime_path,
-                    checkpoint_manager=checkpoint_manager,
-                    cursor_store=cursor_store,
-                    signal_memory=signal_memory,
-                    pending_signals=pending_signals,
-                )
-                continue
-
-            sleep_seconds = analysis_interval_seconds
-            if deadline is not None:
-                sleep_seconds = min(sleep_seconds, max((deadline - _utc_now()).total_seconds(), 0.0))
-            if next_poll_at is not None:
-                sleep_seconds = min(sleep_seconds, max((next_poll_at - _utc_now()).total_seconds(), 0.0))
-            if sleep_seconds > 0.0:
-                time.sleep(sleep_seconds)
-    finally:
-        signal.signal(signal.SIGINT, previous_sigint)
-        signal.signal(signal.SIGTERM, previous_sigterm)
-        _append_unlogged_trace_events(pipeline.conscious_state, event_log, logged_event_ids)
-        if current_world is not None:
-            _persist_runtime_state(
-                pipeline=pipeline,
-                world_state=current_world,
-                runtime_path=runtime_path,
-                checkpoint_manager=checkpoint_manager,
-                cursor_store=cursor_store,
-                signal_memory=signal_memory,
-                pending_signals=pending_signals,
+    if _self_calibration_started(ctx.pipeline):
+        agent_score, agent_details = _relevance_score(
+            signal_payload,
+            keywords=ctx.keywords,
+            ontology_terms=_world_ontology_terms(ctx.current_world),
+            hypothesis_terms=_active_hypothesis_terms(ctx.pipeline.conscious_state),
+        )
+        stream_relevance_stats = _update_stream_relevance_stats(
+            ctx.pipeline.conscious_state,
+            score=agent_score,
+            accepted=agent_score >= agent_min_relevance_score,
+        )
+        engine = ConsciousnessEngine(ctx.pipeline.conscious_state, ctx.pipeline.consciousness_config)
+        ctx.pipeline.conscious_state = engine.refresh_after_runtime_feedback(
+            world_ref=f"world:{ctx.current_world.domain_id}:{ctx.current_world.t}",
+            runtime_metadata={
+                "stream_relevance": stream_relevance_stats,
+                "last_runtime_step": int(ctx.current_world.runtime_step),
+            },
+        )
+        if agent_score < agent_min_relevance_score:
+            result.processed = 1
+            result.filtered_out = 1
+            runtime_event = _runtime_trace_for_signal(
+                state=ctx.pipeline.conscious_state,
+                signal_payload=signal_payload,
+                trigger_mode="FILTERED_OUT",
+                llm_used=False,
+                updated_world=False,
+                update_error=None,
+                extra_diff={
+                    "filtered_out": True,
+                    "filter_phase": "agent",
+                    "relevance_score": agent_score,
+                    "agent_min_relevance_score": agent_min_relevance_score,
+                    "relevance_details": agent_details,
+                    "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+                },
             )
+            ctx.pipeline.conscious_state.trace_state.append(runtime_event)
+            ctx.event_log.append(runtime_event)
+            ctx.logged_event_ids.add(runtime_event.event_id)
+            ctx.cursor_store.commit(signal_id)
+            _persist_context(ctx)
+            return result
 
-    summary = {
-        "status": "stopped",
-        "started_at": started_at.isoformat(),
-        "ended_at": _utc_now().isoformat(),
-        "hours_requested": float(args.hours),
-        "bootstrap_mode": bootstrap_mode,
-        "bootstrap_package_path": str(package_path) if package_path.exists() else None,
-        "model": model_name,
-        "llm_provider": provider,
-        "runtime_path": str(runtime_path),
-        "event_log_path": str(event_log_path),
-        "signals_seen": seen_count,
-        "signals_committed": processed_count,
-        "world_updates": updated_count,
-        "world_update_failures": update_failures,
-        "verified_forecasts": verified_forecasts_count,
-        "runtime_step": int(current_world.runtime_step) if current_world is not None else 0,
-        "idle_deliberations": idle_deliberations,
-        "queue_len": len(pending_signals),
-        "watch_skipped": skipped_watch_count,
-        "filtered_out_count": filtered_out_count,
-        "trace_events": len(pipeline.conscious_state.trace_state),
-    }
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    triggers = ctx.ingestion_engine.ingest(
+        ManualSignalSource([signal_payload]),
+        classifier=ctx.llm_client,
+        signal_memory=ctx.signal_memory,
+        skip_duplicates_within_hours=1.0,
+    )
+    if not triggers:
+        result.processed = 1
+        runtime_event = _runtime_trace_for_signal(
+            state=ctx.pipeline.conscious_state,
+            signal_payload=signal_payload,
+            trigger_mode="WATCH",
+            llm_used=False,
+            updated_world=False,
+            update_error=None,
+            extra_diff={"external_relevance": dict(signal_payload.metadata.get("external_relevance", {}))},
+        )
+        ctx.pipeline.conscious_state.trace_state.append(runtime_event)
+        ctx.event_log.append(runtime_event)
+        ctx.logged_event_ids.add(runtime_event.event_id)
+        result.verified_forecasts += _verify_due_forecasts(
+            pipeline=ctx.pipeline,
+            state=ctx.pipeline.conscious_state,
+            event_log=ctx.event_log,
+            logged_event_ids=ctx.logged_event_ids,
+            current_world=ctx.current_world,
+            current_probs={outcome_id: float(probability) for outcome_id, probability in score_outcomes(ctx.current_world).items()},
+            current_signal_id=signal_id,
+        )
+        ctx.cursor_store.commit(signal_id)
+        _persist_context(ctx)
+        return result
+
+    trigger = triggers[0]
+    should_update = trigger.mode in {"ANALYZE", "DEEP_DIVE"}
+    llm_update_attempted = should_update
+    update_error: str | None = None
+    verification_probs: dict[str, float] | None = None
+    if should_update:
+        try:
+            parameter_vector = ctx.estimator.estimate(ctx.current_world, signal_payload.text)
+            try:
+                pipeline_result = ctx.pipeline.update(
+                    ctx.current_world,
+                    parameter_vector,
+                    signal_text=signal_payload.text,
+                    signal_id=signal_id,
+                )
+                ctx.current_world = pipeline_result.world.clone()
+                result.updated += 1
+            except Exception as primary_exc:  # noqa: BLE001
+                LOGGER.warning("Primary update failed for signal_id=%s: %s; retrying from base world.", signal_id, primary_exc)
+                fallback_world = ctx.base_world_template.clone()
+                fallback_world.runtime_step = ctx.current_world.runtime_step
+                pipeline_result = ctx.pipeline.update(
+                    fallback_world,
+                    parameter_vector,
+                    signal_text=signal_payload.text,
+                    signal_id=signal_id,
+                )
+                ctx.current_world = pipeline_result.world.clone()
+                result.updated += 1
+                update_error = f"primary_update_failed: {primary_exc}; fallback=base_world"
+
+            verification_probs = {
+                key: float(value)
+                for key, value in pipeline_result.simulation.get("final_outcome_probs", {}).items()
+            }
+            result.verified_forecasts += _verify_due_forecasts(
+                pipeline=ctx.pipeline,
+                state=ctx.pipeline.conscious_state,
+                event_log=ctx.event_log,
+                logged_event_ids=ctx.logged_event_ids,
+                current_world=ctx.current_world,
+                current_probs=verification_probs,
+                current_signal_id=signal_id,
+            )
+            engine = ConsciousnessEngine(ctx.pipeline.conscious_state, ctx.pipeline.consciousness_config)
+            engine.maybe_deliberate(_utc_now())
+            ctx.pipeline.conscious_state = engine.state
+        except Exception as exc:  # noqa: BLE001
+            result.update_failures += 1
+            update_error = str(exc)
+            should_update = False
+            LOGGER.warning("World update failed for signal_id=%s: %s", signal_id, exc)
+    elif not ctx.args.include_watch:
+        result.skipped_watch += 1
+
+    if verification_probs is None:
+        result.verified_forecasts += _verify_due_forecasts(
+            pipeline=ctx.pipeline,
+            state=ctx.pipeline.conscious_state,
+            event_log=ctx.event_log,
+            logged_event_ids=ctx.logged_event_ids,
+            current_world=ctx.current_world,
+            current_probs={outcome_id: float(probability) for outcome_id, probability in score_outcomes(ctx.current_world).items()},
+            current_signal_id=signal_id,
+        )
+
+    _append_unlogged_trace_events(ctx.pipeline.conscious_state, ctx.event_log, ctx.logged_event_ids)
+    runtime_event = _runtime_trace_for_signal(
+        state=ctx.pipeline.conscious_state,
+        signal_payload=signal_payload,
+        trigger_mode=trigger.mode,
+        llm_used=llm_update_attempted,
+        updated_world=should_update,
+        update_error=update_error,
+        extra_diff={
+            "filtered_out": False,
+            "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+        },
+    )
+    ctx.pipeline.conscious_state.trace_state.append(runtime_event)
+    ctx.event_log.append(runtime_event)
+    ctx.logged_event_ids.add(runtime_event.event_id)
+    ctx.cursor_store.commit(signal_id)
+    _persist_context(ctx)
+    result.processed = 1
+    LOGGER.info(
+        "Processed signal_id=%s mode=%s world_t=%s runtime_step=%s queue_len=%d",
+        signal_id,
+        trigger.mode,
+        ctx.current_world.t,
+        ctx.current_world.runtime_step,
+        len(ctx.pending_signals),
+    )
+    return result
+
+
+def _run_loop(
+    ctx: RuntimeContext,
+) -> LoopSummary:
+    next_poll_at = ctx.started_at
+    while not ctx.stop_requested:
+        now = _utc_now()
+        if ctx.deadline is not None and now >= ctx.deadline:
+            LOGGER.info("Reached duration limit (hours=%s).", ctx.args.hours)
+            break
+        if now >= next_poll_at:
+            _run_poll(ctx.sources, ctx)
+            next_poll_at = now + timedelta(seconds=float(ctx.poll_seconds))
+        if ctx.pending_signals:
+            signal_result = _process_one_signal(ctx.pending_signals.pop(0), ctx=ctx)
+            ctx.stats["signals_committed"] += signal_result.processed
+            ctx.stats["world_updates"] += signal_result.updated
+            ctx.stats["world_update_failures"] += signal_result.update_failures
+            ctx.stats["verified_forecasts"] += signal_result.verified_forecasts
+            ctx.stats["watch_skipped"] += signal_result.skipped_watch
+            ctx.stats["filtered_out_count"] += signal_result.filtered_out
+            continue
+        engine = ConsciousnessEngine(ctx.pipeline.conscious_state, ctx.pipeline.consciousness_config)
+        if engine.maybe_deliberate(now) is not None:
+            ctx.stats["idle_deliberations"] += 1
+            ctx.pipeline.conscious_state = engine.state
+            _persist_context(ctx)
+            continue
+        sleep_seconds = ctx.analysis_interval_seconds
+        if ctx.deadline is not None:
+            sleep_seconds = min(sleep_seconds, max((ctx.deadline - _utc_now()).total_seconds(), 0.0))
+        sleep_seconds = min(sleep_seconds, max((next_poll_at - _utc_now()).total_seconds(), 0.0))
+        if sleep_seconds > 0.0:
+            time.sleep(sleep_seconds)
+    return LoopSummary(
+        started_at=ctx.started_at,
+        ended_at=_utc_now(),
+        hours_requested=float(ctx.args.hours),
+        bootstrap_mode=ctx.bootstrap_mode,
+        bootstrap_package_path=str(ctx.package_path) if ctx.package_path.exists() else None,
+        model=ctx.model_name,
+        llm_provider=ctx.provider,
+        runtime_path=str(ctx.runtime_path),
+        event_log_path=str(ctx.event_log.path),
+        signals_seen=int(ctx.stats["signals_seen"]),
+        signals_committed=int(ctx.stats["signals_committed"]),
+        world_updates=int(ctx.stats["world_updates"]),
+        world_update_failures=int(ctx.stats["world_update_failures"]),
+        verified_forecasts=int(ctx.stats["verified_forecasts"]),
+        runtime_step=int(ctx.current_world.runtime_step),
+        idle_deliberations=int(ctx.stats["idle_deliberations"]),
+        queue_len=len(ctx.pending_signals),
+        watch_skipped=int(ctx.stats["watch_skipped"]),
+        filtered_out_count=int(ctx.stats["filtered_out_count"]),
+        trace_events=len(ctx.pipeline.conscious_state.trace_state),
+    )
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    default_config_path: str = "config.yaml",
+    default_sources: list[dict[str, Any]] | None = None,
+    default_keywords: list[str] | None = None,
+) -> int:
+    args = _build_parser(default_config_path=default_config_path).parse_args(argv)
+    logging.basicConfig(
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    config_path = Path(args.config_path).resolve()
+    config = _load_yaml(config_path)
+    paths = _resolve_runtime_paths(args, config, config_path)
+    storage = _initialize_runtime_storage(args, paths.runtime_path, paths.event_log_path)
+    bootstrap = _bootstrap(args=args, config=config, paths=paths, storage=storage)
+    ctx = _build_runtime_context(
+        args=args,
+        config=config,
+        paths=paths,
+        storage=storage,
+        bootstrap=bootstrap,
+        default_sources=default_sources,
+        default_keywords=default_keywords,
+    )
+    previous_sigint, previous_sigterm = _install_stop_handlers(ctx)
+    try:
+        summary = _run_loop(ctx)
+    finally:
+        _restore_stop_handlers(previous_sigint, previous_sigterm)
+        _persist_context(ctx)
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
     return 0
 
 
