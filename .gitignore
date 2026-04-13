@@ -35,7 +35,7 @@ scripts/*
 !scripts/__init__.py
 !scripts/benchmark_faab/
 !scripts/benchmark_faab/**
-freeman/realworld/
+freeman/realworld/__pycache__/
 CHANGELOG.md
 
 PROGRESS.md
