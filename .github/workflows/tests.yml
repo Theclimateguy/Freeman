@@ -32,7 +32,7 @@ jobs:
           python -m pip install -e ./packages/freeman-connectors
 
       - name: Run test suite
-        run: pytest -q
+        run: PYTHONPATH=. pytest -q
 
       - name: Build release artifacts
         run: |
