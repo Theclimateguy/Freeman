@@ -31,8 +31,10 @@ data/
 presentations/
 TS/
 *_20260[0-9]*/
-tests/
-scripts/
+scripts/*
+!scripts/__init__.py
+!scripts/benchmark_faab/
+!scripts/benchmark_faab/**
 freeman/realworld/
 CHANGELOG.md
 

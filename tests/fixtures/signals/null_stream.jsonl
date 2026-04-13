@@ -1,0 +1,5 @@
+{"signal_id":"null-s1","source_type":"replay","text":"Routine reservoir bulletin published for January","topic":"operations","entities":["country_a"],"anomaly_score":0.2,"semantic_gap":0.05,"timestamp":"2026-01-03T00:00:00+00:00"}
+{"signal_id":"null-s2","source_type":"replay","text":"Weekly maintenance note for canal operations","topic":"operations","entities":["country_b"],"anomaly_score":0.1,"semantic_gap":0.05,"timestamp":"2026-01-03T01:00:00+00:00"}
+{"signal_id":"null-s3","source_type":"replay","text":"Standard market summary released without surprises","topic":"markets","entities":["country_a","country_b"],"anomaly_score":0.2,"semantic_gap":0.04,"timestamp":"2026-01-03T02:00:00+00:00"}
+{"signal_id":"null-s4","source_type":"replay","text":"Routine logistics update for water agencies","topic":"operations","entities":["country_a"],"anomaly_score":0.1,"semantic_gap":0.03,"timestamp":"2026-01-03T03:00:00+00:00"}
+{"signal_id":"null-s5","source_type":"replay","text":"Seasonal planning memo circulated to local operators","topic":"operations","entities":["country_b"],"anomaly_score":0.1,"semantic_gap":0.02,"timestamp":"2026-01-03T04:00:00+00:00"}
