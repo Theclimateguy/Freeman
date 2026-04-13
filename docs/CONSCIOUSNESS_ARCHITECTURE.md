@@ -30,42 +30,42 @@ This preserves:
 
 Define the agent state at time `t` as:
 
-$$
+```text
 C_t = (W_t, M_t, G_t, A_t, E_t)
-$$
+```
 
 where:
 
-- $W_t$: deterministic external world model (`WorldState`)
-- $M_t$: self-model / metacognitive state
-- $G_t$: active goal state
-- $A_t$: attention allocation state
-- $E_t$: event and transition trace
+- `W_t`: deterministic external world model (`WorldState`)
+- `M_t`: self-model / metacognitive state
+- `G_t`: active goal state
+- `A_t`: attention allocation state
+- `E_t`: event and transition trace
 
 The state transition is:
 
-$$
-C_{t+1} = \Phi(C_t, x_{t+1}, u_t)
-$$
+```text
+C_(t+1) = Phi(C_t, x_(t+1), u_t)
+```
 
 where:
 
-- $x_{t+1}$ is an external signal
-- $u_t$ is an internal deliberation act
+- `x_(t+1)` is an external signal
+- `u_t` is an internal deliberation act
 
 Two cases:
 
 1. External update:
 
-$$
-C_{t+1} = \Phi(C_t, x_{t+1}, \emptyset)
-$$
+```text
+C_(t+1) = Phi(C_t, x_(t+1), empty)
+```
 
 2. Idle deliberation:
 
-$$
-C_{t+1} = \Phi(C_t, \emptyset, u_t)
-$$
+```text
+C_(t+1) = Phi(C_t, empty, u_t)
+```
 
 ## Determinism and Path Dependence
 
@@ -178,33 +178,33 @@ Recommended location:
 
 Idle trigger:
 
-$$
-\text{idle\_score}_t =
-w_{\mathrm{time}} z_{\mathrm{time},t}
-+ w_{\mathrm{gap}} z_{\mathrm{gap},t}
-+ w_{\mathrm{age}} z_{\mathrm{age},t}
-+ w_{\mathrm{attn}} z_{\mathrm{attn},t}
-$$
+```text
+idle_score_t =
+  w_time * z_time,t
+  + w_gap * z_gap,t
+  + w_age * z_age,t
+  + w_attn * z_attn,t
+```
 
 where:
 
-- $z_{\mathrm{time},t}$ is normalized `time_since_last_update`
-- $z_{\mathrm{gap},t}$ is normalized confidence gap
-- $z_{\mathrm{age},t}$ is normalized active-hypothesis age pressure
-- $z_{\mathrm{attn},t}$ is normalized attention deficit
+- `z_time,t` is normalized `time_since_last_update`
+- `z_gap,t` is normalized confidence gap
+- `z_age,t` is normalized active-hypothesis age pressure
+- `z_attn,t` is normalized attention deficit
 
 Default weights:
 
-- $w_{\mathrm{time}} = 0.25$
-- $w_{\mathrm{gap}} = 0.35$
-- $w_{\mathrm{age}} = 0.20$
-- $w_{\mathrm{attn}} = 0.20$
+- `w_time = 0.25`
+- `w_gap = 0.35`
+- `w_age = 0.20`
+- `w_attn = 0.20`
 
 If:
 
-$$
-\text{idle\_score}_t > \theta
-$$
+```text
+idle_score_t > theta
+```
 
 the engine schedules one internal act.
 
@@ -248,16 +248,16 @@ The agent also needs a production runtime layer that can:
 
 Persisting only the knowledge graph is not sufficient. To resume the agent faithfully, Freeman must persist the full runtime checkpoint:
 
-$$
+```text
 R_t = (C_t, O_t, S_t, P_t)
-$$
+```
 
 where:
 
-- $C_t$: current `ConsciousState`
-- $O_t$: source offsets / cursors for each stream
-- $S_t$: scheduler state, including pending obligations and next idle-review times
-- $P_t$: process metadata, including runtime version and config hash
+- `C_t`: current `ConsciousState`
+- `O_t`: source offsets / cursors for each stream
+- `S_t`: scheduler state, including pending obligations and next idle-review times
+- `P_t`: process metadata, including runtime version and config hash
 
 ### Required persisted objects
 
@@ -284,15 +284,15 @@ Use two persistence layers:
 
 Formally:
 
-$$
-\text{checkpoint}_k = \Psi(C_{t_k})
-$$
+```text
+checkpoint_k = Psi(C_tk)
+```
 
 and recovery is:
 
-$$
-C_T = \text{replay}(\text{checkpoint}_k, \text{events}_{t_k+1:T})
-$$
+```text
+C_T = replay(checkpoint_k, events_(tk+1:T))
+```
 
 This gives both:
 
@@ -488,9 +488,9 @@ Internal acts are deterministic operators over the self-model.
 
 Decay stale hypotheses when no new support arrives:
 
-$$
-c_{h,t+1} = \lambda_h c_{h,t}
-$$
+```text
+c_h,t+1 = lambda_h * c_h,t
+```
 
 where `lambda_h` depends on hypothesis age and recent evidence.
 
@@ -502,28 +502,28 @@ Scan the self-model for incompatible node pairs or cycles and emit contradiction
 
 Recompute attention if current attention is misaligned with active goals or rising uncertainty:
 
-$$
-a_{d,t+1} \propto
-w_g g_{d,t} +
-w_u u_{d,t} +
-w_e e_{d,t} -
-w_s s_{d,t}
-$$
+```text
+a_d,t+1 proportional to
+  w_g * g_d,t
+  + w_u * u_d,t
+  + w_e * e_d,t
+  - w_s * s_d,t
+```
 
 where:
 
-- $g_{d,t}$ is goal urgency
-- $u_{d,t}$ is uncertainty
-- $e_{d,t}$ is recent error pressure
-- $s_{d,t}$ is current saturation
+- `g_d,t` is goal urgency
+- `u_d,t` is uncertainty
+- `e_d,t` is recent error pressure
+- `s_d,t` is current saturation
 
 ### `capability_review`
 
 Update domain competence from rolling errors:
 
-$$
-\text{capability}_{d,t} = \sigma(\alpha - \beta \cdot \text{MAE}_{d,t})
-$$
+```text
+capability_d,t = sigmoid(alpha - beta * MAE_d,t)
+```
 
 This turns forecast quality into a stable metacognitive estimate.
 
@@ -533,18 +533,17 @@ This turns forecast quality into a stable metacognitive estimate.
 
 For MVP, use MAE-driven consolidation:
 
-$$
-\text{trait\_support}_{k,t+1}
-=
-\lambda_k \text{trait\_support}_{k,t}
-+ \eta_k \mathbf{1}\{\text{pattern}_k \text{ observed}\}
-- \beta_k \Delta \text{MAE}_{k,t}^{+}
-$$
+```text
+trait_support_k,t+1 =
+  lambda_k * trait_support_k,t
+  + eta_k * 1{pattern_k observed}
+  - beta_k * positive_delta_MAE_k,t
+```
 
 where:
 
 - `pattern_k` is a repeated reasoning pattern associated with trait `k`
-- $\Delta \text{MAE}_{k,t}^{+}$ is the positive deterioration in forecast error associated with that trait
+- `positive_delta_MAE_k,t` is the positive deterioration in forecast error associated with that trait
 
 Interpretation:
 

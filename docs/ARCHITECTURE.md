@@ -57,9 +57,9 @@ flowchart LR
 
 The simulator implements:
 
-$$
-S_{t+1} = S_t + F_{\theta_D}(S_t, \pi_t)
-$$
+```text
+S_t+1 = S_t + F_theta_D(S_t, pi_t)
+```
 
 Operationally, each resource uses one evolution operator:
 
@@ -94,15 +94,16 @@ If historical data are available, the validator reports:
 
 Longitudinal updates now keep an explicit baseline-relative shock state:
 
-$$
-d_{t+1} = \lambda d_t + \Delta_{t+1}, \qquad S_{t+1} = S_{\mathrm{base}} + d_{t+1}
-$$
+```text
+d_t+1 = lambda * d_t + Delta_t+1
+S_t+1 = S_base + d_t+1
+```
 
 where:
 
-- $d_t$ is the accumulated decayed deviation stored in `metadata["_shock_state"]`
-- $\lambda$ is `time_decay`
-- $\Delta_{t+1}$ is the newly inferred shock vector
+- `d_t` is the accumulated decayed deviation stored in `metadata["_shock_state"]`
+- `lambda` is `time_decay`
+- `Delta_t+1` is the newly inferred shock vector
 
 `WorldGraph.apply_shocks()` implements this in a deterministic way:
 
@@ -120,31 +121,31 @@ flowchart LR
 
 The simulator now supports a universal dynamic calibration layer:
 
-$$
-\Theta_t = \{\alpha_t, \lambda_t, \Delta W_t\}
-$$
+```text
+Theta_t = {alpha_t, lambda_t, DeltaW_t}
+```
 
 `ParameterVector` is stored directly on the world state and is preserved by snapshot/clone operations. It lets the system recalibrate a world at `T_1` without rewriting the base ontology generated at `T_0`.
 
 Its three active channels are:
 
-- $\alpha_t$: outcome-level multiplicative scaling, implemented as `outcome_modifiers`
-- $\lambda_t$: global decay of previously accumulated shock state, implemented as `shock_decay`
-- $\Delta W_t$: additive adjustment of causal edge weights in resource and actor-state updates, implemented as `edge_weight_deltas`
+- `alpha_t`: outcome-level multiplicative scaling, implemented as `outcome_modifiers`
+- `lambda_t`: global decay of previously accumulated shock state, implemented as `shock_decay`
+- `DeltaW_t`: additive adjustment of causal edge weights in resource and actor-state updates, implemented as `edge_weight_deltas`
 
 ### Outcome Scoring
 
-For outcomes $o$, the raw score is:
+For outcomes `o`, the raw score is:
 
-$$
-z_o = W_o \cdot S_t
-$$
+```text
+z_o = W_o * S_t
+```
 
 and the probability is:
 
-$$
-p(o_t) = \frac{\exp(z_o)}{\sum_j \exp(z_j)}
-$$
+```text
+p(o_t) = exp(z_o) / sum_j exp(z_j)
+```
 
 implemented in `freeman.core.scorer`.
 
@@ -152,9 +153,10 @@ implemented in `freeman.core.scorer`.
 
 Each `Outcome` may now define conditional multipliers:
 
-$$
-z_o \leftarrow m_o z_o \quad \text{if} \quad C_o(d_t)=\text{true}
-$$
+```text
+if C_o(d_t) is true:
+  z_o = m_o * z_o
+```
 
 where `C_o` is a safe boolean expression over the accumulated shock context. Plain identifiers in regime-shift conditions are interpreted as decayed deviations, while `level_<name>` and `abs_<name>` expose absolute levels.
 
@@ -165,21 +167,21 @@ Examples:
 
 Dynamic `ParameterVector.outcome_modifiers` are applied after static regime shifts:
 
-$$
-z_o \leftarrow z_o \cdot m_o
-$$
+```text
+z_o = z_o * m_o
+```
 
-with $m_o = 1$ by default.
+with `m_o = 1` by default.
 
 ### Dynamic Edge Calibration
 
 Resource and actor-state transitions now read:
 
-$$
-w_{ij}^{\mathrm{eff}} = w_{ij} + \Delta w_{ij}
-$$
+```text
+w_ij_eff = w_ij + Delta_w_ij
+```
 
-where $\Delta w_{ij}$ comes from `ParameterVector.edge_weight_deltas`. This is how a new signal can temporarily strengthen or weaken one causal relation without changing the original schema.
+where `Delta_w_ij` comes from `ParameterVector.edge_weight_deltas`. This is how a new signal can temporarily strengthen or weaken one causal relation without changing the original schema.
 
 ## Verification Layer
 
@@ -212,16 +214,16 @@ Hard violations trigger `HardStopException`.
 
 - null-action convergence
 - shock decay
-- spectral radius $\rho(J_\Phi) < 1$
+- spectral radius `rho(J_Phi) < 1`
 - causal sign precheck through the current DAG
 
 ### Level 2
 
 `freeman.verifier.level2` checks local sign consistency with DAG perturbations. `freeman.verifier.fixedpoint` adds bounded correction iterations and the guard:
 
-$$
-\rho(J_\Phi) < 1
-$$
+```text
+rho(J_Phi) < 1
+```
 
 The aggregate API lives in `freeman.verifier.verifier.Verifier`.
 
@@ -301,30 +303,34 @@ Retrieval policy:
 
 Confidence status mapping:
 
-- `active`: $c \ge 0.60$
-- `uncertain`: $0.30 \le c < 0.60$
-- `review`: $0.15 \le c < 0.30$
-- `archived`: $c < 0.15$
+- `active`: `c >= 0.60`
+- `uncertain`: `0.30 <= c < 0.60`
+- `review`: `0.15 <= c < 0.30`
+- `archived`: `c < 0.15`
 
 ### Reconciler
 
 The default reconciliation update is now a Bayesian log-odds rule with optional exponential forgetting. Let
 
-$$
-L_v(n) = \log\frac{c_v(n)}{1 - c_v(n)}
-$$
+```text
+L_v(n) = log(c_v(n) / (1 - c_v(n)))
+```
 
-For `support = S_v` and `contradiction = S_v^-`, Freeman treats each unit observation as a repeated Bayes factor relative to a prior-strength pseudocount $S_{v0}$:
+For `support = S_v` and `contradiction = S_v^-`, Freeman treats each unit observation as a repeated Bayes factor relative to a prior-strength pseudocount `S_v0`:
 
-$$
-L_v(n+1) = e^{-\gamma}L_v(n) + w_s S_v \log\left(\frac{S_{v0}+1}{S_{v0}}\right) - w_c S_v^- \log\left(\frac{S_{v0}+1}{S_{v0}}\right)
-$$
+```text
+L_v(n+1) =
+  exp(-gamma) * L_v(n)
+  + w_s * S_v * log((S_v0 + 1) / S_v0)
+  - w_c * S_v^- * log((S_v0 + 1) / S_v0)
+```
 
-$$
-c_v(n+1) = \sigma(L_v(n+1)), \qquad \sigma(x)=\frac{1}{1+e^{-x}}
-$$
+```text
+c_v(n+1) = sigmoid(L_v(n+1))
+sigmoid(x) = 1 / (1 + exp(-x))
+```
 
-So support multiplies posterior odds, conflict divides them, and $e^{-\gamma}$ decays stale evidence back toward neutral confidence $0.5$. A compatibility path remains available through `Reconciler(mode="legacy")`, which preserves the older multiplicative update.
+So support multiplies posterior odds, conflict divides them, and `exp(-gamma)` decays stale evidence back toward neutral confidence `0.5`. A compatibility path remains available through `Reconciler(mode="legacy")`, which preserves the older multiplicative update.
 
 Conflict handling:
 
@@ -482,43 +488,41 @@ If semantic memory is enabled, step 5 is preceded by retrieval-bounded context s
 
 ### Counterfactual Policy Planning
 
-`freeman.agent.policyevaluator.PolicyEvaluator` adds short-horizon Dyna-style planning on top of the same deterministic simulator. For a candidate policy bundle $\pi$, Freeman computes:
+`freeman.agent.policyevaluator.PolicyEvaluator` adds short-horizon Dyna-style planning on top of the same deterministic simulator. For a candidate policy bundle `pi`, Freeman computes:
 
-$$
-U(\pi) = \frac{\sum_o p(o \mid \pi) z_o}{\bar{|z|} + \varepsilon},
-\qquad
-w_d = \frac{1}{1 + \mathrm{MAE}_d},
-\qquad
-J(\pi) = w_d \, U(\pi)
-$$
+```text
+U(pi) = sum_o p(o | pi) * z_o / (mean_abs_z + epsilon)
+w_d = 1 / (1 + MAE_d)
+J(pi) = w_d * U(pi)
+```
 
-where $z_o$ are the simulator raw outcome scores, $p(o \mid \pi)$ is the counterfactual outcome distribution, and $\mathrm{MAE}_d$ is the rolling domain forecast error stored in epistemic/self-model memory.
+where `z_o` are the simulator raw outcome scores, `p(o | pi)` is the counterfactual outcome distribution, and `MAE_d` is the rolling domain forecast error stored in epistemic/self-model memory.
 
 Hard verifier failures are treated as feasibility constraints rather than as a soft penalty. Ranking is therefore lexicographic:
 
 1. fewer hard violations
 2. fewer soft violations
-3. larger epistemically weighted utility $J(\pi)$
+3. larger epistemically weighted utility `J(pi)`
 4. higher confidence as a tie-breaker
 
 To keep planning cheap enough for repeated and multi-domain use, the evaluator applies three bounds:
 
-- short planning horizon $H_{\text{plan}}$ with default `min(sim.max_steps, 8)`
+- short planning horizon `H_plan` with default `min(sim.max_steps, 8)`
 - one shared policy-invariant preparation pass per world (`level1` + fixed point) reused across all branches
 - early stop when the outcome distribution stabilizes before the horizon
 
 This changes the branch-comparison cost from naive
 
-$$
-O\!\left(K\left(C_{\mathrm{prep}} + H C_{\mathrm{step}}\right)\right)
-$$
+```text
+O(K * (C_prep + H * C_step))
+```
 
 to
 
-$$
-O\!\left(C_{\mathrm{prep}} + \sum_{\pi=1}^{K} \tau_\pi C_{\mathrm{step}}\right),
-\qquad \tau_\pi \le H_{\text{plan}}
-$$
+```text
+O(C_prep + sum_(pi=1..K) tau_pi * C_step)
+tau_pi <= H_plan
+```
 
 which is the main reason counterfactual planning remains tractable even when several policy branches must be compared.
 
@@ -543,11 +547,11 @@ Modes:
 - `ANALYZE`
 - `DEEP_DIVE`
 
-Signal decay uses a half-life $h$:
+Signal decay uses a half-life `h`:
 
-$$
-w_s(t) = 2^{-\Delta t / h}
-$$
+```text
+w_s(t) = 2^(-Delta_t / h)
+```
 
 ```mermaid
 flowchart LR
@@ -591,20 +595,24 @@ Observed mean accuracies in the recorded run:
 
 The scheduler implements a UCB-inspired allocation rule:
 
-$$
-a_t = \arg\max_i\left[\text{interest}_i(t) + \beta\sqrt{\frac{\ln t}{n_i(t)}}\right]
-$$
+```text
+a_t = argmax_i [interest_i(t) + beta * sqrt(ln(t) / n_i(t))]
+```
 
 The exploration bonus keeps the familiar UCB form, but Freeman normalizes heterogeneous interest components before summation. This means the scheduler should be understood as a heuristic inspired by UCB1 rather than a setting where classical logarithmic-regret guarantees hold automatically.
 
-$$
-\text{interest}_i(t) =
-\frac{
-\tilde{\text{EIG}}_i + \tilde{\text{anomaly}}_i + \widetilde{\text{semanticGap}}_i + \widetilde{\text{confidenceGap}}_i + \widetilde{\text{obligationPressure}}_i(t)
-}{\text{cost}_i}
-$$
+```text
+interest_i(t) =
+  (
+    EIG_tilde_i
+    + anomaly_tilde_i
+    + semanticGap_tilde_i
+    + confidenceGap_tilde_i
+    + obligationPressure_tilde_i(t)
+  ) / cost_i
+```
 
-Each $\tilde{x}$ is a rolling z-score over the recent component history, clipped to $[-3, 3]$. During the warm-up phase, when a component has not yet accumulated enough variance, the scheduler falls back to the raw component value instead of dividing by a near-zero standard deviation.
+Each `x_tilde` is a rolling z-score over the recent component history, clipped to `[-3, 3]`. During the warm-up phase, when a component has not yet accumulated enough variance, the scheduler falls back to the raw component value instead of dividing by a near-zero standard deviation.
 
 `obligationPressure` is normalized on its own history, because it aggregates deadline-like pressure from:
 

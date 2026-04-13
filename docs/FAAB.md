@@ -26,28 +26,30 @@ The key question is whether Freeman can carry forward useful state and then revi
 
 The simulator now uses a decayed stateful update:
 
-$$
-d_{t+1} = \lambda d_t + \Delta_{t+1}, \qquad S_{t+1} = S_{\mathrm{base}} + d_{t+1}
-$$
+```text
+d_t+1 = lambda * d_t + Delta_t+1
+S_t+1 = S_base + d_t+1
+```
 
 where:
 
-- $d_t$ is the accumulated shock state
-- $\lambda$ is `time_decay`
-- $\Delta_{t+1}$ is the fresh shock inferred from the new signal
+- `d_t` is the accumulated shock state
+- `lambda` is `time_decay`
+- `Delta_t+1` is the fresh shock inferred from the new signal
 
 Outcome scoring then applies optional nonlinear regime shifts:
 
-$$
-z_o = W_o \cdot S_t, \qquad
-z_o \leftarrow m_o z_o \ \text{if} \ C_o(d_t)=\text{true}
-$$
+```text
+z_o = W_o * S_t
+if C_o(d_t) is true:
+  z_o = m_o * z_o
+```
 
 The universal update path adds a dynamic `ParameterVector`:
 
-$$
-\Theta_{t+1} = \text{LLM}(S_t, \text{signal}_{t+1})
-$$
+```text
+Theta_t+1 = LLM(S_t, signal_t+1)
+```
 
 with fields:
 
@@ -105,20 +107,20 @@ Mean accuracies from the recorded run:
 
 FAAB now also records the multiclass Brier score:
 
-$$
-\mathrm{BS} = \sum_o \left(p(o) - \mathbf{1}\{o = o^\*\}\right)^2
-$$
+```text
+BS = sum over outcomes o of (p(o) - 1{o = o*})^2
+```
 
-where $o^\*$ is the realized dominant outcome. Lower is better.
+where `o*` is the realized dominant outcome. Lower is better.
 
 - ideal forecast: `0.0`
 - roughly good calibration: `< 0.2`
 - poor calibration: `> 0.5`
-- uniform random forecast over $K$ outcomes:
+- uniform random forecast over `K` outcomes:
 
-$$
-\mathrm{BS}_{\mathrm{random}} = \frac{K-1}{K}
-$$
+```text
+BS_random = (K - 1) / K
+```
 
 For the common binary case this reduces to `0.5`.
 
