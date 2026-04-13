@@ -210,3 +210,64 @@ def test_anomaly_singleton_noise(tmp_path) -> None:
     assert reviewed is not None
     assert reviewed.metadata["reviewed"] is True
     assert reviewed.metadata["review_outcome"] == "noise"
+
+
+def test_maybe_deliberate_emits_ontology_repair_request(tmp_path) -> None:
+    state = _state(tmp_path)
+    state.runtime_metadata["last_runtime_step"] = 100
+    kg = state.self_model_ref.knowledge_graph
+    for index in range(5):
+        kg.add_node(
+            KGNode(
+                id=f"anomaly_candidate:r{index}",
+                label="Anomaly candidate",
+                node_type="anomaly_candidate",
+                content="novel anomaly topic",
+                confidence=0.8,
+                metadata={
+                    "domain": "runtime",
+                    "signal_id": f"r{index}",
+                    "topic": "novel_topic",
+                    "text_snippet": "novel anomaly topic",
+                    "runtime_step": 99,
+                    "reviewed": False,
+                    "review_outcome": None,
+                },
+            )
+        )
+    for index in range(2):
+        state.self_model_ref.write(
+            SelfModelNode(
+                node_id=f"sm:identity_trait:ontology_gap:{index}",
+                node_type="identity_trait",
+                domain="runtime",
+                payload={
+                    "trait_key": "ontology_gap",
+                    "cluster_topics": [f"gap_topic_{index}"],
+                    "repair_triggered": False,
+                },
+                confidence=0.9,
+                created_at=_now(),
+                updated_at=_now(),
+                source_trace_id=None,
+            ),
+            caller_token="freeman_consciousness_engine",
+        )
+
+    engine = ConsciousnessEngine(
+        state,
+        {
+            "idle_scheduler": {"threshold": 0.10},
+            "anomaly_review": {"trigger_count": 5},
+            "ontology_repair": {"gap_threshold": 2, "max_repairs_per_session": 3},
+        },
+    )
+
+    result = engine.maybe_deliberate(_now() + timedelta(seconds=6000))
+    request_events = [event for event in state.trace_state if event.operator == "ontology_repair_request"]
+    traits = [node for node in state.self_model_ref.get_nodes_by_type("identity_trait") if node.payload.get("trait_key") == "ontology_gap"]
+
+    assert result is state
+    assert request_events
+    assert {"gap_topic_0", "gap_topic_1"}.issubset(set(request_events[-1].diff["gap_topics"]))
+    assert all(node.payload["repair_triggered"] is True for node in traits)

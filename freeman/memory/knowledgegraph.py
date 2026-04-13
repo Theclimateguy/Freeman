@@ -262,6 +262,14 @@ class KnowledgeGraph:
 
         return [KGEdge.from_snapshot(dict(attrs)) for _, _, _, attrs in self.graph.edges(keys=True, data=True)]
 
+    def get_edge(self, edge_id: str) -> KGEdge | None:
+        """Return one edge by id if present."""
+
+        for _source, _target, key, attrs in self.graph.edges(keys=True, data=True):
+            if str(attrs.get("id", key)) == str(edge_id):
+                return KGEdge.from_snapshot(dict(attrs))
+        return None
+
     def query(
         self,
         *,
@@ -379,6 +387,47 @@ class KnowledgeGraph:
             if node is not None:
                 nodes.append(node)
         return nodes
+
+    def explain_causal_path(self, edge_ids: list[str]) -> list[Any]:
+        """Resolve ordered edge ids into human-readable causal steps."""
+
+        from freeman.agent.analysispipeline import CausalStep
+
+        steps: list[CausalStep] = []
+        for edge_id in edge_ids:
+            edge = self.get_edge(edge_id)
+            if edge is None:
+                continue
+            source_node = self.get_node(edge.source, lazy_embed=False)
+            target_node = self.get_node(edge.target, lazy_embed=False)
+            metadata = dict(edge.metadata or {})
+            steps.append(
+                CausalStep(
+                    edge_id=str(edge.id),
+                    edge_type=str(edge.relation_type),
+                    source_id=str(edge.source),
+                    target_id=str(edge.target),
+                    source_label=self._causal_label(source_node, fallback_id=edge.source),
+                    target_label=self._causal_label(target_node, fallback_id=edge.target),
+                    confidence=float(edge.confidence),
+                    world_step=int(metadata.get("world_step", 0) or 0),
+                )
+            )
+        return steps
+
+    def _causal_label(self, node: KGNode | None, *, fallback_id: str) -> str:
+        if node is None:
+            return str(fallback_id)
+        if node.node_type == "signal_event":
+            snippet = str(node.content).strip()
+            if snippet:
+                compact = " ".join(snippet.split())[:80]
+                return f"{node.id} ({compact})"
+            return str(node.id)
+        if node.content:
+            compact = " ".join(str(node.content).split())
+            return compact[:100]
+        return str(node.label or node.id)
 
     def archive(self, node_id: str, reason: str = "") -> KGNode:
         """Archive a node in place and remove it from the vector store."""

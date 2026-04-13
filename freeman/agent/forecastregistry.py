@@ -146,6 +146,24 @@ class ForecastRegistry:
     def pending(self) -> List[Forecast]:
         return [forecast for forecast in self._forecasts.values() if forecast.status == "pending"]
 
+    def all(self) -> List[Forecast]:
+        return [
+            Forecast.from_snapshot(forecast.snapshot())
+            for forecast in sorted(
+                self._forecasts.values(),
+                key=lambda item: (
+                    int(item.created_runtime_step if item.created_runtime_step is not None else item.created_step),
+                    str(item.forecast_id),
+                ),
+            )
+        ]
+
+    def get(self, forecast_id: str) -> Forecast | None:
+        forecast = self._forecasts.get(str(forecast_id))
+        if forecast is None:
+            return None
+        return Forecast.from_snapshot(forecast.snapshot())
+
     def due(self, current_step: int) -> List[Forecast]:
         deadline = int(current_step)
         return [forecast for forecast in self.pending() if forecast.deadline_step <= deadline]

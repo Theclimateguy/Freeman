@@ -202,10 +202,25 @@ The current causal path uses three edge relations:
 - `propagates_to`
 - `threshold_exceeded`
 
+Saved runtime state is also queryable without starting the daemon loop:
+
+```bash
+python -m freeman.runtime.stream_runtime --config-path config.yaml --query forecasts
+python -m freeman.runtime.stream_runtime --config-path config.yaml --query explain --forecast-id <forecast_id>
+python -m freeman.runtime.stream_runtime --config-path config.yaml --query anomalies
+python -m freeman.runtime.stream_runtime --config-path config.yaml --query causal --limit 20
+```
+
 Stream ingestion is two-phase:
 
 - phase 1 hard filter from config: `agent.stream_keywords` + `agent.stream_filter.min_keyword_matches` + `agent.stream_filter.min_relevance_score`
 - phase 2 agent-side relevance filter after self-calibration begins (`self_observation` exists), with soft-reject trace events and `stream_relevance` tracked as a `self_capability`
+
+Ontology-blind low-relevance signals are not dropped silently anymore:
+
+- if both ontology overlap and hypothesis overlap are zero, the signal is written to KG as `anomaly_candidate`
+- `ConsciousnessEngine` reviews repeated anomaly clusters and escalates them into `identity_trait` nodes with `trait_key=ontology_gap`
+- once enough unhandled ontology gaps accumulate, the runtime appends those topics to the current domain brief, writes `domain_brief_history.jsonl`, and re-runs verifier-guided bootstrap while preserving monotonic `runtime_step`
 
 The reconciler is also configurable through `memory.reconciler`:
 

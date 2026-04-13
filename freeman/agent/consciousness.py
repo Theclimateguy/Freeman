@@ -49,6 +49,11 @@ DEFAULT_CONSCIOUSNESS_CONFIG: dict[str, Any] = {
         "max_age_steps": 50,
         "similarity_threshold": 0.35,
     },
+    "ontology_repair": {
+        "gap_threshold": 2,
+        "preserve_kg": True,
+        "max_repairs_per_session": 3,
+    },
 }
 
 
@@ -517,6 +522,24 @@ class ConsciousnessEngine:
                 rationale=rationale if clean_diff else "no change",
                 timestamp=now,
             )
+            if act == self._anomaly_review:
+                repair_diff = self._emit_ontology_repair_request()
+                repair_rationale = str(repair_diff.get("rationale", "no change"))
+                repair_clean_diff = {
+                    key: value
+                    for key, value in repair_diff.items()
+                    if key != "rationale" and value not in ({}, [], None)
+                }
+                if repair_clean_diff:
+                    self._apply_diff(repair_clean_diff)
+                    self._write_trace(
+                        operator="ontology_repair_request",
+                        diff=repair_clean_diff,
+                        trigger_type="idle_threshold",
+                        transition_type="internal",
+                        rationale=repair_rationale,
+                        timestamp=now,
+                    )
             self.state.runtime_metadata["last_update_at"] = _to_datetime(now).isoformat()
             return self.state
         return None
@@ -1142,6 +1165,62 @@ class ConsciousnessEngine:
             updated.metadata["payload"]["cluster_signature"] = str(cluster_signature)
         updated.updated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         self.state.self_model_ref.knowledge_graph.update_node(updated)
+
+    def _pending_ontology_gap_traits(self) -> list[SelfModelNode]:
+        return [
+            trait
+            for trait in self.state.self_model_ref.get_nodes_by_type("identity_trait")
+            if trait.payload.get("trait_key") == "ontology_gap" and not bool(trait.payload.get("repair_triggered", False))
+        ]
+
+    def _should_trigger_ontology_repair(self) -> bool:
+        cfg = deep_copy_jsonable(self.config.get("ontology_repair", {}))
+        gap_threshold = max(int(cfg.get("gap_threshold", 2)), 1)
+        repairs_triggered = int(self.state.runtime_metadata.get("ontology_repairs_triggered", 0))
+        max_repairs = max(int(cfg.get("max_repairs_per_session", 3)), 0)
+        if max_repairs > 0 and repairs_triggered >= max_repairs:
+            return False
+        return len(self._pending_ontology_gap_traits()) >= gap_threshold
+
+    def _emit_ontology_repair_request(self) -> dict[str, Any]:
+        if not self._should_trigger_ontology_repair():
+            return {"rationale": "no change"}
+        pending_traits = self._pending_ontology_gap_traits()
+        updated_nodes: list[dict[str, Any]] = []
+        gap_topics: list[str] = []
+        repair_trait_ids: list[str] = []
+        for trait in pending_traits:
+            payload = deep_copy_jsonable(trait.payload)
+            payload["repair_triggered"] = True
+            payload["repair_failed"] = False
+            payload["repair_requested_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+            gap_topics.extend(str(topic) for topic in payload.get("cluster_topics", []) if str(topic).strip())
+            if payload.get("cluster_signature"):
+                gap_topics.append(str(payload["cluster_signature"]))
+            updated_nodes.append(
+                SelfModelNode(
+                    node_id=trait.node_id,
+                    node_type="identity_trait",
+                    domain=trait.domain,
+                    payload=payload,
+                    confidence=trait.confidence,
+                    created_at=trait.created_at,
+                    updated_at=datetime.now(timezone.utc).replace(microsecond=0),
+                    source_trace_id=self.state.trace_state[-1].event_id if self.state.trace_state else None,
+                ).to_dict()
+            )
+            repair_trait_ids.append(trait.node_id)
+        unique_topics = sorted({topic for topic in gap_topics if topic})
+        return {
+            "nodes": updated_nodes,
+            "runtime_metadata": {
+                "pending_ontology_repair_topics": unique_topics,
+            },
+            "gap_topics": unique_topics,
+            "repair_trait_ids": repair_trait_ids,
+            "handled": False,
+            "rationale": "requested ontology repair from accumulated ontology_gap traits",
+        }
 
     def _merge_config(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = deep_copy_jsonable(base)

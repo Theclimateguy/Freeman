@@ -4,12 +4,31 @@
 
 ### Added
 
-- Ontology-blind soft-filtered signals are now preserved as `anomaly_candidate` nodes in the KG instead of being silently discarded.
-- `ConsciousnessEngine` can now review accumulated anomaly candidates, escalate repeated clusters into `identity_trait` signals with `trait_key=ontology_gap`, and close stale singletons as `noise`.
-
 ### Changed
 
+- No unreleased changes.
+
+## v2.0.1 - 2026-04-13
+
+Patch release focused on anomaly handling, ontology self-repair, and read-only runtime queries over saved state.
+
+### Added
+
+- Ontology-blind soft-filtered signals are now preserved as `anomaly_candidate` nodes in the KG instead of being silently discarded.
+- `ConsciousnessEngine` now reviews accumulated anomaly candidates, escalates repeated clusters into `identity_trait` signals with `trait_key=ontology_gap`, and closes stale singletons as `noise`.
+- Self-healing bootstrap loop: repeated `ontology_gap` traits now emit `ontology_repair_request`, append gap topics to `domain_brief_history.jsonl`, and trigger a verifier-guided re-bootstrap while preserving monotonic `runtime_step`.
+- Read-only runtime query mode in `freeman.runtime.stream_runtime`:
+  - `--query forecasts`
+  - `--query explain --forecast-id <id>`
+  - `--query anomalies`
+  - `--query causal --limit <n>`
+- Forecast explanation API with `ForecastExplanation`, `CausalStep`, `AnalysisPipeline.list_forecasts()`, `AnalysisPipeline.explain_forecast()`, and `KnowledgeGraph.explain_causal_path()`.
+
 - Agent-side stream filtering now splits low-relevance signals into `FILTERED_OUT` versus `ANOMALY_CANDIDATE` based on ontology and hypothesis overlap.
+
+### Validation
+
+- `pytest -q` -> `200 passed`
 
 ## v2.0.0 - 2026-04-12
 

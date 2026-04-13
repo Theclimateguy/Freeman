@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.forecastregistry import ForecastRegistry
+from freeman.agent.signalingestion import SignalIngestionEngine
 from freeman.agent.signalingestion import ShockClassification, Signal, SignalTrigger
+from freeman.game.runner import SimConfig
 from freeman.core.types import ParameterVector
 from freeman.agent.consciousness import ConsciousState
 from freeman.interface.cli import main
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
+from freeman.memory.sessionlog import SessionLog
 from freeman.memory.selfmodel import SelfModelGraph
 from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
@@ -781,3 +786,380 @@ def test_anomaly_candidate_preserved(tmp_path, monkeypatch, water_market_schema)
     assert signal_events[-1]["diff"]["mode"] == "ANOMALY_CANDIDATE"
     assert anomaly_nodes
     assert anomaly_nodes[0].metadata["reviewed"] is False
+
+
+def test_trigger_ontology_repair_preserves_runtime_step_and_writes_history(tmp_path, monkeypatch, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config = {
+        "agent": {
+            "bootstrap": {
+                "mode": "llm_synthesize",
+                "domain_brief": "Base domain brief.",
+            },
+            "ontology_repair": {
+                "gap_threshold": 2,
+                "preserve_kg": True,
+                "max_repairs_per_session": 3,
+            },
+        },
+        "llm": {"provider": "ollama", "model": "fake-model", "base_url": "http://127.0.0.1:11434", "timeout_seconds": 1.0},
+        "memory": {"json_path": str(kg_path)},
+        "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    kg = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    forecast_registry = ForecastRegistry(json_path=runtime_path / "forecasts.json", auto_load=False, auto_save=True)
+    pipeline = AnalysisPipeline(
+        knowledge_graph=kg,
+        forecast_registry=forecast_registry,
+        sim_config=SimConfig(max_steps=1),
+        config_path=config_path,
+    )
+    current_world = pipeline.compiler.compile(water_market_schema)
+    current_world.runtime_step = 17
+    pipeline.conscious_state.runtime_metadata["last_runtime_step"] = 17
+    gap_trait = KGNode(
+        id="sm:identity_trait:ontology_gap:test",
+        label="Ontology gap",
+        node_type="identity_trait",
+        content="Ontology gap around methane leak",
+        confidence=0.9,
+        metadata={
+            "payload": {
+                "trait_key": "ontology_gap",
+                "cluster_topics": ["methane_leak"],
+                "repair_triggered": True,
+                "repair_failed": False,
+            }
+        },
+    )
+    kg.add_node(gap_trait)
+
+    package_path = runtime_path / "bootstrap_package.json"
+    package_path.write_text(
+        json.dumps(
+            {
+                "schema": water_market_schema,
+                "policies": [],
+                "assumptions": [],
+                "bootstrap_mode": "llm_synthesize",
+                "domain_brief": "Base domain brief.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ctx = stream_runtime.RuntimeContext(
+        config=config,
+        paths=stream_runtime.RuntimePaths(
+            config_path=config_path,
+            config_base=config_path.parent,
+            runtime_path=runtime_path,
+            event_log_path=runtime_path / "event_log.jsonl",
+            kg_path=kg_path,
+            schema_path=None,
+        ),
+        pipeline=pipeline,
+        current_world=current_world,
+        base_world_template=current_world.clone(),
+        estimator=object(),
+        ingestion_engine=SignalIngestionEngine(),
+        llm_client=object(),
+        event_log=EventLog(runtime_path / "event_log.jsonl"),
+        logged_event_ids=set(),
+        cursor_store=StreamCursorStore(),
+        signal_memory=stream_runtime.SignalMemory(),
+        pending_signals=[],
+        queued_signal_ids=set(),
+        checkpoint_manager=CheckpointManager(),
+        runtime_path=runtime_path,
+        keywords=[],
+        filter_cfg={},
+        args=SimpleNamespace(
+            resume=True,
+            model="auto",
+            ollama_base_url=None,
+            bootstrap_mode="llm_synthesize",
+            domain_brief_path=None,
+            schema_path=None,
+            hours=0.0,
+            poll_seconds=60.0,
+            analysis_interval_seconds=0.1,
+            max_signals_per_poll=30,
+            log_level="WARNING",
+        ),
+        package_path=package_path,
+        bootstrap_mode="llm_synthesize",
+        provider="ollama",
+        model_name="fake-model",
+        sources=[],
+        poll_seconds=60.0,
+        analysis_interval_seconds=0.1,
+        started_at=stream_runtime._utc_now(),
+        deadline=None,
+        stats=stream_runtime._initial_runtime_stats(),
+    )
+
+    def _fake_bootstrap(**kwargs):  # noqa: ANN003
+        repaired_brief = kwargs["domain_brief_override"]
+        assert "methane_leak" in repaired_brief
+        new_pipeline = AnalysisPipeline(
+            knowledge_graph=kwargs["knowledge_graph"],
+            forecast_registry=kwargs["forecast_registry"],
+            sim_config=SimConfig(max_steps=1),
+            config_path=config_path,
+        )
+        new_world = new_pipeline.compiler.compile(water_market_schema)
+        new_world.runtime_step = 0
+        kwargs["paths"].runtime_path.mkdir(parents=True, exist_ok=True)
+        kwargs["paths"].runtime_path.joinpath("bootstrap_package.json").write_text(
+            json.dumps(
+                {
+                    "schema": water_market_schema,
+                    "policies": [],
+                    "assumptions": [],
+                    "bootstrap_mode": "llm_synthesize",
+                    "domain_brief": repaired_brief,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return stream_runtime.BootstrapResult(
+            pipeline=new_pipeline,
+            current_world=new_world,
+            base_world_template=new_world.clone(),
+            llm_client=object(),
+            estimator=object(),
+            bootstrap_mode="llm_synthesize",
+            provider="ollama",
+            model_name="fake-model",
+            package_path=kwargs["paths"].runtime_path / "bootstrap_package.json",
+        )
+
+    monkeypatch.setattr(stream_runtime, "_bootstrap", _fake_bootstrap)
+
+    repaired = stream_runtime._trigger_ontology_repair(
+        ctx,
+        gap_topics=["methane_leak"],
+        repair_trait_ids=["sm:identity_trait:ontology_gap:test"],
+    )
+
+    history_lines = (runtime_path / "domain_brief_history.jsonl").read_text(encoding="utf-8").splitlines()
+
+    assert repaired is True
+    assert ctx.current_world.runtime_step == 17
+    assert ctx.stats["ontology_repairs_triggered"] == 1
+    assert history_lines
+    assert "methane_leak" in history_lines[-1]
+
+
+def test_trigger_ontology_repair_marks_traits_failed_on_bootstrap_error(tmp_path, monkeypatch, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config = {
+        "agent": {
+            "bootstrap": {
+                "mode": "llm_synthesize",
+                "domain_brief": "Base domain brief.",
+            },
+            "ontology_repair": {
+                "gap_threshold": 2,
+                "preserve_kg": True,
+                "max_repairs_per_session": 3,
+            },
+        },
+        "llm": {"provider": "ollama", "model": "fake-model", "base_url": "http://127.0.0.1:11434", "timeout_seconds": 1.0},
+        "memory": {"json_path": str(kg_path)},
+        "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    kg = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    forecast_registry = ForecastRegistry(json_path=runtime_path / "forecasts.json", auto_load=False, auto_save=True)
+    pipeline = AnalysisPipeline(
+        knowledge_graph=kg,
+        forecast_registry=forecast_registry,
+        sim_config=SimConfig(max_steps=1),
+        config_path=config_path,
+    )
+    current_world = pipeline.compiler.compile(water_market_schema)
+    gap_trait = KGNode(
+        id="sm:identity_trait:ontology_gap:failed",
+        label="Ontology gap",
+        node_type="identity_trait",
+        content="Ontology gap around methane leak",
+        confidence=0.9,
+        metadata={
+            "payload": {
+                "trait_key": "ontology_gap",
+                "cluster_topics": ["methane_leak"],
+                "repair_triggered": True,
+                "repair_failed": False,
+            }
+        },
+    )
+    kg.add_node(gap_trait)
+    package_path = runtime_path / "bootstrap_package.json"
+    package_path.write_text(
+        json.dumps(
+            {
+                "schema": water_market_schema,
+                "policies": [],
+                "assumptions": [],
+                "bootstrap_mode": "llm_synthesize",
+                "domain_brief": "Base domain brief.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    ctx = stream_runtime.RuntimeContext(
+        config=config,
+        paths=stream_runtime.RuntimePaths(
+            config_path=config_path,
+            config_base=config_path.parent,
+            runtime_path=runtime_path,
+            event_log_path=runtime_path / "event_log.jsonl",
+            kg_path=kg_path,
+            schema_path=None,
+        ),
+        pipeline=pipeline,
+        current_world=current_world,
+        base_world_template=current_world.clone(),
+        estimator=object(),
+        ingestion_engine=SignalIngestionEngine(),
+        llm_client=object(),
+        event_log=EventLog(runtime_path / "event_log.jsonl"),
+        logged_event_ids=set(),
+        cursor_store=StreamCursorStore(),
+        signal_memory=stream_runtime.SignalMemory(),
+        pending_signals=[],
+        queued_signal_ids=set(),
+        checkpoint_manager=CheckpointManager(),
+        runtime_path=runtime_path,
+        keywords=[],
+        filter_cfg={},
+        args=SimpleNamespace(
+            resume=True,
+            model="auto",
+            ollama_base_url=None,
+            bootstrap_mode="llm_synthesize",
+            domain_brief_path=None,
+            schema_path=None,
+            hours=0.0,
+            poll_seconds=60.0,
+            analysis_interval_seconds=0.1,
+            max_signals_per_poll=30,
+            log_level="WARNING",
+        ),
+        package_path=package_path,
+        bootstrap_mode="llm_synthesize",
+        provider="ollama",
+        model_name="fake-model",
+        sources=[],
+        poll_seconds=60.0,
+        analysis_interval_seconds=0.1,
+        started_at=stream_runtime._utc_now(),
+        deadline=None,
+        stats=stream_runtime._initial_runtime_stats(),
+    )
+
+    def _boom(**kwargs):  # noqa: ANN003
+        del kwargs
+        raise RuntimeError("bootstrap failed")
+
+    monkeypatch.setattr(stream_runtime, "_bootstrap", _boom)
+
+    repaired = stream_runtime._trigger_ontology_repair(
+        ctx,
+        gap_topics=["methane_leak"],
+        repair_trait_ids=["sm:identity_trait:ontology_gap:failed"],
+    )
+    refreshed = kg.get_node("sm:identity_trait:ontology_gap:failed", lazy_embed=False)
+
+    assert repaired is False
+    assert refreshed is not None
+    assert refreshed.metadata["payload"]["repair_failed"] is True
+
+
+def test_stream_runtime_query_explain_and_forecasts(tmp_path, capsys, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {"bootstrap": {"mode": "llm_synthesize"}},
+                "memory": {"json_path": str(kg_path)},
+                "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    registry = ForecastRegistry(json_path=runtime_path / "forecasts.json", auto_load=False, auto_save=True)
+    knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    pipeline = AnalysisPipeline(
+        sim_config=SimConfig(max_steps=3, convergence_check_steps=50, convergence_epsilon=1.0e-4, seed=17),
+        knowledge_graph=knowledge_graph,
+        forecast_registry=registry,
+        config_path=config_path,
+    )
+    world = pipeline.compiler.compile(water_market_schema)
+    pipeline.update(
+        world,
+        ParameterVector(
+            outcome_modifiers={"water_crisis": 0.8, "cooperation": -0.3},
+            rationale="Drought shock worsens crisis risk.",
+        ),
+        signal_text="Drought shock escalates across the basin.",
+        signal_id="signal-query",
+        session_log=SessionLog(session_id="query-run"),
+    )
+    forecast = registry.pending()[0]
+    pipeline.verify_forecast(
+        forecast.forecast_id,
+        actual_prob=float(forecast.predicted_prob),
+        verified_at=stream_runtime._utc_now(),
+        session_log=SessionLog(session_id="query-verify"),
+    )
+    CheckpointManager().save(pipeline.conscious_state, runtime_path / "checkpoint.json")
+    knowledge_graph.save()
+    registry.save()
+
+    exit_code = stream_runtime.main(
+        [
+            "--config-path",
+            str(config_path),
+            "--query",
+            "explain",
+            "--forecast-id",
+            str(forecast.forecast_id),
+        ]
+    )
+    explain_output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert str(forecast.forecast_id) in explain_output
+    assert "Causal chain:" in explain_output
+
+    exit_code = stream_runtime.main(
+        [
+            "--config-path",
+            str(config_path),
+            "--query",
+            "forecasts",
+        ]
+    )
+    forecasts_output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert forecasts_output
+    assert any(item["forecast_id"] == str(forecast.forecast_id) for item in forecasts_output)

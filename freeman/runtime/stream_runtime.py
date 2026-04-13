@@ -45,6 +45,7 @@ from freeman.core.world import WorldState
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
+from freeman.utils import deep_copy_jsonable
 
 LOGGER = logging.getLogger("stream_runtime")
 
@@ -567,6 +568,8 @@ class BootstrapResult:
 
 @dataclass
 class RuntimeContext:
+    config: dict[str, Any]
+    paths: RuntimePaths
     pipeline: AnalysisPipeline
     current_world: WorldState
     base_world_template: WorldState
@@ -671,8 +674,89 @@ def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-watch", action="store_true")
     parser.add_argument("--keyword", action="append", default=None)
+    parser.add_argument("--query", choices=["forecasts", "explain", "anomalies", "causal"], default=None)
+    parser.add_argument("--forecast-id", default=None)
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--status", default=None)
     parser.add_argument("--log-level", default="INFO")
     return parser
+
+
+def _load_query_pipeline(config: dict[str, Any], paths: RuntimePaths) -> AnalysisPipeline:
+    kg = KnowledgeGraph(json_path=paths.kg_path, auto_load=paths.kg_path.exists(), auto_save=False)
+    forecasts_path = paths.runtime_path / "forecasts.json"
+    forecast_registry = ForecastRegistry(
+        json_path=forecasts_path,
+        auto_load=forecasts_path.exists(),
+        auto_save=False,
+    )
+    pipeline = AnalysisPipeline(
+        knowledge_graph=kg,
+        forecast_registry=forecast_registry,
+        sim_config=_build_sim_config(config),
+        config_path=paths.config_path,
+    )
+    checkpoint_path = paths.runtime_path / "checkpoint.json"
+    if checkpoint_path.exists():
+        loaded_state = CheckpointManager().load(checkpoint_path)
+        pipeline.conscious_state = ConsciousState.from_dict(loaded_state.to_dict(), kg)
+    return pipeline
+
+
+def _query_anomalies(pipeline: AnalysisPipeline) -> dict[str, Any]:
+    anomaly_nodes = [
+        node.snapshot()
+        for node in pipeline.knowledge_graph.query(node_type="anomaly_candidate")
+    ]
+    ontology_gap_traits = [
+        node.snapshot()
+        for node in pipeline.knowledge_graph.query(
+            node_type="identity_trait",
+            metadata_filters={"payload.trait_key": "ontology_gap"},
+        )
+    ]
+    return {
+        "anomaly_candidates": anomaly_nodes,
+        "ontology_gap_traits": ontology_gap_traits,
+    }
+
+
+def _query_causal_edges(pipeline: AnalysisPipeline, *, limit: int) -> list[dict[str, Any]]:
+    causal_edges = [
+        edge.snapshot()
+        for edge in pipeline.knowledge_graph.edges()
+        if edge.relation_type in {"causes", "propagates_to", "threshold_exceeded"}
+    ]
+    causal_edges.sort(
+        key=lambda item: (
+            int((item.get("metadata") or {}).get("runtime_step", -1)),
+            str(item.get("updated_at", "")),
+            str(item.get("id", "")),
+        ),
+        reverse=True,
+    )
+    return causal_edges[: max(int(limit), 1)]
+
+
+def _handle_query_mode(args: argparse.Namespace, config: dict[str, Any], paths: RuntimePaths) -> int:
+    pipeline = _load_query_pipeline(config, paths)
+    if args.query == "forecasts":
+        payload = [summary.to_dict() for summary in pipeline.list_forecasts(status=args.status)]
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    if args.query == "explain":
+        if not args.forecast_id:
+            raise RuntimeError("--query explain requires --forecast-id.")
+        explanation = pipeline.explain_forecast(str(args.forecast_id))
+        print(explanation.to_text())
+        return 0
+    if args.query == "anomalies":
+        print(json.dumps(_query_anomalies(pipeline), indent=2, sort_keys=True))
+        return 0
+    if args.query == "causal":
+        print(json.dumps(_query_causal_edges(pipeline, limit=args.limit), indent=2, sort_keys=True))
+        return 0
+    raise ValueError(f"Unsupported query mode: {args.query}")
 
 
 def _resolve_runtime_paths(args: argparse.Namespace, config: dict[str, Any], config_path: Path) -> RuntimePaths:
@@ -764,6 +848,7 @@ def _initial_runtime_stats() -> dict[str, int]:
         "idle_deliberations": 0,
         "watch_skipped": 0,
         "filtered_out_count": 0,
+        "ontology_repairs_triggered": 0,
     }
 
 
@@ -780,6 +865,8 @@ def _build_runtime_context(
     started_at = _utc_now()
     hours_requested = float(args.hours)
     return RuntimeContext(
+        config=deep_copy_jsonable(config),
+        paths=paths,
         pipeline=bootstrap.pipeline,
         current_world=bootstrap.current_world,
         base_world_template=bootstrap.base_world_template,
@@ -833,6 +920,12 @@ def _bootstrap(
     config: dict[str, Any],
     paths: RuntimePaths,
     storage: RuntimeStorage,
+    domain_brief_override: str | None = None,
+    force_rebuild: bool = False,
+    load_resume_state: bool = True,
+    load_resume_world: bool = True,
+    knowledge_graph: KnowledgeGraph | None = None,
+    forecast_registry: ForecastRegistry | None = None,
 ) -> BootstrapResult:
     llm_cfg = config.get("llm", {})
     agent_cfg = config.get("agent", {})
@@ -858,12 +951,12 @@ def _bootstrap(
     LOGGER.info("Using llm provider=%s model=%s base_url=%s", provider, model_name, ollama_base_url)
     LOGGER.info("Knowledge graph path=%s runtime path=%s", paths.kg_path, paths.runtime_path)
 
-    forecast_registry = ForecastRegistry(
+    forecast_registry = forecast_registry or ForecastRegistry(
         json_path=paths.runtime_path / "forecasts.json",
         auto_load=bool(args.resume),
         auto_save=True,
     )
-    knowledge_graph = KnowledgeGraph(json_path=paths.kg_path, auto_load=True, auto_save=True)
+    knowledge_graph = knowledge_graph or KnowledgeGraph(json_path=paths.kg_path, auto_load=True, auto_save=True)
     pipeline = AnalysisPipeline(
         knowledge_graph=knowledge_graph,
         sim_config=_build_sim_config(config),
@@ -871,7 +964,7 @@ def _bootstrap(
         config_path=paths.config_path,
     )
 
-    if args.resume and (paths.runtime_path / "checkpoint.json").exists():
+    if load_resume_state and args.resume and (paths.runtime_path / "checkpoint.json").exists():
         loaded_state = storage.checkpoint_manager.load(paths.runtime_path / "checkpoint.json")
         pipeline.conscious_state = ConsciousState.from_dict(loaded_state.to_dict(), knowledge_graph)
         LOGGER.info("Loaded consciousness checkpoint.")
@@ -880,7 +973,7 @@ def _bootstrap(
 
     current_world: WorldState | None = None
     world_state_path = paths.runtime_path / "world_state.json"
-    if args.resume and world_state_path.exists():
+    if load_resume_world and args.resume and world_state_path.exists():
         current_world = WorldState.from_snapshot(json.loads(world_state_path.read_text(encoding="utf-8")))
         LOGGER.info(
             "Loaded world checkpoint domain_id=%s step=%s runtime_step=%s",
@@ -905,7 +998,7 @@ def _bootstrap(
         )
     )
     domain_brief_inline = str(bootstrap_cfg.get("domain_brief", "")).strip()
-    synthesized_package = json.loads(package_path.read_text(encoding="utf-8")) if package_path.exists() else None
+    synthesized_package = None if force_rebuild else (json.loads(package_path.read_text(encoding="utf-8")) if package_path.exists() else None)
 
     if synthesized_package is None and bootstrap_mode == "schema_path":
         schema_path = paths.schema_path
@@ -922,7 +1015,7 @@ def _bootstrap(
             "bootstrap_mode": "schema_path",
         }
     elif synthesized_package is None and bootstrap_mode == "llm_synthesize":
-        domain_brief = domain_brief_inline or _read_optional_text(domain_brief_path)
+        domain_brief = str(domain_brief_override or domain_brief_inline or _read_optional_text(domain_brief_path)).strip()
         if not domain_brief:
             raise RuntimeError("bootstrap.mode=llm_synthesize requires agent.bootstrap.domain_brief or domain_brief_path.")
         if not hasattr(llm_client, "repair_schema"):
@@ -1012,6 +1105,146 @@ def _bootstrap(
         model_name=model_name,
         package_path=package_path,
     )
+
+
+def _domain_brief_history_path(runtime_path: Path) -> Path:
+    return runtime_path / "domain_brief_history.jsonl"
+
+
+def _append_domain_brief_history(runtime_path: Path, *, gap_topics: list[str], brief: str) -> None:
+    history_path = _domain_brief_history_path(runtime_path)
+    version = 1
+    if history_path.exists():
+        lines = [line for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        version = len(lines) + 1
+    payload = {
+        "version": version,
+        "timestamp": _utc_now().isoformat(),
+        "gap_topics": list(gap_topics),
+        "brief": str(brief),
+    }
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _pending_repair_requests(ctx: RuntimeContext) -> list[TraceEvent]:
+    handled_ids = set(ctx.pipeline.conscious_state.runtime_metadata.get("handled_ontology_repair_requests", []))
+    return [
+        event
+        for event in ctx.pipeline.conscious_state.trace_state
+        if event.operator == "ontology_repair_request" and event.event_id not in handled_ids
+    ]
+
+
+def _mark_gap_traits_failed(ctx: RuntimeContext, *, trait_ids: list[str]) -> None:
+    for trait_id in trait_ids:
+        node = ctx.pipeline.knowledge_graph.get_node(trait_id, lazy_embed=False)
+        if node is None:
+            continue
+        payload = deep_copy_jsonable(node.metadata.get("payload", {}))
+        payload["repair_failed"] = True
+        node.metadata["payload"] = payload
+        node.updated_at = _utc_now().isoformat()
+        ctx.pipeline.knowledge_graph.update_node(node)
+
+
+def _trigger_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[str], repair_trait_ids: list[str]) -> bool:
+    ontology_cfg = ((ctx.config.get("agent") or {}).get("ontology_repair") or {})
+    max_repairs = max(int(ontology_cfg.get("max_repairs_per_session", 3)), 0)
+    if max_repairs > 0 and int(ctx.stats.get("ontology_repairs_triggered", 0)) >= max_repairs:
+        LOGGER.warning("Ontology repair skipped: max repairs per session reached.")
+        return False
+
+    package_payload = json.loads(ctx.package_path.read_text(encoding="utf-8")) if ctx.package_path.exists() else {}
+    current_brief = str(
+        package_payload.get("domain_brief")
+        or ((ctx.config.get("agent") or {}).get("bootstrap") or {}).get("domain_brief")
+        or _read_optional_text(((ctx.config.get("agent") or {}).get("bootstrap") or {}).get("domain_brief_path"))
+    ).strip()
+    if not current_brief:
+        LOGGER.warning("Ontology repair skipped: no domain brief available.")
+        _mark_gap_traits_failed(ctx, trait_ids=repair_trait_ids)
+        return False
+
+    unique_topics = sorted({str(topic).strip() for topic in gap_topics if str(topic).strip()})
+    if not unique_topics:
+        LOGGER.warning("Ontology repair skipped: no gap topics collected.")
+        _mark_gap_traits_failed(ctx, trait_ids=repair_trait_ids)
+        return False
+
+    repair_addendum = "\n\n## Newly observed topics requiring integration:\n" + "\n".join(f"- {topic}" for topic in unique_topics)
+    repaired_brief = current_brief + repair_addendum
+    _append_domain_brief_history(ctx.runtime_path, gap_topics=unique_topics, brief=repaired_brief)
+    if ctx.package_path.exists():
+        ctx.package_path.unlink()
+
+    previous_state = ConsciousState.from_dict(ctx.pipeline.conscious_state.to_dict(), ctx.pipeline.knowledge_graph)
+    previous_runtime_step = int(ctx.current_world.runtime_step)
+    try:
+        bootstrap = _bootstrap(
+            args=ctx.args,
+            config=ctx.config,
+            paths=ctx.paths,
+            storage=RuntimeStorage(
+                checkpoint_manager=ctx.checkpoint_manager,
+                cursor_store=ctx.cursor_store,
+                event_log=ctx.event_log,
+                logged_event_ids=ctx.logged_event_ids,
+                signal_memory=ctx.signal_memory,
+                pending_signals=ctx.pending_signals,
+                queued_signal_ids=ctx.queued_signal_ids,
+            ),
+            domain_brief_override=repaired_brief,
+            force_rebuild=True,
+            load_resume_state=False,
+            load_resume_world=False,
+            knowledge_graph=ctx.pipeline.knowledge_graph if bool(ontology_cfg.get("preserve_kg", True)) else None,
+            forecast_registry=ctx.pipeline.forecast_registry,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Ontology repair bootstrap failed: %s", exc)
+        _mark_gap_traits_failed(ctx, trait_ids=repair_trait_ids)
+        return False
+
+    bootstrap.pipeline.conscious_state = ConsciousState.from_dict(previous_state.to_dict(), bootstrap.pipeline.knowledge_graph)
+    bootstrap.current_world.runtime_step = previous_runtime_step
+    bootstrap.base_world_template.runtime_step = previous_runtime_step
+    ctx.pipeline = bootstrap.pipeline
+    ctx.current_world = bootstrap.current_world
+    ctx.base_world_template = bootstrap.base_world_template
+    ctx.estimator = bootstrap.estimator
+    ctx.llm_client = bootstrap.llm_client
+    ctx.bootstrap_mode = bootstrap.bootstrap_mode
+    ctx.provider = bootstrap.provider
+    ctx.model_name = bootstrap.model_name
+    ctx.package_path = bootstrap.package_path
+    ctx.stats["ontology_repairs_triggered"] += 1
+    ctx.pipeline.conscious_state.runtime_metadata["ontology_repairs_triggered"] = int(ctx.stats["ontology_repairs_triggered"])
+    LOGGER.info("Ontology repair complete. gap_topics=%s", unique_topics)
+    _persist_context(ctx)
+    return True
+
+
+def _check_and_handle_repair_request(ctx: RuntimeContext) -> bool:
+    repair_events = _pending_repair_requests(ctx)
+    if not repair_events:
+        return False
+    gap_topics: list[str] = []
+    repair_trait_ids: list[str] = []
+    for event in repair_events:
+        gap_topics.extend(str(topic) for topic in event.diff.get("gap_topics", []) if str(topic).strip())
+        repair_trait_ids.extend(str(node_id) for node_id in event.diff.get("repair_trait_ids", []) if str(node_id).strip())
+    handled = _trigger_ontology_repair(
+        ctx,
+        gap_topics=gap_topics,
+        repair_trait_ids=sorted(set(repair_trait_ids)),
+    )
+    handled_ids = list(dict.fromkeys([*ctx.pipeline.conscious_state.runtime_metadata.get("handled_ontology_repair_requests", []), *[event.event_id for event in repair_events]]))
+    ctx.pipeline.conscious_state.runtime_metadata["handled_ontology_repair_requests"] = handled_ids
+    if handled:
+        _persist_context(ctx)
+    return handled
 
 
 def _run_poll(sources: list[Any], ctx: RuntimeContext) -> int:
@@ -1319,11 +1552,15 @@ def _run_loop(
             ctx.stats["verified_forecasts"] += signal_result.verified_forecasts
             ctx.stats["watch_skipped"] += signal_result.skipped_watch
             ctx.stats["filtered_out_count"] += signal_result.filtered_out
+            if _check_and_handle_repair_request(ctx):
+                continue
             continue
         engine = ConsciousnessEngine(ctx.pipeline.conscious_state, ctx.pipeline.consciousness_config)
         if engine.maybe_deliberate(now) is not None:
             ctx.stats["idle_deliberations"] += 1
             ctx.pipeline.conscious_state = engine.state
+            if _check_and_handle_repair_request(ctx):
+                continue
             _persist_context(ctx)
             continue
         sleep_seconds = ctx.analysis_interval_seconds
@@ -1371,6 +1608,8 @@ def main(
     config_path = Path(args.config_path).resolve()
     config = _load_yaml(config_path)
     paths = _resolve_runtime_paths(args, config, config_path)
+    if args.query is not None:
+        return _handle_query_mode(args, config, paths)
     storage = _initialize_runtime_storage(args, paths.runtime_path, paths.event_log_path)
     bootstrap = _bootstrap(args=args, config=config, paths=paths, storage=storage)
     ctx = _build_runtime_context(

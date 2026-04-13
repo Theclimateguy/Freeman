@@ -18,6 +18,10 @@ agent:
     fallback_schema_path:
     domain_brief_path:
     domain_brief: ""
+  ontology_repair:
+    gap_threshold: 2
+    preserve_kg: true
+    max_repairs_per_session: 3
 
 llm:
   provider: ""

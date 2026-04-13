@@ -60,6 +60,149 @@ class AnalysisPipelineResult:
 
 
 @dataclass
+class CausalStep:
+    """One resolved causal edge in a forecast explanation."""
+
+    edge_id: str
+    edge_type: str
+    source_id: str
+    target_id: str
+    source_label: str
+    target_label: str
+    confidence: float
+    world_step: int
+    confirmed: bool | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "edge_id": self.edge_id,
+            "edge_type": self.edge_type,
+            "source_id": self.source_id,
+            "target_id": self.target_id,
+            "source_label": self.source_label,
+            "target_label": self.target_label,
+            "confidence": self.confidence,
+            "world_step": self.world_step,
+            "confirmed": self.confirmed,
+        }
+
+
+@dataclass
+class ForecastSummary:
+    """Compact forecast listing for runtime query mode."""
+
+    forecast_id: str
+    outcome_id: str
+    predicted_prob: float
+    due_at_step: int
+    created_at_step: int
+    status: str
+    actual_prob: float | None = None
+    error: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "forecast_id": self.forecast_id,
+            "outcome_id": self.outcome_id,
+            "predicted_prob": self.predicted_prob,
+            "due_at_step": self.due_at_step,
+            "created_at_step": self.created_at_step,
+            "status": self.status,
+            "actual_prob": self.actual_prob,
+            "error": self.error,
+        }
+
+
+@dataclass
+class ForecastExplanation:
+    """Structured explanation of one forecast and its causal path."""
+
+    forecast_id: str
+    outcome_id: str
+    predicted_prob: float
+    due_at_step: int
+    created_at_step: int
+    status: str
+    causal_chain: list[CausalStep]
+    actual_prob: float | None = None
+    error: float | None = None
+    causal_path_confirmed: int = 0
+    causal_path_refuted: int = 0
+    refuted_at_node: str | None = None
+    refutation_signal: str | None = None
+    note: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "forecast_id": self.forecast_id,
+            "outcome_id": self.outcome_id,
+            "predicted_prob": self.predicted_prob,
+            "due_at_step": self.due_at_step,
+            "created_at_step": self.created_at_step,
+            "status": self.status,
+            "causal_chain": [step.to_dict() for step in self.causal_chain],
+            "actual_prob": self.actual_prob,
+            "error": self.error,
+            "causal_path_confirmed": self.causal_path_confirmed,
+            "causal_path_refuted": self.causal_path_refuted,
+            "refuted_at_node": self.refuted_at_node,
+            "refutation_signal": self.refutation_signal,
+            "note": self.note,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            (
+                f"Forecast {self.forecast_id} — {self.outcome_id} "
+                f"(predicted: {self.predicted_prob:.2f}, due: step {self.due_at_step})"
+            ),
+        ]
+        status_line = f"Status: {self.status}"
+        if self.actual_prob is not None:
+            status_line += f" | actual: {self.actual_prob:.2f}"
+        if self.error is not None:
+            status_line += f" | error: {self.error:.2f}"
+        lines.append(status_line)
+        lines.append(f"Created at step: {self.created_at_step}")
+        if self.note:
+            lines.append(self.note)
+        if not self.causal_chain:
+            lines.append("")
+            lines.append("Causal chain: none recorded.")
+            return "\n".join(lines)
+
+        lines.append("")
+        lines.append("Causal chain:")
+        broken = False
+        broken_index = 0
+        for index, step in enumerate(self.causal_chain, start=1):
+            marker = "?"
+            suffix = "pending"
+            if step.confirmed is True:
+                marker = "✓"
+                suffix = "confirmed"
+            elif step.confirmed is False:
+                marker = "✗"
+                suffix = "refuted"
+                broken = True
+                broken_index = index
+            lines.append(
+                f"  {index}. [{step.edge_type}] {step.source_label} -> {step.target_label} {marker} {suffix}"
+            )
+            if step.confirmed is False and self.refutation_signal:
+                lines.append(
+                    f"     Contradicted by {self.refutation_signal}"
+                    + (f" at node {self.refuted_at_node}" if self.refuted_at_node else "")
+                )
+                break
+        if broken and broken_index < len(self.causal_chain):
+            lines.append(f"  {broken_index + 1}-{len(self.causal_chain)}. downstream steps unknown — chain broken")
+        elif self.causal_path_refuted == 0 and self.causal_chain and all(step.confirmed is True for step in self.causal_chain):
+            lines.append(f"All {len(self.causal_chain)} causal steps confirmed.")
+        return "\n".join(lines)
+
+
+@dataclass
 class AnalysisPipelineConfig:
     """Retrieval limits used by the analysis pipeline."""
 
@@ -460,6 +603,7 @@ class AnalysisPipeline:
         loaded = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         consciousness_cfg = loaded.get("consciousness", {})
         agent_stream_filter = ((loaded.get("agent") or {}).get("stream_filter") or {})
+        agent_ontology_repair = ((loaded.get("agent") or {}).get("ontology_repair") or {})
         anomaly_review_cfg = {
             "min_cluster_size": int(agent_stream_filter.get("anomaly_candidate_min_cluster_size", 3)),
             "max_age_steps": int(agent_stream_filter.get("anomaly_candidate_max_age_steps", 50)),
@@ -467,6 +611,7 @@ class AnalysisPipeline:
         }
         merged = self._merge_config_tree(payload, consciousness_cfg)
         merged["anomaly_review"] = self._merge_config_tree(merged.get("anomaly_review", {}), anomaly_review_cfg)
+        merged["ontology_repair"] = self._merge_config_tree(merged.get("ontology_repair", {}), agent_ontology_repair)
         return merged
 
     def _merge_config_tree(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -834,6 +979,9 @@ class AnalysisPipeline:
             actual_prob=actual_prob,
             verified_at=verified_at,
         )
+        if current_signal_id is not None:
+            forecast.metadata["verification_signal_id"] = str(current_signal_id)
+            self.forecast_registry.record(forecast)
         epistemic_node = self.epistemic_log.record(forecast)
         session_log.add_kg_delta(
             KGDelta(
@@ -862,6 +1010,107 @@ class AnalysisPipeline:
         )
         self.reconciler.reconcile(self.knowledge_graph, session_log)
         return forecast
+
+    def list_forecasts(self, status: str | None = None) -> list[ForecastSummary]:
+        """Return compact forecast summaries for runtime query mode."""
+
+        if self.forecast_registry is None:
+            return []
+        summaries: list[ForecastSummary] = []
+        for forecast in self.forecast_registry.all():
+            if status is not None and str(forecast.status) != str(status):
+                continue
+            summaries.append(
+                ForecastSummary(
+                    forecast_id=str(forecast.forecast_id),
+                    outcome_id=str(forecast.outcome_id),
+                    predicted_prob=float(forecast.predicted_prob),
+                    due_at_step=int(forecast.deadline_step),
+                    created_at_step=int(
+                        forecast.created_runtime_step
+                        if forecast.created_runtime_step is not None
+                        else forecast.created_step
+                    ),
+                    status=str(forecast.status),
+                    actual_prob=(float(forecast.actual_prob) if forecast.actual_prob is not None else None),
+                    error=(float(forecast.error) if forecast.error is not None else None),
+                )
+            )
+        return summaries
+
+    def explain_forecast(self, forecast_id: str) -> ForecastExplanation:
+        """Return one human-readable, structured explanation for a forecast."""
+
+        if self.forecast_registry is None:
+            raise ValueError("explain_forecast requires an attached ForecastRegistry.")
+        forecast = self.forecast_registry.get(forecast_id)
+        if forecast is None:
+            raise KeyError(forecast_id)
+
+        causal_chain = self.knowledge_graph.explain_causal_path(list(forecast.causal_path))
+        confirmed_ids: list[str] = []
+        refuted_ids: list[str] = []
+        refuted_at_node: str | None = None
+        refutation_signal: str | None = None
+        if forecast.status == "verified":
+            verification = self.reconciler.verify_causal_path(
+                self.knowledge_graph,
+                forecast,
+                current_signal_id=forecast.metadata.get("verification_signal_id"),
+            )
+            confirmed_ids = [str(edge_id) for edge_id in verification.get("confirmed", [])]
+            refuted_ids = [str(edge_id) for edge_id in verification.get("refuted", [])]
+            refuted_at_node = (
+                str(verification["refuted_at_node"])
+                if verification.get("refuted_at_node") is not None
+                else None
+            )
+            refutation_signal = (
+                str(verification["refutation_signal"])
+                if verification.get("refutation_signal") is not None
+                else None
+            )
+
+        confirmed_lookup = set(confirmed_ids)
+        refuted_lookup = set(refuted_ids)
+        for step in causal_chain:
+            if step.edge_id in confirmed_lookup:
+                step.confirmed = True
+            elif step.edge_id in refuted_lookup:
+                step.confirmed = False
+            elif forecast.status == "verified":
+                step.confirmed = None
+
+        note: str | None = None
+        if not forecast.causal_path:
+            note = "Legacy forecast: no causal path was recorded when this forecast was created."
+        elif forecast.status != "verified":
+            note = "Forecast is still pending ex-post verification."
+
+        explanation_status = str(forecast.status)
+        if explanation_status == "verified" and refuted_lookup:
+            explanation_status = "failed"
+
+        return ForecastExplanation(
+            forecast_id=str(forecast.forecast_id),
+            outcome_id=str(forecast.outcome_id),
+            predicted_prob=float(forecast.predicted_prob),
+            due_at_step=int(forecast.deadline_step),
+            created_at_step=int(
+                forecast.created_runtime_step
+                if forecast.created_runtime_step is not None
+                else forecast.created_step
+            ),
+            status=explanation_status,
+            causal_chain=causal_chain,
+            actual_prob=(float(forecast.actual_prob) if forecast.actual_prob is not None else None),
+            error=(float(forecast.error) if forecast.error is not None else None),
+            causal_path_confirmed=len(confirmed_lookup),
+            causal_path_refuted=len(refuted_lookup),
+            refuted_at_node=refuted_at_node,
+            refutation_signal=refutation_signal,
+            note=note,
+        )
 
     def record_anomaly_candidate(
         self,

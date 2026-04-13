@@ -83,6 +83,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `KGNode`
   - `KGEdge`
   - `KnowledgeGraph`
+  - `KnowledgeGraph.explain_causal_path()`
   - `semantic_query()`
 - Semantic index:
   - `KGVectorStore`
@@ -116,6 +117,11 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `AnalysisPipeline`
   - `AnalysisPipelineConfig`
   - `AnalysisPipelineResult`
+  - `ForecastSummary`
+  - `CausalStep`
+  - `ForecastExplanation`
+  - `AnalysisPipeline.list_forecasts()`
+  - `AnalysisPipeline.explain_forecast()`
   - `AnalysisPipeline.update()`
   - `AnalysisPipeline._export_causal_edges()`
 - Counterfactual planning:
@@ -291,6 +297,14 @@ Runtime command:
   - the same daemon runtime with a climate-oriented example config only; this is not a separate runtime implementation
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
   - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package and `bootstrap_attempts`, then run the same daemon loop
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --query forecasts [--status <pending|verified|expired>]`
+  - load saved runtime artifacts and print compact forecast summaries without starting the daemon loop
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --query explain --forecast-id <id>`
+  - render one forecast as a human-readable causal chain with scalar error and path confirmation / refutation
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --query anomalies`
+  - print saved `anomaly_candidate` nodes together with escalated `ontology_gap` traits
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --query causal --limit 20`
+  - print recent exported causal edges (`causes`, `propagates_to`, `threshold_exceeded`)
 
 ## Benchmark Map
 

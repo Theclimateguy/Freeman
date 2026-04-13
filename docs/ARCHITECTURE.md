@@ -432,6 +432,23 @@ Flow:
 9. append trace events to `EventLog`
 10. atomically persist runtime state (`checkpoint.json`, `world_state.json`, `cursors.json`, `signal_memory.json`, `pending_signals.json`)
 
+Anomaly and ontology-repair loop:
+
+1. if a soft-rejected signal has zero ontology overlap and zero active-hypothesis overlap, runtime records it as `anomaly_candidate` instead of discarding it
+2. `_anomaly_review()` in `ConsciousnessEngine` clusters similar anomaly candidates and emits `identity_trait` nodes with `trait_key=ontology_gap`
+3. once the configured `agent.ontology_repair.gap_threshold` is reached, `maybe_deliberate()` emits `ontology_repair_request`
+4. `_check_and_handle_repair_request()` in the runtime aggregates the gap topics, appends them to the current domain brief, writes `domain_brief_history.jsonl`, and re-runs `_bootstrap()`
+5. the repaired bootstrap preserves monotonic `runtime_step` and, by default, preserves the existing KG while replacing the active world schema / policy package
+
+Interactive query mode:
+
+- `--query forecasts`: list persisted forecasts with status, probabilities, and due steps
+- `--query explain --forecast-id <id>`: render a human-readable causal explanation for one forecast
+- `--query anomalies`: inspect `anomaly_candidate` nodes and `ontology_gap` traits
+- `--query causal --limit <n>`: inspect recent trajectory edges (`causes`, `propagates_to`, `threshold_exceeded`)
+
+Query mode is read-only. It loads saved runtime artifacts and exits without polling sources, bootstrapping a new domain, or starting the daemon loop.
+
 Implementation structure:
 
 - `main()`: thin orchestration entrypoint
