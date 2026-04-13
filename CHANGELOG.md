@@ -8,6 +8,24 @@
 
 - No unreleased changes.
 
+## v2.0.2 - 2026-04-13
+
+Patch release focused on release hygiene, CI, and explicit connector coverage.
+
+### Added
+
+- GitHub Actions test workflow in `.github/workflows/tests.yml` running `pytest -q` and release builds on push / pull request.
+- Dedicated connector test slice in `tests/test_connectors.py` covering factory construction and the `rss`, `http_json`, and `web` source adapters.
+
+### Changed
+
+- Moved the climate example brief out of the repository root into `examples/domain_brief_climate_news.md`.
+- Updated `config.climate.yaml` and user-facing docs to point to the new `examples/` location.
+
+### Validation
+
+- `pytest -q` -> `204 passed`
+
 ## v2.0.1 - 2026-04-13
 
 Patch release focused on anomaly handling, ontology self-repair, and read-only runtime queries over saved state.

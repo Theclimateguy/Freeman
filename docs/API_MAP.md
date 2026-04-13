@@ -254,6 +254,9 @@ This is the implementation-facing map of modules, classes, and primary functions
 - Behavioral harness:
   - `AgentHarness`
   - `CycleResult`
+- Connector package coverage:
+  - `tests/test_connectors.py`
+  - factory + `rss` + `http_json` + `web` source adapters
 - Replay fixtures:
   - `tests/fixtures/signals/water_shock.jsonl`
   - `tests/fixtures/signals/japan_debt_shock.jsonl`

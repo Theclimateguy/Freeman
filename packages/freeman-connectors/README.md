@@ -81,3 +81,5 @@ These sources can then be consumed directly by:
 ```bash
 python -m freeman.runtime.stream_runtime --config-path config.yaml --hours 8 --resume --model auto
 ```
+
+Connector-specific release tests live in `tests/test_connectors.py`, while runtime integration remains covered by the main daemon tests in `tests/test_runtime.py`.

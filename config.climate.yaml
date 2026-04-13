@@ -5,7 +5,7 @@ agent:
     mode: "llm_synthesize"
     schema_path:
     fallback_schema_path: "./freeman/domain/profiles/gim15.json"
-    domain_brief_path: "./domain_brief_climate_news.md"
+    domain_brief_path: "./examples/domain_brief_climate_news.md"
     domain_brief: ""
     max_retries: 10
     trial_steps: 3

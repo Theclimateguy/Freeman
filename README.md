@@ -182,6 +182,8 @@ python -m freeman.runtime.stream_runtime \
 
 The daemon runtime reads `agent.sources` from config, polls them on the configured interval, and processes a persistent pending queue between polls (plus ex-post forecast verification on each world update). Domain behavior now lives in config and schema/bootstrap inputs, not in separate runtime entrypoints.
 
+Repository CI now runs `pytest -q` plus release builds on every push to `main` and on pull requests through `.github/workflows/tests.yml`.
+
 It supports two bootstrap modes:
 
 - `schema_path`: start from an explicit schema such as `freeman/domain/profiles/gim15.json`
@@ -292,7 +294,7 @@ Historical / legacy artifacts:
 Example assets:
 
 - Climate example config: [config.climate.yaml](config.climate.yaml)
-- Climate example brief for `llm_synthesize`: [domain_brief_climate_news.md](domain_brief_climate_news.md)
+- Climate example brief for `llm_synthesize`: [examples/domain_brief_climate_news.md](examples/domain_brief_climate_news.md)
 
 ## Notes
 

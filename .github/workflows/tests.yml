@@ -1,0 +1,41 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install Freeman and connectors
+        run: |
+          python -m pip install -e ".[dev,semantic,causal,benchmark]"
+          python -m pip install -e ./packages/freeman-connectors
+
+      - name: Run test suite
+        run: pytest -q
+
+      - name: Build release artifacts
+        run: |
+          python -m pip install build
+          python -m build --sdist --wheel --outdir /tmp/freeman-dist .
+          python -m build --sdist --wheel --outdir /tmp/freeman-connectors-dist packages/freeman-connectors
