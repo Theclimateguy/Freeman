@@ -122,8 +122,16 @@ Export the knowledge graph:
 
 ```bash
 freeman export-kg html runs/kg.html --config-path config.yaml
+freeman export-kg html-3d runs/kg_3d.html --config-path config.yaml
 freeman export-kg json-ld runs/kg.jsonld --config-path config.yaml
 freeman export-kg dot runs/kg.dot --config-path config.yaml
+freeman export-kg-evolution data/runtime/kg_snapshots runs/kg_evolution.html
+```
+
+Generate a deterministic climate seed graph without committing local memory artifacts:
+
+```bash
+python scripts/seed_climate_kg.py --write-memory
 ```
 
 Ask a follow-up question after you have accumulated relevant memory and configured an LLM summarizer:
@@ -181,6 +189,12 @@ python -m freeman.runtime.stream_runtime \
 ```
 
 The daemon runtime reads `agent.sources` from config, polls them on the configured interval, and processes a persistent pending queue between polls (plus ex-post forecast verification on each world update). Domain behavior now lives in config and schema/bootstrap inputs, not in separate runtime entrypoints.
+
+If `runtime.kg_snapshots.enabled: true`, the same runtime also writes ordered KG snapshots under the configured snapshot path. Those snapshots can be rendered later with:
+
+```bash
+python -m freeman.interface.cli export-kg-evolution data/runtime_climate/kg_snapshots runs/kg_climate_evolution.html
+```
 
 Repository CI now runs `pytest -q` plus release builds on every push to `main` and on pull requests through `.github/workflows/tests.yml`.
 

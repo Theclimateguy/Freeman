@@ -27,14 +27,16 @@ config.*.local.yaml
 *.log
 
 runs/
-data/
+data/*
 presentations/
 TS/
 *_20260[0-9]*/
 scripts/*
 !scripts/__init__.py
+!scripts/seed_climate_kg.py
 !scripts/benchmark_faab/
 !scripts/benchmark_faab/**
+scripts/benchmark_faab/__pycache__/
 freeman/realworld/__pycache__/
 CHANGELOG.md
 

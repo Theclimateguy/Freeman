@@ -265,7 +265,7 @@ This is the implementation-facing map of modules, classes, and primary functions
 ## CLI Map
 
 Command:
-- `python -m freeman.interface.cli run <schema_path> [--policies-path <path>]`
+- `python -m freeman.interface.cli run --config-path <config> --schema-path <schema_path> [--policies-path <path>]`
   - compile schema, run the analysis pipeline, print simulation JSON
 - `python -m freeman.interface.cli identity [--narrative]`
   - print structured consciousness snapshot; optional LLM narrative projection
@@ -273,8 +273,10 @@ Command:
   - render causal explanation for one trace event from runtime event log/checkpoint
 - `python -m freeman.interface.cli query [--text ...] [--status ...] [--node-type ...] [--min-confidence ...]`
   - query KG nodes
-- `python -m freeman.interface.cli export-kg <html|json-ld|dot> <output_path>`
+- `python -m freeman.interface.cli export-kg <html|html-3d|json-ld|dot> <output_path> [--config-path <config>]`
   - export KG in one of the supported formats
+- `python -m freeman.interface.cli export-kg-evolution <snapshot_dir_or_glob> <output_path>`
+  - render a standalone HTML timeline viewer from ordered KG snapshot JSON files
 - `python -m freeman.interface.cli status`
   - show KG counts and storage path
 - `python -m freeman.interface.cli reconcile <session_log_path>`
@@ -300,6 +302,8 @@ Runtime command:
   - the same daemon runtime with a climate-oriented example config only; this is not a separate runtime implementation
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
   - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package and `bootstrap_attempts`, then run the same daemon loop
+- `python -m freeman.interface.cli export-kg-evolution data/runtime/kg_snapshots runs/kg_evolution.html`
+  - render a timeline / evolution viewer from runtime KG snapshots when `runtime.kg_snapshots.enabled` is on
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query forecasts [--status <pending|verified|expired>]`
   - load saved runtime artifacts and print compact forecast summaries without starting the daemon loop
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query explain --forecast-id <id>`
@@ -329,6 +333,14 @@ Outputs:
   - per-case / per-mode prompt and prediction traces
 - `kg_snapshots/*.json`
   - persisted KG state after the `T1` step
+
+Runtime snapshotting:
+- `runtime.kg_snapshots.enabled`
+  - turn on ordered runtime KG snapshot persistence
+- `runtime.kg_snapshots.path`
+  - target directory for snapshot JSON files
+- `runtime.kg_snapshots.max_snapshots`
+  - optional retention cap; `0` keeps all snapshots
 
 ## Universal Update Map
 

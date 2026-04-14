@@ -44,6 +44,7 @@ from freeman.memory.knowledgegraph import KnowledgeGraph
 from freeman.core.world import WorldState
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
+from freeman.runtime.kgsnapshot import KGSnapshotManager, snapshot_manager_from_config
 from freeman.runtime.stream import StreamCursorStore
 from freeman.utils import deep_copy_jsonable
 
@@ -547,6 +548,7 @@ class RuntimeStorage:
     checkpoint_manager: CheckpointManager
     cursor_store: StreamCursorStore
     event_log: EventLog
+    snapshot_manager: KGSnapshotManager
     logged_event_ids: set[str]
     signal_memory: SignalMemory
     pending_signals: list[Signal]
@@ -577,6 +579,7 @@ class RuntimeContext:
     ingestion_engine: SignalIngestionEngine
     llm_client: Any
     event_log: EventLog
+    snapshot_manager: KGSnapshotManager
     logged_event_ids: set[str]
     cursor_store: StreamCursorStore
     signal_memory: SignalMemory
@@ -792,6 +795,7 @@ def _initialize_runtime_storage(args: argparse.Namespace, runtime_path: Path, ev
         checkpoint_manager=checkpoint_manager,
         cursor_store=cursor_store,
         event_log=event_log,
+        snapshot_manager=KGSnapshotManager(snapshot_dir=runtime_path / "kg_snapshots", enabled=False),
         logged_event_ids=logged_event_ids,
         signal_memory=signal_memory,
         pending_signals=pending_signals,
@@ -809,6 +813,26 @@ def _persist_context(ctx: RuntimeContext) -> None:
         cursor_store=ctx.cursor_store,
         signal_memory=ctx.signal_memory,
         pending_signals=ctx.pending_signals,
+    )
+
+
+def _write_kg_snapshot(
+    ctx: RuntimeContext,
+    *,
+    reason: str,
+    signal_payload: Signal | None = None,
+    trigger_mode: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> Path | None:
+    return ctx.snapshot_manager.write_snapshot(
+        ctx.pipeline.knowledge_graph,
+        runtime_step=int(ctx.current_world.runtime_step),
+        reason=reason,
+        domain_id=str(ctx.current_world.domain_id),
+        signal_id=str(signal_payload.signal_id) if signal_payload is not None else None,
+        trigger_mode=trigger_mode,
+        world_t=int(ctx.current_world.t),
+        metadata=extra_metadata,
     )
 
 
@@ -864,6 +888,7 @@ def _build_runtime_context(
 ) -> RuntimeContext:
     started_at = _utc_now()
     hours_requested = float(args.hours)
+    storage.snapshot_manager = snapshot_manager_from_config(config, runtime_path=paths.runtime_path, config_base=paths.config_base)
     return RuntimeContext(
         config=deep_copy_jsonable(config),
         paths=paths,
@@ -874,6 +899,7 @@ def _build_runtime_context(
         ingestion_engine=SignalIngestionEngine(),
         llm_client=bootstrap.llm_client,
         event_log=storage.event_log,
+        snapshot_manager=storage.snapshot_manager,
         logged_event_ids=storage.logged_event_ids,
         cursor_store=storage.cursor_store,
         signal_memory=storage.signal_memory,
@@ -1376,6 +1402,13 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
                 ctx.logged_event_ids.add(runtime_event.event_id)
                 ctx.cursor_store.commit(signal_id)
                 _persist_context(ctx)
+                _write_kg_snapshot(
+                    ctx,
+                    reason="signal_anomaly_candidate",
+                    signal_payload=signal_payload,
+                    trigger_mode="ANOMALY_CANDIDATE",
+                    extra_metadata={"anomaly_candidate_node_id": anomaly_node_id},
+                )
                 return result
 
             result.processed = 1
@@ -1401,6 +1434,13 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
             ctx.logged_event_ids.add(runtime_event.event_id)
             ctx.cursor_store.commit(signal_id)
             _persist_context(ctx)
+            _write_kg_snapshot(
+                ctx,
+                reason="signal_filtered_out",
+                signal_payload=signal_payload,
+                trigger_mode="FILTERED_OUT",
+                extra_metadata={"filter_phase": "agent"},
+            )
             return result
 
     triggers = ctx.ingestion_engine.ingest(
@@ -1434,6 +1474,13 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
         )
         ctx.cursor_store.commit(signal_id)
         _persist_context(ctx)
+        _write_kg_snapshot(
+            ctx,
+            reason="signal_watch",
+            signal_payload=signal_payload,
+            trigger_mode="WATCH",
+            extra_metadata={"world_updated": False},
+        )
         return result
 
     trigger = triggers[0]
@@ -1520,6 +1567,16 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
     ctx.logged_event_ids.add(runtime_event.event_id)
     ctx.cursor_store.commit(signal_id)
     _persist_context(ctx)
+    _write_kg_snapshot(
+        ctx,
+        reason="signal_processed",
+        signal_payload=signal_payload,
+        trigger_mode=trigger.mode,
+        extra_metadata={
+            "world_updated": bool(should_update),
+            "update_error": update_error,
+        },
+    )
     result.processed = 1
     LOGGER.info(
         "Processed signal_id=%s mode=%s world_t=%s runtime_step=%s queue_len=%d",
@@ -1620,6 +1677,11 @@ def main(
         bootstrap=bootstrap,
         default_sources=default_sources,
         default_keywords=default_keywords,
+    )
+    _write_kg_snapshot(
+        ctx,
+        reason="bootstrap",
+        extra_metadata={"bootstrap_mode": ctx.bootstrap_mode, "resumed": bool(args.resume)},
     )
     previous_sigint, previous_sigterm = _install_stop_handlers(ctx)
     try:

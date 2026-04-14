@@ -15,6 +15,7 @@ from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.game.runner import SimConfig
 from freeman.interface.api import InterfaceAPI
 from freeman.interface.identity import build_identity_state
+from freeman.interface.kgevolution import KnowledgeGraphEvolutionExporter
 from freeman.interface.kgexport import KnowledgeGraphExporter
 from freeman.interface.modeloverride import ModelOverrideAPI
 from freeman.interface.simulationdiff import build_simulation_diff, export_simulation_diff
@@ -484,8 +485,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     export_parser = subparsers.add_parser("export-kg")
     _add_config_option(export_parser)
-    export_parser.add_argument("format", choices=["html", "json-ld", "dot"])
+    export_parser.add_argument("format", choices=["html", "html-3d", "json-ld", "dot"])
     export_parser.add_argument("output_path")
+
+    evolution_export_parser = subparsers.add_parser("export-kg-evolution")
+    evolution_export_parser.add_argument("snapshot_source")
+    evolution_export_parser.add_argument("output_path")
 
     reconcile_parser = subparsers.add_parser("reconcile")
     _add_config_option(reconcile_parser)
@@ -541,6 +546,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "export-kg-evolution":
+        exporter = KnowledgeGraphEvolutionExporter()
+        output = exporter.export_html(args.snapshot_source, args.output_path)
+        print(str(output))
+        return 0
+
     config_path = Path(getattr(args, "config_path", "config.yaml")).resolve()
 
     if args.command == "init":
@@ -672,6 +684,8 @@ def main(argv: list[str] | None = None) -> int:
         exporter = KnowledgeGraphExporter()
         if args.format == "html":
             output = exporter.export_html(knowledge_graph, args.output_path)
+        elif args.format == "html-3d":
+            output = exporter.export_html_3d(knowledge_graph, args.output_path)
         elif args.format == "json-ld":
             output = exporter.export_json_ld(knowledge_graph, args.output_path)
         else:

@@ -34,6 +34,7 @@ def test_end_to_end_pipeline_30_steps_reconciles_and_exports(tmp_path, water_mar
 
     exporter = KnowledgeGraphExporter()
     html_path = exporter.export_html(knowledge_graph, tmp_path / "kg.html")
+    html_3d_path = exporter.export_html_3d(knowledge_graph, tmp_path / "kg_3d.html")
     dot_path = exporter.export_dot(knowledge_graph, tmp_path / "kg.dot")
     jsonld_path = exporter.export_json_ld(knowledge_graph, tmp_path / "kg.jsonld")
     verification = Verifier(sim_config).run(result.world, levels=(1, 2))
@@ -43,7 +44,9 @@ def test_end_to_end_pipeline_30_steps_reconciles_and_exports(tmp_path, water_mar
     assert result.reconciliation.processed_deltas >= 1
     assert knowledge_graph.json_path.exists()
     assert html_path.exists()
+    assert html_3d_path.exists()
     assert dot_path.exists()
     assert jsonld_path.exists()
+    assert "3d-force-graph" in html_3d_path.read_text(encoding="utf-8")
     assert not any(violation["severity"] == "hard" for violation in result.simulation["violations"])
     assert verification.passed is True
