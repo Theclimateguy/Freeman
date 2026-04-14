@@ -28,9 +28,11 @@ benchmark = [
     "tqdm>=4.66",
 ]
 dev = ["pytest>=8.0"]
+mcp = ["mcp>=1.27"]
 
 [project.scripts]
 freeman = "freeman.interface.cli:main"
+freeman-mcp = "freeman.mcp.server:main"
 
 [tool.setuptools]
 include-package-data = true

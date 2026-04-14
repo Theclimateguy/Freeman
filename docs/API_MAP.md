@@ -312,6 +312,30 @@ Runtime command:
   - print saved `anomaly_candidate` nodes together with escalated `ontology_gap` traits
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query causal --limit 20`
   - print recent exported causal edges (`causes`, `propagates_to`, `threshold_exceeded`)
+- `freeman-mcp --transport stdio`
+  - expose Freeman through MCP for external agents; wraps the OpenAI-style tool surface from `freeman.api.tool_api`
+
+MCP / tool surface:
+
+- `freeman.api.tool_api`
+  - `FREEMAN_TOOLS`
+  - `resolve_tool()`
+  - `invoke_tool()`
+  - in-memory tools:
+    - `freeman_compile_domain`
+    - `freeman_run_simulation`
+    - `freeman_get_world_state`
+    - `freeman_verify_domain`
+  - persistent runtime-query tools:
+    - `freeman_get_runtime_summary`
+    - `freeman_query_forecasts`
+    - `freeman_explain_forecast`
+    - `freeman_query_anomalies`
+    - `freeman_query_causal_edges`
+    - `freeman_trace_relation_learning`
+- `freeman.mcp.server`
+  - `build_mcp_server()`
+  - `main()`
 
 ## Benchmark Map
 

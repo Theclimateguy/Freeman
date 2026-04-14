@@ -548,11 +548,13 @@ class RuntimeStorage:
     checkpoint_manager: CheckpointManager
     cursor_store: StreamCursorStore
     event_log: EventLog
-    snapshot_manager: KGSnapshotManager
     logged_event_ids: set[str]
     signal_memory: SignalMemory
     pending_signals: list[Signal]
     queued_signal_ids: set[str]
+    snapshot_manager: KGSnapshotManager = field(
+        default_factory=lambda: KGSnapshotManager(snapshot_dir=Path("."), enabled=False)
+    )
 
 
 @dataclass
@@ -579,7 +581,6 @@ class RuntimeContext:
     ingestion_engine: SignalIngestionEngine
     llm_client: Any
     event_log: EventLog
-    snapshot_manager: KGSnapshotManager
     logged_event_ids: set[str]
     cursor_store: StreamCursorStore
     signal_memory: SignalMemory
@@ -599,6 +600,9 @@ class RuntimeContext:
     analysis_interval_seconds: float
     started_at: datetime
     deadline: datetime | None
+    snapshot_manager: KGSnapshotManager = field(
+        default_factory=lambda: KGSnapshotManager(snapshot_dir=Path("."), enabled=False)
+    )
     stats: dict[str, int] = field(default_factory=dict)
     stop_requested: bool = False
 

@@ -85,6 +85,12 @@ Development extras:
 pip install ".[dev]"
 ```
 
+Optional MCP server extra:
+
+```bash
+pip install ".[mcp]"
+```
+
 Connector package for RSS / HTTP / web-page ingestion:
 
 ```bash
@@ -226,6 +232,23 @@ python -m freeman.runtime.stream_runtime --config-path config.yaml --query expla
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query anomalies
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query causal --limit 20
 ```
+
+If you want other agents to call Freeman as a stateful knowledge daemon, run the MCP wrapper:
+
+```bash
+freeman-mcp --transport stdio
+```
+
+The MCP server exposes the in-memory simulation tools plus persistent runtime query tools:
+
+- `freeman_get_runtime_summary`
+- `freeman_query_forecasts`
+- `freeman_explain_forecast`
+- `freeman_query_anomalies`
+- `freeman_query_causal_edges`
+- `freeman_trace_relation_learning`
+
+`freeman_trace_relation_learning` reads recent KG snapshots and is the right tool when an external agent asks what Freeman learned about a relation `X -> Y` over the last `N` runtime steps.
 
 Stream ingestion is two-phase:
 
