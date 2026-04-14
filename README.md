@@ -31,7 +31,9 @@ Typical fits:
 - Optionally add semantic retrieval over that graph with ChromaDB.
 - Answer questions against stored memory with `freeman ask`.
 - Track forecasts, conflicts, anomalies, and proactive events in the agent layer.
-- Export the knowledge graph as HTML, JSON-LD, or DOT.
+- Export the knowledge graph as HTML, JSON-LD, DOT, or interactive 3D HTML.
+- Render graph evolution from ordered runtime snapshots as a standalone timeline viewer.
+- Expose Freeman through MCP so external agents can query the daemon as a stateful knowledge service.
 - Apply manual parameter or sign overrides, rerun the world, and diff the result.
 - Connect external feeds through the separate `freeman-connectors` package.
 
@@ -133,6 +135,8 @@ freeman export-kg json-ld runs/kg.jsonld --config-path config.yaml
 freeman export-kg dot runs/kg.dot --config-path config.yaml
 freeman export-kg-evolution data/runtime/kg_snapshots runs/kg_evolution.html
 ```
+
+The `html-3d` export is the current high-density graph viewer: force-directed 3D layout, relation/node filters, search, and side-panel inspection. `export-kg-evolution` is the corresponding timeline viewer over ordered KG snapshots.
 
 Generate a deterministic climate seed graph without committing local memory artifacts:
 
@@ -249,6 +253,18 @@ The MCP server exposes the in-memory simulation tools plus persistent runtime qu
 - `freeman_trace_relation_learning`
 
 `freeman_trace_relation_learning` reads recent KG snapshots and is the right tool when an external agent asks what Freeman learned about a relation `X -> Y` over the last `N` runtime steps.
+
+A minimal local MCP launch looks like:
+
+```bash
+freeman-mcp --transport stdio
+```
+
+For remote attachment during development, the same server can run over HTTP transports:
+
+```bash
+freeman-mcp --transport streamable-http --host 127.0.0.1 --port 8000
+```
 
 Stream ingestion is two-phase:
 

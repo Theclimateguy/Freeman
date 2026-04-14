@@ -178,6 +178,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `run_server()`
 - Export:
   - `KnowledgeGraphExporter`
+  - `KnowledgeGraphEvolutionExporter`
 - Override and diff:
   - `OverrideAuditEntry`
   - `DomainOverrideRecord`
@@ -218,6 +219,32 @@ This is the implementation-facing map of modules, classes, and primary functions
 ### `freeman.runtime`
 
 - `AgentRuntime`
+- `KGSnapshotManager`
+- `stream_runtime_main()`
+
+### `freeman.api`
+
+- `FREEMAN_TOOLS`
+- `FREEMAN_TOOL_FUNCTIONS`
+- `resolve_tool()`
+- `invoke_tool()`
+- in-memory simulation tools:
+  - `freeman_compile_domain()`
+  - `freeman_run_simulation()`
+  - `freeman_get_world_state()`
+  - `freeman_verify_domain()`
+- persistent daemon query tools:
+  - `freeman_get_runtime_summary()`
+  - `freeman_query_forecasts()`
+  - `freeman_explain_forecast()`
+  - `freeman_query_anomalies()`
+  - `freeman_query_causal_edges()`
+  - `freeman_trace_relation_learning()`
+
+### `freeman.mcp`
+
+- `build_mcp_server()`
+- `main()`
 - `CheckpointManager`
 - `EventLog`
 - `StreamCursorStore`
@@ -274,7 +301,7 @@ Command:
 - `python -m freeman.interface.cli query [--text ...] [--status ...] [--node-type ...] [--min-confidence ...]`
   - query KG nodes
 - `python -m freeman.interface.cli export-kg <html|html-3d|json-ld|dot> <output_path> [--config-path <config>]`
-  - export KG in one of the supported formats
+  - export KG in one of the supported formats; `html-3d` is the interactive 3D viewer
 - `python -m freeman.interface.cli export-kg-evolution <snapshot_dir_or_glob> <output_path>`
   - render a standalone HTML timeline viewer from ordered KG snapshot JSON files
 - `python -m freeman.interface.cli status`
@@ -314,28 +341,24 @@ Runtime command:
   - print recent exported causal edges (`causes`, `propagates_to`, `threshold_exceeded`)
 - `freeman-mcp --transport stdio`
   - expose Freeman through MCP for external agents; wraps the OpenAI-style tool surface from `freeman.api.tool_api`
+- `freeman-mcp --transport streamable-http --host 127.0.0.1 --port 8000`
+  - expose the same MCP surface over HTTP for multi-agent attachment outside the local process
 
 MCP / tool surface:
 
-- `freeman.api.tool_api`
-  - `FREEMAN_TOOLS`
-  - `resolve_tool()`
-  - `invoke_tool()`
-  - in-memory tools:
-    - `freeman_compile_domain`
-    - `freeman_run_simulation`
-    - `freeman_get_world_state`
-    - `freeman_verify_domain`
-  - persistent runtime-query tools:
-    - `freeman_get_runtime_summary`
-    - `freeman_query_forecasts`
-    - `freeman_explain_forecast`
-    - `freeman_query_anomalies`
-    - `freeman_query_causal_edges`
-    - `freeman_trace_relation_learning`
-- `freeman.mcp.server`
-  - `build_mcp_server()`
-  - `main()`
+- query current daemon state:
+  - `freeman_get_runtime_summary`
+  - `freeman_query_forecasts`
+  - `freeman_explain_forecast`
+  - `freeman_query_anomalies`
+  - `freeman_query_causal_edges`
+- query learning over time:
+  - `freeman_trace_relation_learning`
+- run in-memory simulation tasks:
+  - `freeman_compile_domain`
+  - `freeman_run_simulation`
+  - `freeman_get_world_state`
+  - `freeman_verify_domain`
 
 ## Benchmark Map
 
