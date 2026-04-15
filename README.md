@@ -217,6 +217,10 @@ It supports two bootstrap modes:
 
 The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
 
+Fallback updates now also preserve monotonic simulator time: runtime may retry an update from a safe schema/base world, but it preserves the live `world.t` / `runtime_step` clocks and rejects any fallback result that would rewind `world.t`.
+
+For long local domain runs, keep a dedicated `runtime.runtime_path` (and matching `event_log_path` / KG path) per instance. Reusing the same runtime directory with `--resume` intentionally appends to the same longitudinal trace.
+
 Longitudinal self-verification now happens on two levels:
 
 - scalar outcome verification against the realized posterior at the verification horizon
@@ -270,6 +274,8 @@ Stream ingestion is two-phase:
 
 - phase 1 hard filter from config: `agent.stream_keywords` + `agent.stream_filter.min_keyword_matches` + `agent.stream_filter.min_relevance_score`
 - phase 2 agent-side relevance filter after self-calibration begins (`self_observation` exists), with soft-reject trace events and `stream_relevance` tracked as a `self_capability`
+
+The phase-2 threshold is domain-sensitive. For broad climate/news streams, `agent.stream_filter.agent_min_relevance_score` often needs to stay near the empirical relevance-score range, otherwise the runtime can starve itself after self-calibration.
 
 Ontology-blind low-relevance signals are not dropped silently anymore:
 

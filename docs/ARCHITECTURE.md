@@ -474,10 +474,15 @@ Resume semantics:
 Operational invariants added in the daemon path:
 
 - `runtime_step` is strictly monotonic across the stream loop, including fallback updates from a base schema
+- `world.t` is also monotonic across runtime fallback updates; a fallback result that would rewind simulator time is rejected as an update failure instead of replacing the live world
 - `checkpoint.json` carries `runtime_metadata.kg_health`
 - `kg_health.split_node_count` is controlled by semantic merge and periodic split compaction
 - runtime signal processing is at-least-once with idempotent `signal_id` dedup through `StreamCursorStore`
 - runtime self-verification is blocked on durable trace/event persistence, not on transient in-memory state
+
+Operational note:
+
+- long-running local domain instances should use dedicated `runtime_path` / event-log / KG locations; `--resume` is append/resume semantics, not session isolation
 
 If semantic memory is enabled, step 5 is preceded by retrieval-bounded context selection:
 
