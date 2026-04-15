@@ -412,6 +412,138 @@ def test_stream_runtime_runtime_step_verifies_forecasts_across_fallback(tmp_path
     assert self_observations
 
 
+def test_stream_runtime_fallback_preserves_monotonic_world_step(tmp_path, monkeypatch, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    kg_path = Path(tmp_path) / "kg.json"
+    schema_path = Path(tmp_path) / "schema.json"
+    schema_path.write_text(json.dumps(water_market_schema), encoding="utf-8")
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {
+                    "bootstrap": {
+                        "mode": "schema_path",
+                        "schema_path": str(schema_path),
+                    },
+                    "sources": [{"type": "rss", "url": "https://example.invalid/feed.xml"}],
+                },
+                "llm": {
+                    "provider": "ollama",
+                    "model": "fake-model",
+                    "base_url": "http://127.0.0.1:11434",
+                    "timeout_seconds": 1.0,
+                },
+                "memory": {"json_path": str(kg_path)},
+                "runtime": {
+                    "runtime_path": str(runtime_path),
+                    "event_log_path": str(runtime_path / "event_log.jsonl"),
+                },
+                "sim": {"max_steps": 1, "convergence_check_steps": 5, "convergence_epsilon": 1.0e-4},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    signals = [
+        Signal(
+            signal_id="s1",
+            source_type="manual",
+            text="Major water conflict risk escalates.",
+            topic="water_risk",
+            timestamp="2026-04-12T12:00:00+00:00",
+        ),
+        Signal(
+            signal_id="s2",
+            source_type="manual",
+            text="Second severe water conflict escalation.",
+            topic="water_risk",
+            timestamp="2026-04-12T12:01:00+00:00",
+        ),
+    ]
+
+    class _Source:
+        def __init__(self, values):
+            self._values = list(values)
+            self._done = False
+
+        def fetch(self):
+            if self._done:
+                return []
+            self._done = True
+            return list(self._values)
+
+    class _FakeClient:
+        def chat_json(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return {
+                "shock_type": "routine",
+                "severity": 0.2,
+                "semantic_gap": 0.1,
+                "rationale": "test stub",
+            }
+
+    monkeypatch.setattr(stream_runtime, "_build_chat_client", lambda **kwargs: _FakeClient())
+    monkeypatch.setattr(stream_runtime, "_source_configs", lambda config, default_sources=None: [{"type": "manual"}])
+    monkeypatch.setattr(stream_runtime, "build_signal_source", lambda cfg: _Source(signals))
+    monkeypatch.setattr(
+        stream_runtime.SignalIngestionEngine,
+        "ingest",
+        lambda self, source, classifier=None, signal_memory=None, skip_duplicates_within_hours=1.0: [
+            SignalTrigger(
+                signal_id=signals[0].signal_id,
+                mahalanobis_score=1.0,
+                classification=ShockClassification("shock", 0.9, 0.9),
+                mode="ANALYZE",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        stream_runtime.ParameterEstimator,
+        "estimate",
+        lambda self, world, text: ParameterVector(outcome_modifiers={"water_crisis": 1.2}, rationale=text),
+    )
+
+    original_update = stream_runtime.AnalysisPipeline.update
+    state = {"call_count": 0}
+
+    def _update_with_second_call_fallback(self, previous_world, parameter_vector, **kwargs):  # noqa: ANN001
+        state["call_count"] += 1
+        if state["call_count"] == 2:
+            raise RuntimeError("force fallback after first successful update")
+        return original_update(self, previous_world, parameter_vector, **kwargs)
+
+    monkeypatch.setattr(stream_runtime.AnalysisPipeline, "update", _update_with_second_call_fallback)
+
+    exit_code = stream_runtime.main(
+        [
+            "--config-path",
+            str(config_path),
+            "--hours",
+            "0.0002",
+            "--analysis-interval-seconds",
+            "0.1",
+            "--poll-seconds",
+            "60",
+            "--log-level",
+            "WARNING",
+        ]
+    )
+
+    world_state = json.loads((runtime_path / "world_state.json").read_text(encoding="utf-8"))
+    events = [json.loads(line) for line in (runtime_path / "event_log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    world_steps = [
+        event.get("diff", {}).get("runtime_metadata", {}).get("last_world_step")
+        for event in events
+        if event.get("operator") == "sync_runtime_metrics"
+    ]
+
+    assert exit_code == 0
+    assert len(world_steps) >= 2
+    assert world_steps[-1] == world_state["t"]
+    assert world_steps[-1] > world_steps[-2]
+
+
 def test_stream_runtime_persists_bootstrap_attempts_on_success(tmp_path, monkeypatch, water_market_schema) -> None:
     runtime_path = Path(tmp_path) / "runtime"
     kg_path = Path(tmp_path) / "kg.json"

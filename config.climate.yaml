@@ -28,7 +28,7 @@ agent:
   stream_filter:
     min_keyword_matches: 2
     min_relevance_score: 0.10
-    agent_min_relevance_score: 0.25
+    agent_min_relevance_score: 0.12
   sources:
     - type: rss
       url: "https://www.noaa.gov/rss.xml"

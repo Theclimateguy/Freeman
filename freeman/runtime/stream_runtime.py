@@ -1494,6 +1494,7 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
     verification_probs: dict[str, float] | None = None
     if should_update:
         try:
+            current_world_before_update = ctx.current_world.clone()
             parameter_vector = ctx.estimator.estimate(ctx.current_world, signal_payload.text)
             try:
                 pipeline_result = ctx.pipeline.update(
@@ -1507,13 +1508,22 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
             except Exception as primary_exc:  # noqa: BLE001
                 LOGGER.warning("Primary update failed for signal_id=%s: %s; retrying from base world.", signal_id, primary_exc)
                 fallback_world = ctx.base_world_template.clone()
-                fallback_world.runtime_step = ctx.current_world.runtime_step
+                # Preserve the live runtime/world clocks so fallback updates do not
+                # rewind the longitudinal trace even if they restart from a safe schema.
+                fallback_world.runtime_step = current_world_before_update.runtime_step
+                fallback_world.t = current_world_before_update.t
+                fallback_world.seed = current_world_before_update.seed
                 pipeline_result = ctx.pipeline.update(
                     fallback_world,
                     parameter_vector,
                     signal_text=signal_payload.text,
                     signal_id=signal_id,
                 )
+                if int(pipeline_result.world.t) < int(current_world_before_update.t):
+                    raise RuntimeError(
+                        "fallback_update_regressed_world_step: "
+                        f"{pipeline_result.world.t} < {current_world_before_update.t}"
+                    )
                 ctx.current_world = pipeline_result.world.clone()
                 result.updated += 1
                 update_error = f"primary_update_failed: {primary_exc}; fallback=base_world"
