@@ -31,7 +31,10 @@ class ExplanationRenderer:
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
         ]
-        return str(self.llm_client.chat_text(messages, temperature=0.1, max_tokens=700)).strip()
+        try:
+            return str(self.llm_client.chat_text(messages, temperature=0.1, max_tokens=700)).strip()
+        except Exception:  # noqa: BLE001
+            return json.dumps(payload, indent=2, sort_keys=True)
 
     def explain_node_update(self, event: TraceEvent) -> str:
         """Explain one trace event in plain language."""
@@ -45,7 +48,10 @@ class ExplanationRenderer:
             },
             {"role": "user", "content": json.dumps(event.to_dict(), ensure_ascii=False, sort_keys=True)},
         ]
-        return str(self.llm_client.chat_text(messages, temperature=0.1, max_tokens=400)).strip()
+        try:
+            return str(self.llm_client.chat_text(messages, temperature=0.1, max_tokens=400)).strip()
+        except Exception:  # noqa: BLE001
+            return json.dumps(event.to_dict(), indent=2, sort_keys=True)
 
 
 __all__ = ["ExplanationRenderer"]
