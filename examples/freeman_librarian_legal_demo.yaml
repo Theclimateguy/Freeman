@@ -1,0 +1,17 @@
+agent:
+  bootstrap:
+    mode: document_bootstrap
+    documents_path: ../runs/freeman_librarian_legal_demo/prepared_docs
+    document_glob: "*.md"
+
+memory:
+  json_path: ../runs/freeman_librarian_legal_demo/kg_state.json
+  vector_store:
+    enabled: false
+
+runtime:
+  runtime_path: ../runs/freeman_librarian_legal_demo/runtime
+  event_log_path: ../runs/freeman_librarian_legal_demo/runtime/event_log.jsonl
+
+llm:
+  provider: none

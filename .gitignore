@@ -25,6 +25,7 @@ OPENAI*.txt
 config.local.yaml
 config.*.local.yaml
 *.log
+Freeman logs.txt
 
 runs/
 data/*
@@ -34,6 +35,8 @@ TS/
 scripts/*
 !scripts/__init__.py
 !scripts/seed_climate_kg.py
+!scripts/freeman_librarian/
+!scripts/freeman_librarian/**
 !scripts/benchmark_faab/
 !scripts/benchmark_faab/**
 scripts/benchmark_faab/__pycache__/

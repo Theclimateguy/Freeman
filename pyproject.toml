@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "freeman"
-version = "3.0.0"
-description = "Domain-agnostic world simulator for LLM agents."
+name = "freeman-librarian"
+version = "0.1.0"
+description = "Document-centric world-modeling fork of Freeman."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -29,16 +29,24 @@ benchmark = [
 ]
 dev = ["pytest>=8.0"]
 mcp = ["mcp>=1.27"]
+documents = [
+    "pypdf>=5.0",
+    "python-docx>=1.1",
+]
+demo = [
+    "huggingface_hub>=0.30",
+]
 
 [project.scripts]
 freeman = "freeman.interface.cli:main"
 freeman-mcp = "freeman.mcp.server:main"
+freeman-librarian = "freeman_librarian.interface.cli:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["freeman*"]
+include = ["freeman*", "freeman_librarian*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
