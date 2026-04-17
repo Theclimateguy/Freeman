@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "freeman"
-version = "2.1.1"
+version = "3.0.0"
 description = "Domain-agnostic world simulator for LLM agents."
 readme = "README.md"
 requires-python = ">=3.11"

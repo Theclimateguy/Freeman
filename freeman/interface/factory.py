@@ -40,7 +40,12 @@ def resolve_semantic_min_score(config: dict[str, Any]) -> float:
     """Return the retrieval acceptance floor used by semantic query layers."""
 
     memory_cfg = config.get("memory", {})
-    return float(memory_cfg.get("semantic_min_score", 0.05))
+    if "semantic_min_score" in memory_cfg:
+        return float(memory_cfg.get("semantic_min_score", 0.05))
+    provider = str(memory_cfg.get("embedding_provider", "")).strip().lower()
+    if provider in {"hash", "hashing"}:
+        return 0.12
+    return 0.05
 
 
 def build_vectorstore(config: dict[str, Any], *, config_path: Path) -> KGVectorStore | None:

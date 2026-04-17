@@ -1,4 +1,4 @@
-"""DeepSeek-driven domain synthesis and Freeman tool execution."""
+"""LLM-driven domain synthesis and Freeman tool execution."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from freeman.core.types import Policy, Violation
 from freeman.domain.compiler import DomainCompiler
 from freeman.exceptions import HardStopException, SchemaRepairFailed
 from freeman.game.runner import SimConfig
-from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.utils import stable_json_dumps
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
@@ -33,6 +32,7 @@ Return exactly one JSON object with these keys:
 Constraints:
 - Keep the domain compact: 3-5 actors, 4-7 resources, 2-4 outcomes, 3-8 causal edges.
 - Use only evolution types supported by Freeman: linear, stock_flow, logistic, threshold, coupled.
+- Each relation object must use exactly these keys: source_id, target_id, relation_type, weights.
 - scoring_weights may reference only resource ids or actor state keys already present in the schema.
 - causal_dag signs must match the direction implied by the actual coupling weights.
 - Set resource.conserved=true only for physically conserved stocks.
@@ -91,10 +91,10 @@ class LLMDrivenSimulationRun:
         return stable_json_dumps(self.snapshot())
 
 
-class DeepSeekFreemanOrchestrator:
-    """Generate Freeman domain packages with DeepSeek and execute them locally."""
+class FreemanOrchestrator:
+    """Generate Freeman domain packages with an LLM client and execute them locally."""
 
-    def __init__(self, client: DeepSeekChatClient) -> None:
+    def __init__(self, client: Any) -> None:
         self.client = client
         self.last_bootstrap_attempts: List[Dict[str, Any]] = []
 
@@ -121,6 +121,24 @@ class DeepSeekFreemanOrchestrator:
         normalized.setdefault("schema", {})
         normalized.setdefault("policies", [])
         normalized.setdefault("assumptions", [])
+        schema = normalized.get("schema", {})
+        relations = schema.get("relations", [])
+        if isinstance(relations, list):
+            normalized_relations: list[Dict[str, Any]] = []
+            for relation in relations:
+                if not isinstance(relation, dict):
+                    normalized_relations.append(relation)
+                    continue
+                mapped = dict(relation)
+                if "source_id" not in mapped and "source" in mapped:
+                    mapped["source_id"] = mapped.pop("source")
+                if "target_id" not in mapped and "target" in mapped:
+                    mapped["target_id"] = mapped.pop("target")
+                if "relation_type" not in mapped:
+                    mapped["relation_type"] = mapped.pop("type", mapped.pop("label", "association"))
+                mapped.setdefault("weights", {})
+                normalized_relations.append(mapped)
+            schema["relations"] = normalized_relations
         return normalized
 
     def _verifier_schema_spec(self) -> Dict[str, Any]:
@@ -138,6 +156,7 @@ class DeepSeekFreemanOrchestrator:
             "repair_rules": [
                 "actor ids and policy actor references must agree",
                 "resource ids and scoring_weights references must agree",
+                "relations must use source_id, target_id, relation_type, and weights",
                 "causal_dag signs must match the effective coupling directions",
                 "resource dynamics must remain numerically stable under level1/level2 verification",
                 "return a full corrected package, not a patch",
@@ -343,10 +362,10 @@ class DeepSeekFreemanOrchestrator:
             return package, compile_result["world_id"], attempt, repair_history
 
         self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
-        raise SchemaRepairFailed(f"DeepSeek did not produce a verifier-clean Freeman package after {max_retries} attempts.")
+        raise SchemaRepairFailed(f"LLM bootstrap did not produce a verifier-clean Freeman package after {max_retries} attempts.")
 
     def synthesize_package(self, domain_description: str, max_attempts: int = 3) -> tuple[Dict[str, Any], str, int]:
-        """Use DeepSeek to produce a verified Freeman schema and baseline policies."""
+        """Use an LLM client to produce a verified Freeman schema and baseline policies."""
 
         package, world_id, attempts, _ = self.compile_and_repair(domain_description, max_retries=max_attempts)
         return package, world_id, attempts
@@ -358,7 +377,7 @@ class DeepSeekFreemanOrchestrator:
         simulation: Dict[str, Any],
         verification: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Ask DeepSeek to interpret the simulation outputs."""
+        """Ask the configured LLM client to interpret the simulation outputs."""
 
         prompt_payload = {
             "domain_description": domain_description,
@@ -420,7 +439,6 @@ class DeepSeekFreemanOrchestrator:
                 "repair_history": repair_history,
             },
         )
-
     def save_run(self, run: LLMDrivenSimulationRun, output_path: str | Path) -> Path:
         """Persist a run artifact to disk as JSON."""
 
@@ -445,3 +463,6 @@ class DeepSeekFreemanOrchestrator:
             }
             for resource_id in first
         }
+
+
+DeepSeekFreemanOrchestrator = FreemanOrchestrator

@@ -12,11 +12,11 @@ agent:
     anomaly_candidate_max_age_steps: 50
     anomaly_review_trigger_count: 5
   bootstrap:
-    mode: "schema_path"
+    mode: "llm_synthesize"
     schema_path:
     policies_path:
-    fallback_schema_path:
-    domain_brief_path:
+    fallback_schema_path: "./freeman/domain/profiles/gim15.json"
+    domain_brief_path: "./examples/domain_brief_climate_news.md"
     domain_brief: ""
   ontology_repair:
     gap_threshold: 2
@@ -24,9 +24,9 @@ agent:
     max_repairs_per_session: 3
 
 llm:
-  provider: ""
-  model: ""
-  base_url: ""
+  provider: "ollama"
+  model: "qwen2.5-coder:14b"
+  base_url: "http://127.0.0.1:11434"
   timeout_seconds: 90.0
 
 freeman:

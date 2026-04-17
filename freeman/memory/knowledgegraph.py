@@ -521,8 +521,15 @@ class KnowledgeGraph:
             if node is None or node.id in seen_ids:
                 continue
             seen_ids.add(node.id)
+            lexical = self._lexical_semantic_score(query_text, node)
+            embedding_similarity = self._embedding_similarity(query_embedding, node)
             score = self._semantic_score_node(query_text, node=node, query_embedding=query_embedding)
-            if score < float(min_score):
+            if not self._passes_semantic_acceptance(
+                score=score,
+                lexical=lexical,
+                embedding_similarity=embedding_similarity,
+                min_score=float(min_score),
+            ):
                 continue
             scored.append((score, node.id))
         if not scored:
@@ -557,8 +564,43 @@ class KnowledgeGraph:
         embedding_similarity = self._embedding_similarity(query_embedding, node)
         confidence_bonus = 0.02 * float(node.confidence)
         if embedding_similarity is not None:
-            return float((0.75 * embedding_similarity) + (0.25 * lexical) + confidence_bonus)
+            embedding_weight, lexical_weight = self._semantic_score_weights()
+            return float((embedding_weight * embedding_similarity) + (lexical_weight * lexical) + confidence_bonus)
         return float(lexical + confidence_bonus)
+
+    def _semantic_score_weights(self) -> tuple[float, float]:
+        """Return calibrated score weights for the configured embedding backend."""
+
+        if self._uses_hashing_embeddings():
+            return 0.45, 0.55
+        return 0.75, 0.25
+
+    def _passes_semantic_acceptance(
+        self,
+        *,
+        score: float,
+        lexical: float,
+        embedding_similarity: float | None,
+        min_score: float,
+    ) -> bool:
+        """Apply a stricter floor for embedding-only matches."""
+
+        if score < float(min_score):
+            return False
+        if lexical > 0.0:
+            return True
+        if embedding_similarity is None:
+            return False
+        floor = max(float(min_score), 0.10)
+        if self._uses_hashing_embeddings():
+            floor = max(floor, 0.18)
+        return float(embedding_similarity) >= floor
+
+    def _uses_hashing_embeddings(self) -> bool:
+        adapter = self.llm_adapter
+        if adapter is None:
+            return False
+        return "hashing" in adapter.__class__.__name__.lower()
 
     def _lexical_semantic_score(self, query_text: str, node: KGNode) -> float:
         """Return a deterministic lexical-semantic relevance score."""

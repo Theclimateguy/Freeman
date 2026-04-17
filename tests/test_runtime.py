@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from freeman.agent.analysispipeline import AnalysisPipeline
+from freeman.agent.costmodel import BudgetLedger, CostModel, build_budget_policy
 from freeman.agent.forecastregistry import ForecastRegistry
 from freeman.agent.signalingestion import SignalIngestionEngine
 from freeman.agent.signalingestion import ShockClassification, Signal, SignalTrigger
@@ -21,6 +22,7 @@ from freeman.memory.sessionlog import SessionLog
 from freeman.memory.selfmodel import SelfModelGraph
 from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.queryengine import RuntimeAnswerEngine, load_runtime_artifacts
 from freeman.runtime import stream_runtime
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
@@ -257,7 +259,7 @@ def test_stream_runtime_llm_bootstrap_falls_back_to_schema(tmp_path, monkeypatch
     monkeypatch.setattr(stream_runtime, "_build_chat_client", lambda **kwargs: _FakeClient())
     monkeypatch.setattr(stream_runtime, "_source_configs", lambda config, default_sources=None: [])
     monkeypatch.setattr(
-        stream_runtime.DeepSeekFreemanOrchestrator,
+        stream_runtime.FreemanOrchestrator,
         "compile_and_repair",
         _failing_compile_and_repair,
     )
@@ -281,6 +283,89 @@ def test_stream_runtime_llm_bootstrap_falls_back_to_schema(tmp_path, monkeypatch
     assert exit_code == 0
     assert payload["bootstrap_mode"] == "llm_synthesize_fallback"
     assert payload["bootstrap_attempts"] == attempt_log
+
+
+def test_stream_runtime_prefers_domain_brief_bootstrap_when_mode_omitted(
+    tmp_path,
+    monkeypatch,
+    water_market_schema,
+) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    kg_path = Path(tmp_path) / "kg.json"
+    schema_path = Path(tmp_path) / "schema.json"
+    schema_path.write_text(json.dumps(water_market_schema), encoding="utf-8")
+    brief_path = Path(tmp_path) / "domain_brief.md"
+    brief_path.write_text("Compact water-risk domain synthesized from a local brief.", encoding="utf-8")
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {
+                    "bootstrap": {
+                        "schema_path": str(schema_path),
+                        "domain_brief_path": str(brief_path),
+                    },
+                    "sources": [],
+                },
+                "llm": {
+                    "provider": "ollama",
+                    "model": "fake-model",
+                    "base_url": "http://127.0.0.1:11434",
+                    "timeout_seconds": 1.0,
+                },
+                "memory": {"json_path": str(kg_path)},
+                "runtime": {
+                    "runtime_path": str(runtime_path),
+                    "event_log_path": str(runtime_path / "event_log.jsonl"),
+                },
+                "sim": {"max_steps": 1},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeClient:
+        def repair_schema(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("runtime should call orchestrator.compile_and_repair directly in this test")
+
+    def _successful_compile_and_repair(self, domain_description, *args, **kwargs):  # noqa: ANN002, ANN003
+        assert "local brief" in domain_description
+        self.last_bootstrap_attempts = []
+        return (
+            {"schema": water_market_schema, "policies": [], "assumptions": ["synthetic success"]},
+            "water_market:bootstrap",
+            1,
+            [],
+        )
+
+    monkeypatch.setattr(stream_runtime, "_build_chat_client", lambda **kwargs: _FakeClient())
+    monkeypatch.setattr(stream_runtime, "_source_configs", lambda config, default_sources=None: [])
+    monkeypatch.setattr(
+        stream_runtime.FreemanOrchestrator,
+        "compile_and_repair",
+        _successful_compile_and_repair,
+    )
+
+    exit_code = stream_runtime.main(
+        [
+            "--config-path",
+            str(config_path),
+            "--hours",
+            "0.00001",
+            "--analysis-interval-seconds",
+            "0.1",
+            "--poll-seconds",
+            "60",
+            "--log-level",
+            "WARNING",
+        ]
+    )
+
+    payload = json.loads((runtime_path / "bootstrap_package.json").read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["bootstrap_mode"] == "llm_synthesize"
+    assert payload["schema"]["domain_id"] == water_market_schema["domain_id"]
 
 
 def test_stream_runtime_runtime_step_verifies_forecasts_across_fallback(tmp_path, monkeypatch, water_market_schema) -> None:
@@ -597,7 +682,7 @@ def test_stream_runtime_persists_bootstrap_attempts_on_success(tmp_path, monkeyp
     monkeypatch.setattr(stream_runtime, "_build_chat_client", lambda **kwargs: _FakeClient())
     monkeypatch.setattr(stream_runtime, "_source_configs", lambda config, default_sources=None: [])
     monkeypatch.setattr(
-        stream_runtime.DeepSeekFreemanOrchestrator,
+        stream_runtime.FreemanOrchestrator,
         "compile_and_repair",
         _successful_compile_and_repair,
     )
@@ -1217,6 +1302,365 @@ def test_trigger_ontology_repair_marks_traits_failed_on_bootstrap_error(tmp_path
     assert repaired is False
     assert refreshed is not None
     assert refreshed.metadata["payload"]["repair_failed"] is True
+
+
+def test_trigger_ontology_repair_schema_path_writes_overlay_and_review_queue(tmp_path, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    schema_path = Path(tmp_path) / "schema.json"
+    schema_path.write_text(json.dumps(water_market_schema), encoding="utf-8")
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config = {
+        "agent": {
+            "bootstrap": {
+                "mode": "schema_path",
+                "schema_path": str(schema_path),
+            },
+            "ontology_repair": {
+                "gap_threshold": 2,
+                "preserve_kg": True,
+                "max_repairs_per_session": 3,
+            },
+        },
+        "memory": {"json_path": str(kg_path)},
+        "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    kg = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    kg.add_node(
+        KGNode(
+            id="gap-evidence",
+            label="Gap evidence",
+            node_type="claim",
+            content="Methane leak shocks agriculture_output and conflict_level through infrastructure stress.",
+            confidence=0.9,
+            status="active",
+        )
+    )
+    gap_trait = KGNode(
+        id="sm:identity_trait:ontology_gap:schema",
+        label="Ontology gap",
+        node_type="identity_trait",
+        content="Ontology gap around methane leak",
+        confidence=0.9,
+        metadata={
+            "payload": {
+                "trait_key": "ontology_gap",
+                "cluster_topics": ["methane_leak agriculture_output conflict_level"],
+                "repair_triggered": True,
+                "repair_failed": False,
+            }
+        },
+    )
+    kg.add_node(gap_trait)
+    forecast_registry = ForecastRegistry(json_path=runtime_path / "forecasts.json", auto_load=False, auto_save=True)
+    pipeline = AnalysisPipeline(
+        knowledge_graph=kg,
+        forecast_registry=forecast_registry,
+        sim_config=SimConfig(max_steps=1),
+        config_path=config_path,
+    )
+    current_world = pipeline.compiler.compile(water_market_schema)
+    current_world.runtime_step = 17
+
+    ctx = stream_runtime.RuntimeContext(
+        config=config,
+        paths=stream_runtime.RuntimePaths(
+            config_path=config_path,
+            config_base=config_path.parent,
+            runtime_path=runtime_path,
+            event_log_path=runtime_path / "event_log.jsonl",
+            kg_path=kg_path,
+            schema_path=schema_path,
+        ),
+        pipeline=pipeline,
+        current_world=current_world,
+        base_world_template=current_world.clone(),
+        estimator=object(),
+        ingestion_engine=SignalIngestionEngine(),
+        llm_client=object(),
+        event_log=EventLog(runtime_path / "event_log.jsonl"),
+        logged_event_ids=set(),
+        cursor_store=StreamCursorStore(),
+        signal_memory=stream_runtime.SignalMemory(),
+        pending_signals=[],
+        queued_signal_ids=set(),
+        checkpoint_manager=CheckpointManager(),
+        runtime_path=runtime_path,
+        keywords=[],
+        filter_cfg={},
+        args=SimpleNamespace(
+            resume=True,
+            model="auto",
+            ollama_base_url=None,
+            bootstrap_mode="schema_path",
+            domain_brief_path=None,
+            schema_path=str(schema_path),
+            hours=0.0,
+            poll_seconds=60.0,
+            analysis_interval_seconds=0.1,
+            max_signals_per_poll=30,
+            log_level="WARNING",
+        ),
+        package_path=runtime_path / "bootstrap_package.json",
+        bootstrap_mode="schema_path",
+        provider="none",
+        model_name="",
+        sources=[],
+        poll_seconds=60.0,
+        analysis_interval_seconds=0.1,
+        started_at=stream_runtime._utc_now(),
+        deadline=None,
+        stats=stream_runtime._initial_runtime_stats(),
+    )
+
+    repaired = stream_runtime._trigger_ontology_repair(
+        ctx,
+        gap_topics=["methane_leak agriculture_output conflict_level"],
+        repair_trait_ids=["sm:identity_trait:ontology_gap:schema"],
+    )
+
+    package_payload = json.loads((runtime_path / "bootstrap_package.json").read_text(encoding="utf-8"))
+    queue_lines = (runtime_path / "ontology_repair_queue.jsonl").read_text(encoding="utf-8").splitlines()
+    refreshed_trait = kg.get_node("sm:identity_trait:ontology_gap:schema", lazy_embed=False)
+    proposal_nodes = kg.query(node_type="ontology_patch_proposal")
+
+    assert repaired is True
+    assert ctx.current_world.runtime_step == 17
+    assert package_payload["schema"]["metadata"]["ontology_topics"] == ["methane_leak agriculture_output conflict_level"]
+    assert package_payload["schema"]["metadata"]["ontology_aliases"]["methane_leak agriculture_output conflict_level"][:2] == [
+        "agriculture_output",
+        "conflict_level",
+    ]
+    assert queue_lines
+    queue_payload = json.loads(queue_lines[-1])
+    assert queue_payload["review_required"] is False
+    assert queue_payload["relation_candidates"]
+    assert queue_payload["applied_relation_candidates"]
+    assert queue_payload["appended_causal_edges"]
+    assert any(edge["source"] == "agriculture_output" and edge["target"] == "conflict_level" for edge in package_payload["schema"]["causal_dag"])
+    assert any(edge.source == "agriculture_output" and edge.target == "conflict_level" for edge in ctx.current_world.causal_dag)
+    assert refreshed_trait is not None
+    assert refreshed_trait.metadata["payload"]["repair_applied"] is True
+    assert refreshed_trait.metadata["payload"]["repair_review_required"] is False
+    assert proposal_nodes
+
+
+def test_process_one_signal_blocks_updates_when_budget_is_exhausted(tmp_path, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    schema_path = Path(tmp_path) / "schema.json"
+    schema_path.write_text(json.dumps(water_market_schema), encoding="utf-8")
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config = {
+        "agent": {
+            "budget_usd_per_day": 0.001,
+            "cost_governance": {"enabled": True, "max_compute_budget_per_session": 0.001},
+            "bootstrap": {"mode": "schema_path", "schema_path": str(schema_path)},
+        },
+        "memory": {"json_path": str(kg_path)},
+        "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+        "sim": {"max_steps": 4},
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    pipeline = AnalysisPipeline(
+        knowledge_graph=knowledge_graph,
+        forecast_registry=ForecastRegistry(json_path=runtime_path / "forecasts.json", auto_load=False, auto_save=True),
+        sim_config=SimConfig(max_steps=4),
+        config_path=config_path,
+    )
+    current_world = pipeline.compiler.compile(water_market_schema)
+    policy = build_budget_policy(config)
+    budget_ledger = BudgetLedger(runtime_path / "cost_ledger.jsonl", policy=policy, auto_load=False)
+
+    class _FailEstimator:
+        def estimate(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("budget gate should prevent estimator execution")
+
+    ctx = stream_runtime.RuntimeContext(
+        config=config,
+        paths=stream_runtime.RuntimePaths(
+            config_path=config_path,
+            config_base=config_path.parent,
+            runtime_path=runtime_path,
+            event_log_path=runtime_path / "event_log.jsonl",
+            kg_path=kg_path,
+            schema_path=schema_path,
+        ),
+        pipeline=pipeline,
+        current_world=current_world,
+        base_world_template=current_world.clone(),
+        estimator=_FailEstimator(),
+        ingestion_engine=SignalIngestionEngine(),
+        llm_client=object(),
+        event_log=EventLog(runtime_path / "event_log.jsonl"),
+        logged_event_ids=set(),
+        cursor_store=StreamCursorStore(),
+        signal_memory=stream_runtime.SignalMemory(),
+        pending_signals=[],
+        queued_signal_ids=set(),
+        checkpoint_manager=CheckpointManager(),
+        runtime_path=runtime_path,
+        keywords=[],
+        filter_cfg={},
+        args=SimpleNamespace(
+            resume=True,
+            model="auto",
+            ollama_base_url=None,
+            bootstrap_mode="schema_path",
+            domain_brief_path=None,
+            schema_path=str(schema_path),
+            hours=0.0,
+            poll_seconds=60.0,
+            analysis_interval_seconds=0.1,
+            max_signals_per_poll=30,
+            log_level="WARNING",
+            include_watch=False,
+        ),
+        package_path=runtime_path / "bootstrap_package.json",
+        bootstrap_mode="schema_path",
+        provider="none",
+        model_name="",
+        sources=[],
+        poll_seconds=60.0,
+        analysis_interval_seconds=0.1,
+        started_at=stream_runtime._utc_now(),
+        deadline=None,
+        budget_policy=policy,
+        cost_model=CostModel(policy),
+        budget_ledger=budget_ledger,
+        stats=stream_runtime._initial_runtime_stats(),
+    )
+
+    signal_payload = Signal(
+        signal_id="budgeted-signal",
+        source_type="manual",
+        text="Drought shock sharply raises water crisis risk.",
+        topic="water_risk",
+        timestamp="2026-04-12T12:00:00+00:00",
+    )
+    ctx.ingestion_engine.ingest = lambda *args, **kwargs: [  # type: ignore[method-assign]
+        SignalTrigger(
+            signal_id="budgeted-signal",
+            mahalanobis_score=2.0,
+            classification=ShockClassification(shock_type="shock", severity=0.8, semantic_gap=0.1),
+            mode="ANALYZE",
+            requested_mode="ANALYZE",
+        )
+    ]
+
+    result = stream_runtime._process_one_signal(signal_payload, ctx=ctx)
+
+    ledger_lines = (runtime_path / "cost_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    runtime_events = [json.loads(line) for line in (runtime_path / "event_log.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    signal_event = next(event for event in runtime_events if event.get("operator") == "runtime_signal_ingest")
+    ledger_entry = json.loads(ledger_lines[-1])
+
+    assert result.updated == 0
+    assert result.skipped_watch == 1
+    assert signal_event["diff"]["mode"] == "WATCH"
+    assert signal_event["diff"]["requested_mode"] == "ANALYZE"
+    assert signal_event["diff"]["budget_reason"] == "budget_exhaustion_downgrade"
+    assert ledger_entry["task_type"] == "signal_processing"
+    assert ledger_entry["approved_mode"] == "WATCH"
+    assert ledger_entry["actual_cost"] == 0.0
+
+
+def test_runtime_answer_engine_blocks_generation_when_budget_is_exhausted(tmp_path, water_market_schema) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    kg_path = Path(tmp_path) / "kg.json"
+    config_path = Path(tmp_path) / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {
+                    "budget_usd_per_day": 0.001,
+                    "cost_governance": {"enabled": True, "max_compute_budget_per_session": 0.001},
+                },
+                "memory": {"json_path": str(kg_path), "embedding_provider": "hashing"},
+                "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=True)
+    knowledge_graph.add_node(
+        KGNode(
+            id="analysis-1",
+            label="Water crisis analysis",
+            node_type="analysis_run",
+            content="Drought stress raises water crisis risk and lowers cooperation.",
+            confidence=0.9,
+            status="active",
+            metadata={"rationale": "Persistent drought stress reduces basin cooperation."},
+        )
+    )
+    knowledge_graph.save()
+    pipeline = AnalysisPipeline(
+        knowledge_graph=knowledge_graph,
+        forecast_registry=ForecastRegistry(json_path=runtime_path / "forecasts.json", auto_load=False, auto_save=True),
+        sim_config=SimConfig(max_steps=2),
+        config_path=config_path,
+    )
+    world = pipeline.compiler.compile(water_market_schema)
+    (runtime_path / "world_state.json").write_text(json.dumps(world.snapshot()), encoding="utf-8")
+
+    artifacts = load_runtime_artifacts(config_path)
+
+    class _FailChatClient:
+        def chat_text(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("budget gate should block answer generation before LLM call")
+
+    payload = RuntimeAnswerEngine(artifacts).answer("What is the water crisis outlook?", limit=3, chat_client=_FailChatClient())
+    ledger_lines = (runtime_path / "cost_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ledger_entry = json.loads(ledger_lines[-1])
+
+    assert payload["matched"] is True
+    assert payload["answer_generated"] is False
+    assert "budget gate blocked answer generation" in str(payload["llm_error"])
+    assert payload["budget"]["blocked_count"] >= 1
+    assert ledger_entry["task_type"] == "answer_generation"
+    assert ledger_entry["approved_mode"] == "WATCH"
+
+
+def test_cli_status_reports_budget_ledger(tmp_path, capsys) -> None:
+    runtime_path = Path(tmp_path) / "runtime"
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    kg_path = Path(tmp_path) / "kg.json"
+    KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=False).save()
+    config_path = Path(tmp_path) / "config.yaml"
+    config = {
+        "agent": {
+            "budget_usd_per_day": 10.0,
+            "cost_governance": {"enabled": True, "max_compute_budget_per_session": 10.0},
+        },
+        "memory": {"json_path": str(kg_path)},
+        "runtime": {"runtime_path": str(runtime_path), "event_log_path": str(runtime_path / "event_log.jsonl")},
+    }
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    policy = build_budget_policy(config)
+    ledger = BudgetLedger(runtime_path / "cost_ledger.jsonl", policy=policy, auto_load=False)
+    cost_model = CostModel(policy)
+    estimate = cost_model.estimate(task_id="status-check", llm_calls=1, sim_steps=1, actors=1, resources=1, domains=1)
+    precheck = cost_model.precheck(requested_mode="ANALYZE", estimate=estimate, budget_spent=0.0)
+    ledger.record(task_type="signal_processing", requested_mode="ANALYZE", decision=precheck, actual_cost=3.0)
+
+    exit_code = main(["--config", str(config_path), "status"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["budget"]["tracking_enabled"] is True
+    assert payload["budget"]["spent_usd"] == 3.0
+    assert payload["budget"]["remaining_usd"] == 7.0
+    assert payload["budget"]["by_task_type"] == {"signal_processing": 1}
 
 
 def test_stream_runtime_query_explain_and_forecasts(tmp_path, capsys, water_market_schema) -> None:

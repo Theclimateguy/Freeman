@@ -9,10 +9,10 @@ from freeman.llm.openai import OpenAIChatClient, OpenAIEmbeddingClient
 
 __all__ = [
     "DeepSeekChatClient",
-    "DeepSeekFreemanOrchestrator",
     "DeterministicEmbeddingAdapter",
     "EmbeddingAdapter",
     "ExplanationRenderer",
+    "FreemanOrchestrator",
     "HashingEmbeddingAdapter",
     "IdentityNarrator",
     "LLMDrivenSimulationRun",
@@ -20,14 +20,16 @@ __all__ = [
     "OllamaChatClient",
     "OllamaEmbeddingClient",
     "OpenAIEmbeddingClient",
+    "DeepSeekFreemanOrchestrator",
 ]
 
 
 def __getattr__(name: str):
-    if name in {"DeepSeekFreemanOrchestrator", "LLMDrivenSimulationRun"}:
-        from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator, LLMDrivenSimulationRun
+    if name in {"FreemanOrchestrator", "DeepSeekFreemanOrchestrator", "LLMDrivenSimulationRun"}:
+        from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator, FreemanOrchestrator, LLMDrivenSimulationRun
 
         exports = {
+            "FreemanOrchestrator": FreemanOrchestrator,
             "DeepSeekFreemanOrchestrator": DeepSeekFreemanOrchestrator,
             "LLMDrivenSimulationRun": LLMDrivenSimulationRun,
         }

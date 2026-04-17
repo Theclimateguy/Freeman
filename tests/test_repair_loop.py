@@ -9,13 +9,13 @@ from freeman.core.transition import step_world
 from freeman.domain.compiler import DomainCompiler
 from freeman.exceptions import HardStopException
 from freeman.game.runner import SimConfig
-from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator
+from freeman.llm.orchestrator import FreemanOrchestrator
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
 
 
 class RepairingStubClient:
-    """Deterministic stand-in for DeepSeek during repair-loop tests."""
+    """Deterministic stand-in for an LLM repair client during repair-loop tests."""
 
     def __init__(self, initial_package: Dict[str, Any]) -> None:
         self.initial_package = copy.deepcopy(initial_package)
@@ -105,7 +105,7 @@ def test_repair_loop_convergence(water_market_schema: Dict[str, Any]) -> None:
             "assumptions": ["Initial package intentionally contains unstable coefficients for repair-loop testing."],
         }
     )
-    orchestrator = DeepSeekFreemanOrchestrator(client)
+    orchestrator = FreemanOrchestrator(client)
 
     package, world_id, attempts, repair_history = orchestrator.compile_and_repair(
         "Repair a malformed water-market package.",
@@ -201,7 +201,7 @@ def test_repair_stage_escalates_with_attempt_history(water_market_schema: Dict[s
         },
         valid_schema=water_market_schema,
     )
-    orchestrator = DeepSeekFreemanOrchestrator(client)
+    orchestrator = FreemanOrchestrator(client)
 
     package, _world_id, attempts, repair_history = orchestrator.compile_and_repair(
         "Repair an unstable package with escalating context.",
@@ -220,10 +220,37 @@ def test_repair_stage_escalates_with_attempt_history(water_market_schema: Dict[s
 
 
 def test_repair_stage_thresholds() -> None:
-    orchestrator = DeepSeekFreemanOrchestrator(RepairingStubClient({"schema": {}, "policies": [], "assumptions": []}))
+    orchestrator = FreemanOrchestrator(RepairingStubClient({"schema": {}, "policies": [], "assumptions": []}))
 
     assert orchestrator._repair_stage(1) == "standard"
     assert orchestrator._repair_stage(3) == "standard"
     assert orchestrator._repair_stage(4) == "accumulated"
     assert orchestrator._repair_stage(8) == "accumulated"
     assert orchestrator._repair_stage(9) == "schema_aware"
+
+
+def test_normalize_package_canonicalizes_relation_aliases() -> None:
+    orchestrator = FreemanOrchestrator(RepairingStubClient({"schema": {}, "policies": [], "assumptions": []}))
+
+    package = orchestrator._normalize_package(
+        {
+            "schema": {
+                "relations": [
+                    {
+                        "source": "a",
+                        "target": "b",
+                        "type": "trade",
+                    }
+                ]
+            }
+        }
+    )
+
+    assert package["schema"]["relations"] == [
+        {
+            "source_id": "a",
+            "target_id": "b",
+            "relation_type": "trade",
+            "weights": {},
+        }
+    ]

@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from freeman.agent.analysispipeline import AnalysisPipeline
+from freeman.agent.costmodel import BudgetLedger, build_budget_policy, budget_tracking_enabled
 from freeman.game.runner import SimConfig
 from freeman.interface.api import InterfaceAPI
 from freeman.interface.factory import (
@@ -45,18 +46,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sources": [],
         "stream_keywords": [],
         "bootstrap": {
-            "mode": "schema_path",
+            "mode": "llm_synthesize",
             "schema_path": None,
             "policies_path": None,
-            "fallback_schema_path": None,
-            "domain_brief_path": None,
+            "fallback_schema_path": "./freeman/domain/profiles/gim15.json",
+            "domain_brief_path": "./examples/domain_brief_climate_news.md",
             "domain_brief": "",
         },
     },
     "llm": {
-        "provider": "",
-        "model": "",
-        "base_url": "",
+        "provider": "ollama",
+        "model": "qwen2.5-coder:14b",
+        "base_url": "http://127.0.0.1:11434",
         "timeout_seconds": 90.0,
     },
     "freeman": {
@@ -179,6 +180,28 @@ def _resolve_path(base: Path, candidate: str | None, default: str) -> Path:
 
 def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _budget_status(config: dict[str, Any], *, config_path: Path) -> dict[str, Any]:
+    runtime_path = _runtime_path(config, config_path=config_path)
+    policy = build_budget_policy(config)
+    tracking = budget_tracking_enabled(config)
+    ledger_path = runtime_path / "cost_ledger.jsonl"
+    if tracking:
+        ledger = BudgetLedger(ledger_path, policy=policy, auto_load=True)
+        return ledger.summary()
+    return {
+        "tracking_enabled": False,
+        "ledger_path": str(ledger_path.resolve()),
+        "configured_usd_per_day": float(policy.max_compute_budget_per_session),
+        "spent_usd": 0.0,
+        "remaining_usd": float(policy.max_compute_budget_per_session),
+        "entry_count": 0,
+        "allowed_count": 0,
+        "blocked_count": 0,
+        "by_task_type": {},
+        "stop_reasons": {},
+    }
 
 
 def _query_node_payload(node: KGNode) -> dict[str, Any]:
@@ -579,11 +602,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         payload = InterfaceAPI(knowledge_graph).get_status()
-        payload["budget"] = {
-            "configured_usd_per_day": float(config.get("agent", {}).get("budget_usd_per_day", 0.0)),
-            "spent_usd": None,
-            "tracking_enabled": False,
-        }
+        payload["budget"] = _budget_status(config, config_path=config_path)
         payload["sources"] = _source_statuses(config)
         payload["vector_store_enabled"] = bool(config.get("memory", {}).get("vector_store", {}).get("enabled", False))
         payload["storage"] = storage

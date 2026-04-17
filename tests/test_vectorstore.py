@@ -11,6 +11,7 @@ import yaml
 
 from freeman.agent.analysispipeline import AnalysisPipeline, AnalysisPipelineConfig
 from freeman.interface.cli import main as cli_main
+from freeman.llm.adapter import HashingEmbeddingAdapter
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.vectorstore import KGVectorStore
 
@@ -429,3 +430,27 @@ def test_cli_query_reports_no_match_without_fallback(tmp_path, monkeypatch, caps
     assert output["count"] == 0
     assert output["matches"] == []
     assert output["no_match_reason"] == "no_runtime_evidence_matched"
+
+
+def test_hashing_semantic_query_rejects_embedding_only_noise(tmp_path) -> None:
+    graph = KnowledgeGraph(
+        json_path=tmp_path / "kg.json",
+        auto_load=False,
+        auto_save=False,
+        llm_adapter=HashingEmbeddingAdapter(dimension=128),
+    )
+    graph.add_node(
+        KGNode(
+            id="climate",
+            label="Climate infrastructure risk",
+            node_type="claim",
+            content="Extreme weather can disrupt power grids and damage infrastructure.",
+            confidence=0.9,
+            status="active",
+        )
+    )
+
+    result = graph.semantic_search("quantum banana pension arbitrage", top_k=5, min_score=0.05)
+
+    assert result.matched is False
+    assert result.hits == []

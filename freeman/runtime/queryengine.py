@@ -11,6 +11,14 @@ from typing import Any, Dict, List, Sequence
 
 import yaml
 
+from freeman.agent.costmodel import (
+    BudgetLedger,
+    BudgetPolicy,
+    CostModel,
+    build_budget_policy,
+    budget_tracking_enabled,
+    resolve_budget_decision,
+)
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.consciousness import ConsciousState
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
@@ -29,6 +37,38 @@ from freeman.memory.knowledgegraph import KGEdge, KGSemanticSearchResult, KGNode
 from freeman.runtime.checkpoint import CheckpointManager
 
 
+DEFAULT_QUERY_CONFIG: dict[str, Any] = {
+    "agent": {
+        "budget_usd_per_day": 0.50,
+        "cost_governance": {},
+    },
+    "llm": {
+        "provider": "",
+        "model": "",
+        "base_url": "",
+        "timeout_seconds": 90.0,
+    },
+    "memory": {
+        "json_path": "./data/kg_state.json",
+        "vector_store": {"enabled": False},
+        "retrieval_top_k": 15,
+    },
+    "runtime": {
+        "runtime_path": "./data/runtime",
+    },
+}
+
+
+def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 @dataclass
 class RuntimeArtifacts:
     """Resolved persisted runtime state plus semantic backends."""
@@ -44,6 +84,10 @@ class RuntimeArtifacts:
     embedding_backend: str | None
     vectorstore: Any | None
     semantic_min_score: float
+    cost_model: CostModel
+    budget_policy: BudgetPolicy
+    budget_ledger: BudgetLedger | None
+    budget_tracking_enabled: bool
 
 
 @dataclass
@@ -104,8 +148,9 @@ def _resolve_config_path(config_path: str | Path | None = None) -> Path:
 def _load_config(config_path: str | Path | None = None) -> tuple[dict[str, Any], Path]:
     resolved = _resolve_config_path(config_path)
     if not resolved.exists():
-        return {}, resolved
-    return dict(yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}), resolved
+        return dict(DEFAULT_QUERY_CONFIG), resolved
+    payload = dict(yaml.safe_load(resolved.read_text(encoding="utf-8")) or {})
+    return _merge_dicts(DEFAULT_QUERY_CONFIG, payload), resolved
 
 
 def _build_sim_config(config: dict[str, Any]) -> SimConfig:
@@ -165,6 +210,9 @@ def load_runtime_artifacts(config_path: str | Path | None = None) -> RuntimeArti
     world_state = None
     if world_state_path.exists():
         world_state = WorldState.from_snapshot(json.loads(world_state_path.read_text(encoding="utf-8")))
+    policy = build_budget_policy(config)
+    tracking_enabled = budget_tracking_enabled(config)
+    budget_ledger = BudgetLedger(runtime_path / "cost_ledger.jsonl", policy=policy, auto_load=True) if tracking_enabled else None
     return RuntimeArtifacts(
         config=config,
         config_path=resolved_config_path,
@@ -177,6 +225,10 @@ def load_runtime_artifacts(config_path: str | Path | None = None) -> RuntimeArti
         embedding_backend=embedding_backend,
         vectorstore=vectorstore,
         semantic_min_score=resolve_semantic_min_score(config),
+        cost_model=CostModel(policy),
+        budget_policy=policy,
+        budget_ledger=budget_ledger,
+        budget_tracking_enabled=tracking_enabled,
     )
 
 
@@ -307,10 +359,42 @@ class RuntimeQueryEngine:
         lexical = _lexical_score(query_text, document)
         embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
         if embedding_similarity is not None:
-            score = (0.75 * embedding_similarity) + (0.25 * lexical)
+            embedding_weight, lexical_weight = self._score_weights()
+            score = (embedding_weight * embedding_similarity) + (lexical_weight * lexical)
         else:
             score = lexical
         return float(score + boost)
+
+    def _score_weights(self) -> tuple[float, float]:
+        if self._uses_hashing_backend():
+            return 0.45, 0.55
+        return 0.75, 0.25
+
+    def _passes_text_acceptance(
+        self,
+        *,
+        lexical: float,
+        embedding_similarity: float | None,
+        score: float,
+        boost: float = 0.0,
+    ) -> bool:
+        if score < self.artifacts.semantic_min_score:
+            return False
+        if lexical > 0.0 or boost > 0.0:
+            return True
+        if embedding_similarity is None:
+            return False
+        floor = max(self.artifacts.semantic_min_score, 0.10)
+        if self._uses_hashing_backend():
+            floor = max(floor, 0.18)
+        return float(embedding_similarity) >= floor
+
+    def _uses_hashing_backend(self) -> bool:
+        backend = str(self.artifacts.embedding_backend or "").lower()
+        if "hashing" in backend:
+            return True
+        adapter = self.artifacts.embedding_adapter
+        return adapter is not None and "hashing" in adapter.__class__.__name__.lower()
 
     def _document_similarity(self, document: str, *, query_embedding: list[float] | None) -> float | None:
         if self.artifacts.embedding_adapter is None or not query_embedding or not document:
@@ -355,10 +439,14 @@ class RuntimeQueryEngine:
                 sort_keys=True,
             )
             lexical = _lexical_score(query_text, document)
+            embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
             score = self._score_text(query_text, document, query_embedding=query_embedding, boost=boost)
-            if lexical <= 0.0 and boost <= 0.0:
-                continue
-            if score < self.artifacts.semantic_min_score:
+            if not self._passes_text_acceptance(
+                lexical=lexical,
+                embedding_similarity=embedding_similarity,
+                score=score,
+                boost=boost,
+            ):
                 continue
             payload = forecast.snapshot()
             payload["analysis_node_id"] = analysis_node_id or None
@@ -404,10 +492,14 @@ class RuntimeQueryEngine:
                 sort_keys=True,
             )
             lexical = _lexical_score(query_text, document)
+            embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
             score = self._score_text(query_text, document, query_embedding=query_embedding, boost=boost)
-            if lexical <= 0.0 and boost <= 0.0:
-                continue
-            if score < self.artifacts.semantic_min_score:
+            if not self._passes_text_acceptance(
+                lexical=lexical,
+                embedding_similarity=embedding_similarity,
+                score=score,
+                boost=boost,
+            ):
                 continue
             payload = edge.snapshot()
             payload["source_label"] = source_label
@@ -442,10 +534,13 @@ class RuntimeQueryEngine:
         }
         document = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         lexical = _lexical_score(query_text, document)
+        embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
         score = self._score_text(query_text, document, query_embedding=query_embedding)
-        if lexical <= 0.0:
-            return None
-        if score < self.artifacts.semantic_min_score:
+        if not self._passes_text_acceptance(
+            lexical=lexical,
+            embedding_similarity=embedding_similarity,
+            score=score,
+        ):
             return None
         return RuntimeEvidence(
             kind="world_state",
@@ -466,6 +561,7 @@ class RuntimeAnswerEngine:
     def answer(self, query_text: str, *, limit: int = 10, chat_client: Any | None = None) -> dict[str, Any]:
         result = self.query_engine.semantic_query(query_text, limit=limit)
         payload = result.to_dict()
+        payload["budget"] = self._budget_summary()
         if not result.matched:
             payload.update(
                 {
@@ -487,13 +583,42 @@ class RuntimeAnswerEngine:
                 )
                 return payload
 
-        context_items = [item.snapshot() for item in result.evidence[: min(max(limit, 1), 8)]]
+        budget_decision, approved_cost = self._answer_budget_decision(query_text)
+        if budget_decision is not None and (not budget_decision.allowed or budget_decision.approved_mode == "WATCH"):
+            if self.artifacts.budget_ledger is not None:
+                self.artifacts.budget_ledger.record(
+                    task_type="answer_generation",
+                    requested_mode="ANALYZE",
+                    decision=budget_decision,
+                    actual_cost=0.0,
+                    metadata={
+                        "query": query_text,
+                        "approved_estimated_cost": float(approved_cost),
+                        "match_count": len(result.matches),
+                        "evidence_count": len(result.evidence),
+                    },
+                )
+                payload["budget"] = self._budget_summary()
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": f"budget gate blocked answer generation: {budget_decision.stop_reason or 'budget_policy'}",
+                }
+            )
+            return payload
+
+        context_items = [self._answer_context_item(item) for item in result.evidence[: min(max(limit, 1), 8)]]
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You answer questions strictly from the provided Freeman runtime evidence. "
-                    "Use only the supplied evidence. If it is insufficient, say so explicitly."
+                    "You are Freeman's runtime answer engine. "
+                    "Answer the user's question directly from the provided evidence summaries only. "
+                    "Do not describe the JSON structure, schema, or metadata mechanically. "
+                    "Start with the direct answer in 1-2 sentences, then give up to 3 short evidence-backed points. "
+                    "When useful, name concrete mechanisms such as outcomes, variables, thresholds, signal excerpts, or rationale. "
+                    "If the evidence is insufficient, say that explicitly."
                 ),
             },
             {
@@ -508,7 +633,9 @@ class RuntimeAnswerEngine:
                 ),
             },
         ]
+        attempted_generation = False
         try:
+            attempted_generation = True
             answer = str(chat_client.chat_text(messages, temperature=0.1, max_tokens=700)).strip()
             payload.update(
                 {
@@ -525,7 +652,72 @@ class RuntimeAnswerEngine:
                     "llm_error": str(exc),
                 }
             )
+        if budget_decision is not None and self.artifacts.budget_ledger is not None:
+            self.artifacts.budget_ledger.record(
+                task_type="answer_generation",
+                requested_mode="ANALYZE",
+                decision=budget_decision,
+                actual_cost=float(approved_cost if attempted_generation else 0.0),
+                metadata={
+                    "query": query_text,
+                    "approved_estimated_cost": float(approved_cost),
+                    "match_count": len(result.matches),
+                    "evidence_count": len(result.evidence),
+                    "answer_generated": bool(payload.get("answer_generated")),
+                },
+            )
+            payload["budget"] = self._budget_summary()
         return payload
+
+    def _answer_budget_decision(self, query_text: str) -> tuple[Any | None, float]:
+        if not self.artifacts.budget_tracking_enabled or self.artifacts.budget_ledger is None:
+            return None, 0.0
+        world = self.artifacts.world_state
+        actors = len(world.actors) if world is not None else 0
+        resources = len(world.resources) if world is not None else 0
+        domains = max(len(world.outcomes), 1) if world is not None else 1
+        query_tokens = max(len(str(query_text).split()), 1)
+
+        def _estimate_for_mode(mode: str):
+            idle_mode = str(mode or "WATCH").upper() == "WATCH"
+            return self.artifacts.cost_model.estimate(
+                task_id=f"answer:{query_tokens}:{mode.lower()}",
+                llm_calls=0 if idle_mode else 1,
+                sim_steps=0,
+                actors=0 if idle_mode else actors,
+                resources=0 if idle_mode else resources,
+                domains=0 if idle_mode else domains,
+                kg_updates=0,
+                embedding_tokens_used=0 if idle_mode else query_tokens * 16,
+            )
+
+        decision = resolve_budget_decision(
+            cost_model=self.artifacts.cost_model,
+            requested_mode="ANALYZE",
+            estimate_for_mode=_estimate_for_mode,
+            budget_spent=self.artifacts.budget_ledger.spent_usd,
+            deep_dive_depth=0,
+        )
+        approved_cost = 0.0
+        if decision.allowed and decision.approved_mode != "WATCH":
+            approved_cost = float(_estimate_for_mode(decision.approved_mode).estimated_cost)
+        return decision, approved_cost
+
+    def _budget_summary(self) -> dict[str, Any]:
+        if self.artifacts.budget_ledger is not None:
+            return self.artifacts.budget_ledger.summary()
+        return {
+            "tracking_enabled": bool(self.artifacts.budget_tracking_enabled),
+            "ledger_path": str((self.artifacts.runtime_path / "cost_ledger.jsonl").resolve()),
+            "configured_usd_per_day": float(self.artifacts.budget_policy.max_compute_budget_per_session),
+            "spent_usd": 0.0,
+            "remaining_usd": float(self.artifacts.budget_policy.max_compute_budget_per_session),
+            "entry_count": 0,
+            "allowed_count": 0,
+            "blocked_count": 0,
+            "by_task_type": {},
+            "stop_reasons": {},
+        }
 
     def _world_summary(self) -> dict[str, Any] | None:
         world = self.artifacts.world_state
@@ -538,6 +730,79 @@ class RuntimeAnswerEngine:
             "actors": sorted(world.actors),
             "resources": sorted(world.resources),
             "outcomes": sorted(world.outcomes),
+        }
+
+    def _answer_context_item(self, item: RuntimeEvidence) -> dict[str, Any]:
+        payload = item.payload
+        if item.kind == "forecast":
+            metadata = dict(payload.get("metadata", {}))
+            parameter_vector = dict(metadata.get("parameter_vector", {}))
+            thresholds = [
+                str(step)
+                for step in payload.get("causal_path", [])
+                if str(step).startswith("threshold_exceeded:")
+            ][:6]
+            return {
+                "kind": item.kind,
+                "id": item.item_id,
+                "label": item.label,
+                "score": float(item.score),
+                "outcome_id": payload.get("outcome_id"),
+                "predicted_prob": payload.get("predicted_prob"),
+                "status": payload.get("status"),
+                "analysis_node_id": payload.get("analysis_node_id"),
+                "rationale": parameter_vector.get("rationale") or metadata.get("rationale_at_time"),
+                "thresholds": thresholds,
+            }
+        if item.kind == "kg_node":
+            node = dict(payload.get("node", {}))
+            metadata = dict(node.get("metadata", {}))
+            summary = {
+                "kind": item.kind,
+                "id": item.item_id,
+                "label": item.label,
+                "score": float(item.score),
+                "node_type": node.get("node_type"),
+                "content": node.get("content"),
+            }
+            for key in (
+                "rationale",
+                "signal_excerpt",
+                "dominant_outcome",
+                "posterior_dominant_outcome",
+                "final_outcome_probs",
+                "posterior_outcome_probs",
+                "strongest_mismatch",
+            ):
+                if key in metadata:
+                    summary[key] = metadata[key]
+            return summary
+        if item.kind == "causal_edge":
+            return {
+                "kind": item.kind,
+                "id": item.item_id,
+                "label": item.label,
+                "score": float(item.score),
+                "relation_type": payload.get("relation_type"),
+                "source_label": payload.get("source_label"),
+                "target_label": payload.get("target_label"),
+                "confidence": payload.get("confidence"),
+                "metadata": payload.get("metadata", {}),
+            }
+        if item.kind == "world_state":
+            return {
+                "kind": item.kind,
+                "id": item.item_id,
+                "label": item.label,
+                "score": float(item.score),
+                "payload": payload,
+            }
+        return {
+            "kind": item.kind,
+            "id": item.item_id,
+            "label": item.label,
+            "score": float(item.score),
+            "payload": payload,
         }
 
 

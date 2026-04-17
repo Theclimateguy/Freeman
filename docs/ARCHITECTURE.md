@@ -413,8 +413,8 @@ Both operate only on structured self-model state and emit trace entries for repl
 
 Bootstrap modes:
 
-- `schema_path`: compile a caller-supplied Freeman schema
-- `llm_synthesize`: run the existing Freeman orchestrator (`DeepSeekFreemanOrchestrator`) to synthesize, verify, and repair a schema from a natural-language brief, then persist `bootstrap_package.json` together with `bootstrap_attempts`
+- `llm_synthesize`: the primary path; run the generic Freeman orchestrator (`FreemanOrchestrator`) on a natural-language `domain_brief`, then persist `bootstrap_package.json` together with `bootstrap_attempts`
+- `schema_path`: the secondary path; compile a caller-supplied Freeman schema directly
 
 The `llm_synthesize` path now uses a verifier-guided repair loop:
 
@@ -443,8 +443,10 @@ Anomaly and ontology-repair loop:
 1. if a soft-rejected signal has zero ontology overlap and zero active-hypothesis overlap, runtime records it as `anomaly_candidate` instead of discarding it
 2. `_anomaly_review()` in `ConsciousnessEngine` clusters similar anomaly candidates and emits `identity_trait` nodes with `trait_key=ontology_gap`
 3. once the configured `agent.ontology_repair.gap_threshold` is reached, `maybe_deliberate()` emits `ontology_repair_request`
-4. `_check_and_handle_repair_request()` in the runtime aggregates the gap topics, appends them to the current domain brief, writes `domain_brief_history.jsonl`, and re-runs `_bootstrap()`
-5. the repaired bootstrap preserves monotonic `runtime_step` and, by default, preserves the existing KG while replacing the active world schema / policy package
+4. `_check_and_handle_repair_request()` in the runtime aggregates the gap topics and dispatches repair through the active bootstrap mode
+5. for `schema_path` and `llm_synthesize_fallback`, repair writes an overlay `bootstrap_package.json`, updates schema metadata, auto-applies inferred causal edges into `current_world` and `base_world_template`, and persists an audit record to `ontology_repair_queue.jsonl`
+6. for `llm_synthesize`, repair appends the new topics to the current domain brief, writes `domain_brief_history.jsonl`, and re-runs `_bootstrap()`
+7. both repair paths preserve monotonic `runtime_step`; schema-backed repair is autonomous by default through `agent.ontology_repair.auto_apply_relation_candidates`
 
 Interactive query mode:
 
@@ -454,6 +456,19 @@ Interactive query mode:
 - `--query causal --limit <n>`: inspect recent trajectory edges (`causes`, `propagates_to`, `threshold_exceeded`)
 
 Query mode is read-only. It loads saved runtime artifacts and exits without polling sources, bootstrapping a new domain, or starting the daemon loop.
+
+Budget-governed runtime tasks:
+
+1. `signal_processing`
+2. `ontology_repair`
+3. `answer_generation`
+
+All three pass through the same `CostModel` / `BudgetPolicy` path:
+
+- estimate cost from LLM calls, embeddings, sim steps, graph updates, and world size
+- resolve downgrade chain `DEEP_DIVE -> ANALYZE -> WATCH`
+- persist the decision to `runtime/cost_ledger.jsonl`
+- expose the live summary through CLI / runtime answer payloads
 
 Implementation structure:
 
@@ -657,6 +672,13 @@ It can:
 - approve
 - downgrade `DEEP_DIVE -> ANALYZE -> WATCH`
 - stop when hard limits are exceeded
+
+Operational implementation in `3.0`:
+
+- `BudgetLedger` persists one append-only JSONL record per governed task
+- runtime loads the ledger on resume and keeps cumulative `spent_usd`
+- `freeman status` reads the same ledger and reports `spent_usd`, `remaining_usd`, `allowed_count`, `blocked_count`, and `by_task_type`
+- `freeman ask` includes the same budget summary in its answer payload
 
 ### Forecast Registry and Self-Model
 

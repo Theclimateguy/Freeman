@@ -164,7 +164,12 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `CostEstimate`
   - `BudgetPolicy`
   - `BudgetDecision`
+  - `BudgetLedgerEntry`
+  - `BudgetLedger`
   - `CostModel`
+  - `build_budget_policy()`
+  - `budget_tracking_enabled()`
+  - `resolve_budget_decision()`
 - Consciousness:
   - `TraceEvent`
   - `ConsciousState`
@@ -218,7 +223,8 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `OllamaEmbeddingClient`
 - `OllamaChatClient`
 - `DeepSeekChatClient`
-- `DeepSeekFreemanOrchestrator`
+- `FreemanOrchestrator`
+- `DeepSeekFreemanOrchestrator` (compatibility alias)
 - `IdentityNarrator`
 - `ExplanationRenderer`
 - `LLMDrivenSimulationRun`
@@ -342,7 +348,7 @@ Command:
 Runtime command:
 
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --schema-path freeman/domain/profiles/gim15.json --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
-  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, monotonic `runtime_step`, due-forecast verification, causal-path verification, synchronous consciousness refresh, and configurable source adapters
+  - generic long local signal ingestion with deterministic checkpoint/resume, persistent pending queue, monotonic `runtime_step`, due-forecast verification, causal-path verification, synchronous consciousness refresh, configurable source adapters, and persisted budget governance
 - `python -m freeman.runtime.stream_runtime --config-path config.climate.yaml --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
   - the same daemon runtime with a climate-oriented example config only; this is not a separate runtime implementation
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
@@ -360,7 +366,7 @@ Runtime command:
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query semantic --text "greenhouse warming" --limit 10`
   - run semantic retrieval over persisted runtime context: KG nodes, saved forecasts, causal edges, and the latest world snapshot
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query answer --text "What changed in warming risk?" --limit 10`
-  - answer a user question strictly from persisted runtime evidence using the configured LLM summarizer
+  - answer a user question strictly from persisted runtime evidence using the configured LLM summarizer and return the active budget summary
 - `freeman-mcp --transport stdio`
   - expose Freeman through MCP for external agents; wraps the OpenAI-style tool surface from `freeman.api.tool_api`
 - `freeman-mcp --transport streamable-http --host 127.0.0.1 --port 8000`
@@ -374,6 +380,8 @@ MCP / tool surface:
   - `freeman_explain_forecast`
   - `freeman_query_anomalies`
   - `freeman_query_causal_edges`
+  - `freeman_query_runtime_context`
+  - `freeman_answer_query`
 - query learning over time:
   - `freeman_trace_relation_learning`
 - run in-memory simulation tasks:

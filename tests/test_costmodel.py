@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from freeman.agent.costmodel import BudgetPolicy, CostModel
+from freeman.agent.costmodel import BudgetLedger, BudgetPolicy, CostModel
 
 
 def test_costmodel_estimate_tracks_task_components() -> None:
@@ -69,3 +69,62 @@ def test_costmodel_downgrades_deep_dive_and_stops_on_hard_limits() -> None:
     assert deep_decision.stop_reason == "max_deep_dive_depth"
     assert hard_decision.allowed is False
     assert hard_decision.stop_reason == "max_llm_calls_per_task"
+
+
+def test_budget_ledger_summarizes_allowed_and_blocked_tasks(tmp_path) -> None:
+    policy = BudgetPolicy(max_compute_budget_per_session=25.0)
+    ledger = BudgetLedger(tmp_path / "cost_ledger.jsonl", policy=policy, auto_load=False)
+    model = CostModel(policy)
+
+    allowed_estimate = model.estimate(
+        task_id="signal-1",
+        llm_calls=1,
+        sim_steps=1,
+        actors=1,
+        resources=1,
+        domains=1,
+    )
+    allowed_decision = model.precheck(
+        requested_mode="ANALYZE",
+        estimate=allowed_estimate,
+        budget_spent=0.0,
+    )
+    blocked_estimate = model.estimate(
+        task_id="signal-2",
+        llm_calls=policy.max_llm_calls_per_task + 1,
+        sim_steps=0,
+        actors=0,
+        resources=0,
+        domains=0,
+    )
+    blocked_decision = model.precheck(
+        requested_mode="ANALYZE",
+        estimate=blocked_estimate,
+        budget_spent=0.0,
+    )
+
+    ledger.record(
+        task_type="signal_processing",
+        requested_mode="ANALYZE",
+        decision=allowed_decision,
+        actual_cost=5.0,
+        metadata={"signal_id": "signal-1"},
+    )
+    ledger.record(
+        task_type="answer_generation",
+        requested_mode="ANALYZE",
+        decision=blocked_decision,
+        actual_cost=0.0,
+        metadata={"query": "risk outlook"},
+    )
+
+    restored = BudgetLedger(tmp_path / "cost_ledger.jsonl", policy=policy, auto_load=True)
+    summary = restored.summary()
+
+    assert summary["tracking_enabled"] is True
+    assert summary["spent_usd"] == 5.0
+    assert summary["remaining_usd"] == 20.0
+    assert summary["entry_count"] == 2
+    assert summary["allowed_count"] == 1
+    assert summary["blocked_count"] == 1
+    assert summary["by_task_type"] == {"signal_processing": 1, "answer_generation": 1}

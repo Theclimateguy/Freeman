@@ -33,15 +33,23 @@ except ImportError:
 
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.consciousness import ConsciousState, ConsciousnessEngine, TraceEvent
+from freeman.agent.costmodel import (
+    BudgetLedger,
+    BudgetPolicy,
+    CostModel,
+    build_budget_policy,
+    budget_tracking_enabled,
+    resolve_budget_decision,
+)
 from freeman.agent.forecastregistry import ForecastRegistry
 from freeman.agent.parameterestimator import ParameterEstimator
 from freeman.agent.signalingestion import ManualSignalSource, Signal, SignalIngestionEngine, SignalMemory
 from freeman.core.scorer import score_outcomes
+from freeman.core.types import CausalEdge
 from freeman.game.runner import SimConfig
 from freeman.interface.factory import build_embedding_adapter, build_knowledge_graph, build_vectorstore
-from freeman.llm import DeepSeekChatClient, OllamaChatClient, OpenAIChatClient
-from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator
-from freeman.memory.knowledgegraph import KnowledgeGraph
+from freeman.llm import DeepSeekChatClient, FreemanOrchestrator, OllamaChatClient, OpenAIChatClient
+from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.core.world import WorldState
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
@@ -52,9 +60,33 @@ from freeman.utils import deep_copy_jsonable
 
 LOGGER = logging.getLogger("stream_runtime")
 
+DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
+    "agent": {
+        "budget_usd_per_day": 0.50,
+        "cost_governance": {},
+    },
+    "memory": {
+        "json_path": "./data/kg_state.json",
+    },
+    "runtime": {
+        "runtime_path": "./data/runtime",
+        "event_log_path": "./data/runtime/event_log.jsonl",
+    },
+}
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _to_datetime(value: str | datetime) -> datetime:
@@ -82,8 +114,9 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return dict(DEFAULT_RUNTIME_CONFIG)
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return _merge_dicts(DEFAULT_RUNTIME_CONFIG, payload)
 
 
 def _read_optional_text(path: str | Path | None) -> str:
@@ -602,6 +635,9 @@ class RuntimeContext:
     analysis_interval_seconds: float
     started_at: datetime
     deadline: datetime | None
+    budget_policy: BudgetPolicy = field(default_factory=BudgetPolicy)
+    cost_model: CostModel = field(default_factory=CostModel)
+    budget_ledger: BudgetLedger | None = None
     snapshot_manager: KGSnapshotManager = field(
         default_factory=lambda: KGSnapshotManager(snapshot_dir=Path("."), enabled=False)
     )
@@ -885,7 +921,115 @@ def _initial_runtime_stats() -> dict[str, int]:
         "watch_skipped": 0,
         "filtered_out_count": 0,
         "ontology_repairs_triggered": 0,
+        "budget_blocked_tasks": 0,
     }
+
+
+def _budget_tracking_enabled_for_runtime(ctx: RuntimeContext) -> bool:
+    return ctx.budget_ledger is not None
+
+
+def _budget_summary_for_runtime(ctx: RuntimeContext) -> dict[str, Any]:
+    if ctx.budget_ledger is not None:
+        return ctx.budget_ledger.summary()
+    return {
+        "tracking_enabled": bool(budget_tracking_enabled(ctx.config)),
+        "ledger_path": str((ctx.runtime_path / "cost_ledger.jsonl").resolve()),
+        "configured_usd_per_day": float(ctx.budget_policy.max_compute_budget_per_session),
+        "spent_usd": 0.0,
+        "remaining_usd": float(ctx.budget_policy.max_compute_budget_per_session),
+        "entry_count": 0,
+        "allowed_count": 0,
+        "blocked_count": 0,
+        "by_task_type": {},
+        "stop_reasons": {},
+    }
+
+
+def _world_complexity_counts(world: WorldState) -> tuple[int, int, int]:
+    return len(world.actors), len(world.resources), max(len(world.outcomes), 1)
+
+
+def _approved_mode_cost(
+    estimate_for_mode: Any,
+    approved_mode: str,
+    *,
+    allowed: bool,
+) -> float:
+    if not allowed or approved_mode == "WATCH":
+        return 0.0
+    return float(estimate_for_mode(approved_mode).estimated_cost)
+
+
+def _signal_budget_decision(ctx: RuntimeContext, signal_payload: Signal, trigger: Any) -> tuple[Any | None, float]:
+    if not _budget_tracking_enabled_for_runtime(ctx):
+        return None, 0.0
+    actors, resources, domains = _world_complexity_counts(ctx.current_world)
+    raw_requested_mode = str(getattr(trigger, "requested_mode", "") or "").upper()
+    raw_mode = str(getattr(trigger, "mode", "") or "WATCH").upper()
+    requested_mode = raw_requested_mode if raw_requested_mode not in {"", "WATCH"} or raw_mode == "WATCH" else raw_mode
+    sim_steps_by_mode = {
+        "WATCH": 0,
+        "ANALYZE": max(1, min(int(ctx.pipeline.sim_config.max_steps), 12)),
+        "DEEP_DIVE": max(1, int(ctx.pipeline.sim_config.max_steps)),
+    }
+    llm_calls_by_mode = {"WATCH": 0, "ANALYZE": 1, "DEEP_DIVE": 2}
+    kg_updates_by_mode = {"WATCH": 0, "ANALYZE": 2, "DEEP_DIVE": 4}
+    token_estimate = max(len(str(signal_payload.text).split()), 1) * 24
+
+    def _estimate_for_mode(mode: str):
+        normalized_mode = str(mode or "WATCH").upper()
+        idle_mode = normalized_mode == "WATCH"
+        return ctx.cost_model.estimate(
+            task_id=f"signal:{signal_payload.signal_id}:{normalized_mode.lower()}",
+            llm_calls=llm_calls_by_mode.get(normalized_mode, 0),
+            sim_steps=sim_steps_by_mode.get(normalized_mode, 0),
+            actors=0 if idle_mode else actors,
+            resources=0 if idle_mode else resources,
+            domains=0 if idle_mode else domains,
+            kg_updates=kg_updates_by_mode.get(normalized_mode, 0),
+            embedding_tokens_used=0 if idle_mode else token_estimate,
+        )
+
+    deep_dive_depth = int(ctx.pipeline.conscious_state.runtime_metadata.get("deep_dive_depth", 0))
+    decision = resolve_budget_decision(
+        cost_model=ctx.cost_model,
+        requested_mode=requested_mode,
+        estimate_for_mode=_estimate_for_mode,
+        budget_spent=ctx.budget_ledger.spent_usd,
+        deep_dive_depth=deep_dive_depth,
+    )
+    return decision, _approved_mode_cost(_estimate_for_mode, decision.approved_mode, allowed=decision.allowed)
+
+
+def _repair_budget_decision(ctx: RuntimeContext, *, gap_topics: list[str]) -> tuple[Any | None, float]:
+    if not _budget_tracking_enabled_for_runtime(ctx):
+        return None, 0.0
+    actors, resources, domains = _world_complexity_counts(ctx.current_world)
+    topic_count = max(len([topic for topic in gap_topics if str(topic).strip()]), 1)
+
+    def _estimate_for_mode(mode: str):
+        normalized_mode = str(mode or "WATCH").upper()
+        idle_mode = normalized_mode == "WATCH"
+        return ctx.cost_model.estimate(
+            task_id=f"ontology_repair:{ctx.current_world.runtime_step}:{topic_count}:{normalized_mode.lower()}",
+            llm_calls=0 if normalized_mode == "WATCH" else (1 if ctx.bootstrap_mode == "llm_synthesize" else 0),
+            sim_steps=0 if normalized_mode == "WATCH" else max(1, min(topic_count * 2, 8)),
+            actors=0 if idle_mode else actors,
+            resources=0 if idle_mode else resources,
+            domains=0 if idle_mode else domains,
+            kg_updates=0 if idle_mode else topic_count * 2,
+            embedding_tokens_used=0 if idle_mode else topic_count * 32,
+        )
+
+    decision = resolve_budget_decision(
+        cost_model=ctx.cost_model,
+        requested_mode="ANALYZE",
+        estimate_for_mode=_estimate_for_mode,
+        budget_spent=ctx.budget_ledger.spent_usd,
+        deep_dive_depth=0,
+    )
+    return decision, _approved_mode_cost(_estimate_for_mode, decision.approved_mode, allowed=decision.allowed)
 
 
 def _build_runtime_context(
@@ -901,6 +1045,9 @@ def _build_runtime_context(
     started_at = _utc_now()
     hours_requested = float(args.hours)
     storage.snapshot_manager = snapshot_manager_from_config(config, runtime_path=paths.runtime_path, config_base=paths.config_base)
+    policy = build_budget_policy(config)
+    tracking_enabled = budget_tracking_enabled(config)
+    budget_ledger = BudgetLedger(paths.runtime_path / "cost_ledger.jsonl", policy=policy, auto_load=True) if tracking_enabled else None
     return RuntimeContext(
         config=deep_copy_jsonable(config),
         paths=paths,
@@ -931,6 +1078,9 @@ def _build_runtime_context(
         analysis_interval_seconds=max(float(args.analysis_interval_seconds), 0.1),
         started_at=started_at,
         deadline=None if hours_requested <= 0.0 else started_at + timedelta(hours=hours_requested),
+        budget_policy=policy,
+        cost_model=CostModel(policy),
+        budget_ledger=budget_ledger,
         stats=_initial_runtime_stats(),
     )
 
@@ -1031,11 +1181,7 @@ def _bootstrap(
             current_world.runtime_step,
         )
 
-    bootstrap_mode = str(
-        args.bootstrap_mode
-        or bootstrap_cfg.get("mode")
-        or ("schema_path" if paths.schema_path is not None else "llm_synthesize")
-    ).strip().lower()
+    configured_bootstrap_mode = str(args.bootstrap_mode or bootstrap_cfg.get("mode") or "").strip().lower()
     package_path = paths.runtime_path / "bootstrap_package.json"
     domain_brief_path = (
         _resolve_path(paths.config_base, args.domain_brief_path, args.domain_brief_path)
@@ -1047,6 +1193,14 @@ def _bootstrap(
         )
     )
     domain_brief_inline = str(bootstrap_cfg.get("domain_brief", "")).strip()
+    if configured_bootstrap_mode:
+        bootstrap_mode = configured_bootstrap_mode
+    elif domain_brief_inline or domain_brief_path is not None:
+        bootstrap_mode = "llm_synthesize"
+    elif paths.schema_path is not None:
+        bootstrap_mode = "schema_path"
+    else:
+        bootstrap_mode = "llm_synthesize"
     synthesized_package = None if force_rebuild else (json.loads(package_path.read_text(encoding="utf-8")) if package_path.exists() else None)
 
     if synthesized_package is None and bootstrap_mode == "schema_path":
@@ -1070,10 +1224,10 @@ def _bootstrap(
         if not hasattr(llm_client, "repair_schema"):
             raise RuntimeError(
                 f"Configured llm provider '{provider}' does not expose repair_schema(); "
-                "use ollama or deepseek for llm_synthesize bootstrap."
+                "use a local or remote chat client that implements repair_schema()."
             )
         LOGGER.info("Synthesizing bootstrap schema from domain brief.")
-        orchestrator = DeepSeekFreemanOrchestrator(llm_client)
+        orchestrator = FreemanOrchestrator(llm_client)
         try:
             package, world_id, attempts, repair_history = orchestrator.compile_and_repair(
                 domain_brief,
@@ -1177,6 +1331,519 @@ def _append_domain_brief_history(runtime_path: Path, *, gap_topics: list[str], b
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def _ontology_repair_queue_path(runtime_path: Path) -> Path:
+    return runtime_path / "ontology_repair_queue.jsonl"
+
+
+def _append_ontology_repair_queue(runtime_path: Path, payload: dict[str, Any]) -> None:
+    queue_path = _ontology_repair_queue_path(runtime_path)
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    with queue_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _ontology_tokens(text: str) -> list[str]:
+    normalized = str(text).lower().replace("_", " ")
+    return re.findall(r"[a-z0-9]+", normalized)
+
+
+def _schema_entity_catalog(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    entities: list[dict[str, Any]] = []
+    for resource in schema.get("resources", []):
+        entities.append(
+            {
+                "kind": "resource",
+                "id": str(resource.get("id", "")).strip(),
+                "label": str(resource.get("name", resource.get("id", ""))).strip(),
+            }
+        )
+    for outcome in schema.get("outcomes", []):
+        entities.append(
+            {
+                "kind": "outcome",
+                "id": str(outcome.get("id", "")).strip(),
+                "label": str(outcome.get("label", outcome.get("id", ""))).strip(),
+            }
+        )
+    for actor in schema.get("actors", []):
+        entities.append(
+            {
+                "kind": "actor",
+                "id": str(actor.get("id", "")).strip(),
+                "label": str(actor.get("name", actor.get("id", ""))).strip(),
+            }
+        )
+    for entity in entities:
+        entity["tokens"] = sorted(set(_ontology_tokens(f"{entity['id']} {entity['label']}")))
+    return [entity for entity in entities if entity["id"]]
+
+
+def _schema_value_keys(schema: dict[str, Any]) -> set[str]:
+    resource_ids = {str(resource.get("id", "")).strip() for resource in schema.get("resources", []) if str(resource.get("id", "")).strip()}
+    actor_state_keys: set[str] = set()
+    for actor in schema.get("actors", []):
+        state = actor.get("state", {})
+        if isinstance(state, dict):
+            actor_state_keys.update(str(key).strip() for key in state if str(key).strip())
+    return resource_ids | actor_state_keys
+
+
+def _infer_topic_aliases(topic: str, schema: dict[str, Any], *, limit: int = 3) -> list[dict[str, Any]]:
+    topic_tokens = set(_ontology_tokens(topic))
+    if not topic_tokens:
+        return []
+    ranked: list[tuple[float, str, dict[str, Any]]] = []
+    kind_priority = {"resource": "0", "outcome": "1", "actor": "2"}
+    for entity in _schema_entity_catalog(schema):
+        entity_tokens = set(entity.get("tokens", []))
+        if not entity_tokens:
+            continue
+        overlap = len(topic_tokens & entity_tokens)
+        if overlap == 0:
+            continue
+        score = overlap / max(len(topic_tokens), 1)
+        ranked.append((score, f"{kind_priority.get(entity['kind'], '9')}:{entity['id']}", entity))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    aliases: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for score, _sort_key, entity in ranked:
+        if entity["id"] in seen_ids:
+            continue
+        aliases.append(
+            {
+                "entity_id": entity["id"],
+                "entity_label": entity["label"],
+                "entity_kind": entity["kind"],
+                "score": float(score),
+            }
+        )
+        seen_ids.add(entity["id"])
+        if len(aliases) >= max(int(limit), 1):
+            break
+    return aliases
+
+
+def _existing_causal_pairs(schema: dict[str, Any]) -> set[tuple[str, str]]:
+    return {
+        (str(edge.get("source", "")).strip(), str(edge.get("target", "")).strip())
+        for edge in schema.get("causal_dag", [])
+        if str(edge.get("source", "")).strip() and str(edge.get("target", "")).strip()
+    }
+
+
+def _topic_relation_candidates(ctx: RuntimeContext, topic: str, schema: dict[str, Any]) -> list[dict[str, Any]]:
+    value_keys = _schema_value_keys(schema)
+    if not value_keys:
+        return []
+    existing_pairs = _existing_causal_pairs(schema)
+    result = ctx.pipeline.knowledge_graph.semantic_search(topic, top_k=6, min_score=0.12)
+    mentions: dict[str, dict[str, Any]] = {}
+    co_mentions: dict[tuple[str, str], dict[str, Any]] = {}
+    for hit in result.direct_hits:
+        haystack = " ".join(
+            [
+                str(hit.node.id),
+                str(hit.node.label),
+                str(hit.node.content),
+                json.dumps(hit.node.metadata, ensure_ascii=False, sort_keys=True),
+            ]
+        ).lower()
+        matched_keys = sorted(
+            key for key in value_keys if key and (key.lower() in haystack or key.lower().replace("_", " ") in haystack)
+        )
+        for key in matched_keys:
+            mentions.setdefault(
+                key,
+                {
+                    "node_ids": [],
+                    "max_score": 0.0,
+                },
+            )
+            mentions[key]["node_ids"].append(hit.node.id)
+            mentions[key]["max_score"] = max(float(mentions[key]["max_score"]), float(hit.score))
+        for index, source_id in enumerate(matched_keys):
+            for target_id in matched_keys[index + 1 :]:
+                if source_id == target_id or (source_id, target_id) in existing_pairs:
+                    continue
+                pair = (source_id, target_id)
+                co_mentions.setdefault(
+                    pair,
+                    {
+                        "source": source_id,
+                        "target": target_id,
+                        "support_topics": [],
+                        "support_node_ids": [],
+                        "confidence": 0.0,
+                    },
+                )
+                co_mentions[pair]["support_topics"].append(topic)
+                co_mentions[pair]["support_node_ids"].append(hit.node.id)
+                co_mentions[pair]["confidence"] = max(float(co_mentions[pair]["confidence"]), float(hit.score))
+    ranked = sorted(
+        co_mentions.values(),
+        key=lambda item: (-float(item["confidence"]), item["source"], item["target"]),
+    )
+    candidates: list[dict[str, Any]] = []
+    for item in ranked[:5]:
+        candidates.append(
+            {
+                "source": item["source"],
+                "target": item["target"],
+                "support_topics": sorted({str(topic_id) for topic_id in item["support_topics"] if str(topic_id).strip()}),
+                "support_node_ids": sorted({str(node_id) for node_id in item["support_node_ids"] if str(node_id).strip()}),
+                "confidence": float(item["confidence"]),
+                "expected_sign": None,
+            }
+        )
+    return candidates
+
+
+def _entity_polarity(entity_id: str) -> int:
+    tokens = set(_ontology_tokens(entity_id))
+    negative_tokens = {
+        "conflict",
+        "crisis",
+        "debt",
+        "emission",
+        "emissions",
+        "outage",
+        "outages",
+        "pollution",
+        "risk",
+        "scarcity",
+        "shock",
+        "stress",
+        "temperature",
+        "warming",
+    }
+    positive_tokens = {
+        "adaptation",
+        "agriculture",
+        "cooperation",
+        "gdp",
+        "growth",
+        "output",
+        "power",
+        "productivity",
+        "resilience",
+        "stability",
+        "stock",
+        "trade",
+        "water",
+    }
+    positive_hits = len(tokens & positive_tokens)
+    negative_hits = len(tokens & negative_tokens)
+    if positive_hits > negative_hits:
+        return 1
+    if negative_hits > positive_hits:
+        return -1
+    return 0
+
+
+def _infer_relation_expected_sign(candidate: dict[str, Any]) -> str:
+    source_polarity = _entity_polarity(str(candidate.get("source", "")))
+    target_polarity = _entity_polarity(str(candidate.get("target", "")))
+    if source_polarity != 0 and target_polarity != 0:
+        return "+" if source_polarity == target_polarity else "-"
+
+    topic_text = " ".join(str(topic) for topic in candidate.get("support_topics", []))
+    topic_tokens = set(_ontology_tokens(topic_text))
+    negative_context = {
+        "damage",
+        "damages",
+        "decline",
+        "declines",
+        "decrease",
+        "decreases",
+        "disrupt",
+        "disruption",
+        "drop",
+        "drops",
+        "outage",
+        "outages",
+        "reduce",
+        "reduces",
+        "shock",
+        "stress",
+    }
+    positive_context = {
+        "boost",
+        "boosts",
+        "growth",
+        "improve",
+        "improves",
+        "increase",
+        "increases",
+        "raise",
+        "raises",
+        "recovery",
+        "resilience",
+        "support",
+        "supports",
+    }
+    if topic_tokens & negative_context:
+        return "-"
+    if topic_tokens & positive_context:
+        return "+"
+    return "+"
+
+
+def _normalize_relation_candidates(
+    relation_candidates: list[dict[str, Any]],
+    *,
+    auto_apply: bool,
+    min_confidence: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    normalized: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for candidate in relation_candidates:
+        source = str(candidate.get("source", "")).strip()
+        target = str(candidate.get("target", "")).strip()
+        if not source or not target or source == target:
+            continue
+        pair = (source, target)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        confidence = float(candidate.get("confidence", 0.0))
+        expected_sign = str(candidate.get("expected_sign") or _infer_relation_expected_sign(candidate)).strip()
+        normalized_candidate = {
+            **deep_copy_jsonable(candidate),
+            "source": source,
+            "target": target,
+            "confidence": confidence,
+            "expected_sign": expected_sign if expected_sign in {"+", "-"} else "+",
+        }
+        should_apply = bool(auto_apply and confidence >= float(min_confidence))
+        normalized_candidate["auto_applied"] = should_apply
+        normalized.append(normalized_candidate)
+        if should_apply:
+            applied.append(normalized_candidate)
+    return normalized, applied
+
+
+def _append_causal_edges_to_schema(
+    schema: dict[str, Any],
+    applied_candidates: list[dict[str, Any]],
+    *,
+    default_strength: str,
+) -> list[dict[str, Any]]:
+    existing_pairs = _existing_causal_pairs(schema)
+    appended: list[dict[str, Any]] = []
+    edges = list(schema.get("causal_dag", []))
+    for candidate in applied_candidates:
+        pair = (str(candidate["source"]), str(candidate["target"]))
+        if pair in existing_pairs:
+            continue
+        edge_payload = {
+            "source": pair[0],
+            "target": pair[1],
+            "expected_sign": str(candidate["expected_sign"]),
+            "strength": default_strength,
+            "metadata": {
+                "source": "ontology_repair_auto",
+                "confidence": float(candidate["confidence"]),
+                "support_topics": deep_copy_jsonable(candidate.get("support_topics", [])),
+                "support_node_ids": deep_copy_jsonable(candidate.get("support_node_ids", [])),
+            },
+        }
+        edges.append(edge_payload)
+        appended.append(edge_payload)
+        existing_pairs.add(pair)
+    schema["causal_dag"] = edges
+    return appended
+
+
+def _apply_causal_edges_to_world(world: WorldState, appended_edges: list[dict[str, Any]]) -> None:
+    existing_pairs = {(edge.source, edge.target) for edge in world.causal_dag}
+    for edge_payload in appended_edges:
+        pair = (str(edge_payload["source"]), str(edge_payload["target"]))
+        if pair in existing_pairs:
+            continue
+        world.causal_dag.append(CausalEdge.from_snapshot(edge_payload))
+        existing_pairs.add(pair)
+
+
+def _mark_gap_traits_handled(
+    ctx: RuntimeContext,
+    *,
+    trait_ids: list[str],
+    proposal_id: str,
+    review_required: bool,
+    applied: bool,
+) -> None:
+    for trait_id in trait_ids:
+        node = ctx.pipeline.knowledge_graph.get_node(trait_id, lazy_embed=False)
+        if node is None:
+            continue
+        payload = deep_copy_jsonable(node.metadata.get("payload", {}))
+        payload["repair_failed"] = False
+        payload["repair_proposal_id"] = proposal_id
+        payload["repair_review_required"] = bool(review_required)
+        payload["repair_applied"] = bool(applied)
+        payload["repair_applied_at"] = _utc_now().isoformat()
+        node.metadata["payload"] = payload
+        node.updated_at = _utc_now().isoformat()
+        ctx.pipeline.knowledge_graph.update_node(node)
+
+
+def _apply_schema_path_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[str], repair_trait_ids: list[str]) -> bool:
+    ontology_cfg = ((ctx.config.get("agent") or {}).get("ontology_repair") or {})
+    package_payload = json.loads(ctx.package_path.read_text(encoding="utf-8")) if ctx.package_path.exists() else {}
+    schema_payload: dict[str, Any] | None = None
+    if isinstance(package_payload.get("schema"), dict):
+        schema_payload = deep_copy_jsonable(package_payload["schema"])
+    elif ctx.paths.schema_path is not None and ctx.paths.schema_path.exists():
+        schema_payload = json.loads(ctx.paths.schema_path.read_text(encoding="utf-8"))
+    if schema_payload is None:
+        LOGGER.warning("Ontology repair skipped: no schema payload available for schema_path mode.")
+        _mark_gap_traits_failed(ctx, trait_ids=repair_trait_ids)
+        return False
+
+    unique_topics = sorted({str(topic).strip() for topic in gap_topics if str(topic).strip()})
+    if not unique_topics:
+        LOGGER.warning("Ontology repair skipped: no gap topics collected.")
+        _mark_gap_traits_failed(ctx, trait_ids=repair_trait_ids)
+        return False
+
+    metadata = deep_copy_jsonable(schema_payload.get("metadata", {}))
+    existing_topics = [str(topic).strip() for topic in metadata.get("ontology_topics", []) if str(topic).strip()]
+    metadata["ontology_topics"] = sorted({*existing_topics, *unique_topics})
+    alias_map = {
+        str(topic).strip(): [str(item).strip() for item in values if str(item).strip()]
+        for topic, values in (metadata.get("ontology_aliases", {}) or {}).items()
+        if str(topic).strip()
+    }
+
+    topic_summaries: list[dict[str, Any]] = []
+    relation_candidates: list[dict[str, Any]] = []
+    for topic in unique_topics:
+        aliases = _infer_topic_aliases(topic, schema_payload)
+        if aliases:
+            alias_map[topic] = [str(item["entity_id"]) for item in aliases]
+        candidates = _topic_relation_candidates(ctx, topic, schema_payload)
+        relation_candidates.extend(candidates)
+        topic_summaries.append(
+            {
+                "topic": topic,
+                "aliases": aliases,
+                "relation_candidates": candidates,
+            }
+        )
+    metadata["ontology_aliases"] = alias_map
+    auto_apply_candidates = bool(ontology_cfg.get("auto_apply_relation_candidates", True))
+    auto_apply_min_confidence = float(ontology_cfg.get("auto_apply_min_confidence", 0.15))
+    default_relation_strength = str(ontology_cfg.get("default_relation_strength", "weak")).strip() or "weak"
+    relation_candidates, applied_candidates = _normalize_relation_candidates(
+        relation_candidates,
+        auto_apply=auto_apply_candidates,
+        min_confidence=auto_apply_min_confidence,
+    )
+    appended_edges = _append_causal_edges_to_schema(
+        schema_payload,
+        applied_candidates,
+        default_strength=default_relation_strength,
+    )
+
+    proposal_id = f"ontology-repair:{_utc_now().strftime('%Y%m%dT%H%M%S')}:{abs(hash(tuple(unique_topics))) % 100000:05d}"
+    history = [item for item in metadata.get("ontology_patch_history", []) if isinstance(item, dict)]
+    history.append(
+        {
+            "proposal_id": proposal_id,
+            "timestamp": _utc_now().isoformat(),
+            "gap_topics": list(unique_topics),
+            "auto_applied_metadata": True,
+            "auto_applied_relations": len(appended_edges),
+            "review_required": False,
+        }
+    )
+    metadata["ontology_patch_history"] = history[-20:]
+    schema_payload["metadata"] = metadata
+
+    overlay_package = deep_copy_jsonable(package_payload) if package_payload else {}
+    overlay_package["schema"] = schema_payload
+    overlay_package.setdefault("policies", [])
+    overlay_package.setdefault("assumptions", [])
+    overlay_package["bootstrap_mode"] = overlay_package.get("bootstrap_mode") or ctx.bootstrap_mode or "schema_path"
+    _atomic_write_json(ctx.package_path, overlay_package)
+
+    ctx.current_world.metadata.update(
+        {
+            "ontology_topics": deep_copy_jsonable(metadata["ontology_topics"]),
+            "ontology_aliases": deep_copy_jsonable(metadata["ontology_aliases"]),
+            "ontology_patch_history": deep_copy_jsonable(metadata["ontology_patch_history"]),
+        }
+    )
+    ctx.base_world_template.metadata.update(
+        {
+            "ontology_topics": deep_copy_jsonable(metadata["ontology_topics"]),
+            "ontology_aliases": deep_copy_jsonable(metadata["ontology_aliases"]),
+            "ontology_patch_history": deep_copy_jsonable(metadata["ontology_patch_history"]),
+        }
+    )
+    _apply_causal_edges_to_world(ctx.current_world, appended_edges)
+    _apply_causal_edges_to_world(ctx.base_world_template, appended_edges)
+
+    review_required = False
+    queue_payload = {
+        "proposal_id": proposal_id,
+        "timestamp": _utc_now().isoformat(),
+        "bootstrap_mode": overlay_package["bootstrap_mode"],
+        "review_status": "auto_applied",
+        "review_required": review_required,
+        "gap_topics": list(unique_topics),
+        "metadata_patch": {
+            "ontology_topics": deep_copy_jsonable(metadata["ontology_topics"]),
+            "ontology_aliases": deep_copy_jsonable(metadata["ontology_aliases"]),
+        },
+        "topic_summaries": topic_summaries,
+        "relation_candidates": relation_candidates,
+        "applied_relation_candidates": applied_candidates,
+        "appended_causal_edges": appended_edges,
+        "repair_trait_ids": list(repair_trait_ids),
+        "package_path": str(ctx.package_path),
+    }
+    _append_ontology_repair_queue(ctx.runtime_path, queue_payload)
+    ctx.pipeline.knowledge_graph.add_node(
+        KGNode(
+            id=f"ontology_patch_proposal:{proposal_id}",
+            label="Ontology Patch Proposal",
+            node_type="ontology_patch_proposal",
+            content=f"topics={', '.join(unique_topics)}; auto_applied_edges={len(appended_edges)}",
+            confidence=0.95,
+            status="active",
+            metadata={
+                "proposal_id": proposal_id,
+                "gap_topics": list(unique_topics),
+                "review_required": review_required,
+                "review_status": queue_payload["review_status"],
+                "metadata_patch": deep_copy_jsonable(queue_payload["metadata_patch"]),
+                "relation_candidates": deep_copy_jsonable(relation_candidates),
+                "applied_relation_candidates": deep_copy_jsonable(applied_candidates),
+                "appended_causal_edges": deep_copy_jsonable(appended_edges),
+            },
+        )
+    )
+    _mark_gap_traits_handled(
+        ctx,
+        trait_ids=repair_trait_ids,
+        proposal_id=proposal_id,
+        review_required=review_required,
+        applied=True,
+    )
+    ctx.stats["ontology_repairs_triggered"] += 1
+    ctx.pipeline.conscious_state.runtime_metadata["ontology_repairs_triggered"] = int(ctx.stats["ontology_repairs_triggered"])
+    ctx.pipeline.conscious_state.runtime_metadata["pending_ontology_repair_topics"] = list(unique_topics)
+    LOGGER.info(
+        "Ontology repair overlay auto-applied. gap_topics=%s appended_edges=%s",
+        unique_topics,
+        len(appended_edges),
+    )
+    _persist_context(ctx)
+    return True
+
+
 def _pending_repair_requests(ctx: RuntimeContext) -> list[TraceEvent]:
     handled_ids = set(ctx.pipeline.conscious_state.runtime_metadata.get("handled_ontology_repair_requests", []))
     return [
@@ -1205,7 +1872,50 @@ def _trigger_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[str], repa
         LOGGER.warning("Ontology repair skipped: max repairs per session reached.")
         return False
 
+    repair_decision, approved_cost = _repair_budget_decision(ctx, gap_topics=gap_topics)
+    if repair_decision is not None and (not repair_decision.allowed or repair_decision.approved_mode == "WATCH"):
+        ctx.stats["budget_blocked_tasks"] += 1
+        if ctx.budget_ledger is not None:
+            ctx.budget_ledger.record(
+                task_type="ontology_repair",
+                requested_mode="ANALYZE",
+                decision=repair_decision,
+                actual_cost=0.0,
+                metadata={
+                    "gap_topics": list(sorted({str(topic).strip() for topic in gap_topics if str(topic).strip()})),
+                    "repair_trait_ids": list(repair_trait_ids),
+                    "approved_estimated_cost": float(approved_cost),
+                },
+            )
+        if repair_decision.stop_reason == "budget_exhaustion_stop":
+            ctx.stop_requested = True
+        LOGGER.warning("Ontology repair blocked by budget gate: %s", repair_decision.stop_reason)
+        return False
+
     package_payload = json.loads(ctx.package_path.read_text(encoding="utf-8")) if ctx.package_path.exists() else {}
+    effective_bootstrap_mode = str(package_payload.get("bootstrap_mode") or ctx.bootstrap_mode or "").strip().lower()
+    if effective_bootstrap_mode in {"schema_path", "llm_synthesize_fallback"}:
+        repaired = _apply_schema_path_ontology_repair(
+            ctx,
+            gap_topics=gap_topics,
+            repair_trait_ids=repair_trait_ids,
+        )
+        if repair_decision is not None and ctx.budget_ledger is not None:
+            ctx.budget_ledger.record(
+                task_type="ontology_repair",
+                requested_mode="ANALYZE",
+                decision=repair_decision,
+                actual_cost=float(approved_cost if repaired else 0.0),
+                metadata={
+                    "gap_topics": list(sorted({str(topic).strip() for topic in gap_topics if str(topic).strip()})),
+                    "repair_trait_ids": list(repair_trait_ids),
+                    "approved_estimated_cost": float(approved_cost),
+                    "bootstrap_mode": effective_bootstrap_mode,
+                    "repaired": bool(repaired),
+                },
+            )
+        return repaired
+
     current_brief = str(
         package_payload.get("domain_brief")
         or ((ctx.config.get("agent") or {}).get("bootstrap") or {}).get("domain_brief")
@@ -1254,6 +1964,21 @@ def _trigger_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[str], repa
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("Ontology repair bootstrap failed: %s", exc)
         _mark_gap_traits_failed(ctx, trait_ids=repair_trait_ids)
+        if repair_decision is not None and ctx.budget_ledger is not None:
+            ctx.budget_ledger.record(
+                task_type="ontology_repair",
+                requested_mode="ANALYZE",
+                decision=repair_decision,
+                actual_cost=float(approved_cost),
+                metadata={
+                    "gap_topics": list(unique_topics),
+                    "repair_trait_ids": list(repair_trait_ids),
+                    "approved_estimated_cost": float(approved_cost),
+                    "bootstrap_mode": effective_bootstrap_mode,
+                    "repaired": False,
+                    "error": str(exc),
+                },
+            )
         return False
 
     bootstrap.pipeline.conscious_state = ConsciousState.from_dict(previous_state.to_dict(), bootstrap.pipeline.knowledge_graph)
@@ -1270,6 +1995,20 @@ def _trigger_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[str], repa
     ctx.package_path = bootstrap.package_path
     ctx.stats["ontology_repairs_triggered"] += 1
     ctx.pipeline.conscious_state.runtime_metadata["ontology_repairs_triggered"] = int(ctx.stats["ontology_repairs_triggered"])
+    if repair_decision is not None and ctx.budget_ledger is not None:
+        ctx.budget_ledger.record(
+            task_type="ontology_repair",
+            requested_mode="ANALYZE",
+            decision=repair_decision,
+            actual_cost=float(approved_cost),
+            metadata={
+                "gap_topics": list(unique_topics),
+                "repair_trait_ids": list(repair_trait_ids),
+                "approved_estimated_cost": float(approved_cost),
+                "bootstrap_mode": effective_bootstrap_mode,
+                "repaired": True,
+            },
+        )
     LOGGER.info("Ontology repair complete. gap_topics=%s", unique_topics)
     _persist_context(ctx)
     return True
@@ -1289,9 +2028,9 @@ def _check_and_handle_repair_request(ctx: RuntimeContext) -> bool:
         gap_topics=gap_topics,
         repair_trait_ids=sorted(set(repair_trait_ids)),
     )
-    handled_ids = list(dict.fromkeys([*ctx.pipeline.conscious_state.runtime_metadata.get("handled_ontology_repair_requests", []), *[event.event_id for event in repair_events]]))
-    ctx.pipeline.conscious_state.runtime_metadata["handled_ontology_repair_requests"] = handled_ids
     if handled:
+        handled_ids = list(dict.fromkeys([*ctx.pipeline.conscious_state.runtime_metadata.get("handled_ontology_repair_requests", []), *[event.event_id for event in repair_events]]))
+        ctx.pipeline.conscious_state.runtime_metadata["handled_ontology_repair_requests"] = handled_ids
         _persist_context(ctx)
     return handled
 
@@ -1507,6 +2246,21 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
         return result
 
     trigger = triggers[0]
+    raw_requested_mode = str(getattr(trigger, "requested_mode", "") or "").upper()
+    raw_mode = str(getattr(trigger, "mode", "") or "WATCH").upper()
+    requested_mode = raw_requested_mode if raw_requested_mode not in {"", "WATCH"} or raw_mode == "WATCH" else raw_mode
+    budget_decision, approved_cost = _signal_budget_decision(ctx, signal_payload, trigger)
+    if budget_decision is not None:
+        trigger.requested_mode = requested_mode
+        trigger.mode = str(budget_decision.approved_mode or trigger.mode)
+        trigger.estimated_cost = float(approved_cost)
+        trigger.budget_reason = budget_decision.stop_reason
+        if trigger.mode == "DEEP_DIVE":
+            ctx.pipeline.conscious_state.runtime_metadata["deep_dive_depth"] = int(
+                ctx.pipeline.conscious_state.runtime_metadata.get("deep_dive_depth", 0)
+            ) + 1
+        elif trigger.mode in {"WATCH", "ANALYZE"}:
+            ctx.pipeline.conscious_state.runtime_metadata["deep_dive_depth"] = 0
     should_update = trigger.mode in {"ANALYZE", "DEEP_DIVE"}
     llm_update_attempted = should_update
     update_error: str | None = None
@@ -1570,6 +2324,10 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
             LOGGER.warning("World update failed for signal_id=%s: %s", signal_id, exc)
     elif not ctx.args.include_watch:
         result.skipped_watch += 1
+        if budget_decision is not None and not budget_decision.allowed:
+            ctx.stats["budget_blocked_tasks"] += 1
+            if budget_decision.stop_reason == "budget_exhaustion_stop":
+                ctx.stop_requested = True
 
     if verification_probs is None:
         result.verified_forecasts += _verify_due_forecasts(
@@ -1593,11 +2351,28 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
         extra_diff={
             "filtered_out": False,
             "external_relevance": dict(signal_payload.metadata.get("external_relevance", {})),
+            "requested_mode": requested_mode,
+            "budget_reason": budget_decision.stop_reason if budget_decision is not None else None,
+            "estimated_cost": float(approved_cost if budget_decision is not None else 0.0),
         },
     )
     ctx.pipeline.conscious_state.trace_state.append(runtime_event)
     ctx.event_log.append(runtime_event)
     ctx.logged_event_ids.add(runtime_event.event_id)
+    if budget_decision is not None and ctx.budget_ledger is not None:
+        ctx.budget_ledger.record(
+            task_type="signal_processing",
+            requested_mode=requested_mode,
+            decision=budget_decision,
+            actual_cost=float(approved_cost if llm_update_attempted else 0.0),
+            metadata={
+                "signal_id": signal_id,
+                "topic": str(signal_payload.topic),
+                "approved_estimated_cost": float(approved_cost),
+                "world_updated": bool(should_update),
+                "update_error": update_error,
+            },
+        )
     ctx.cursor_store.commit(signal_id)
     _persist_context(ctx)
     _write_kg_snapshot(

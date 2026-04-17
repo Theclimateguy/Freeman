@@ -53,6 +53,9 @@ DEFAULT_CONSCIOUSNESS_CONFIG: dict[str, Any] = {
         "gap_threshold": 2,
         "preserve_kg": True,
         "max_repairs_per_session": 3,
+        "auto_apply_relation_candidates": True,
+        "auto_apply_min_confidence": 0.15,
+        "default_relation_strength": "weak",
     },
 }
 

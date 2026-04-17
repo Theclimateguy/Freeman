@@ -4,6 +4,16 @@ Freeman is an analytical agent for situations that change over time. You describ
 
 The point of Freeman is not "chatting about a topic". The point is to keep a structured world model, run repeatable scenario analysis, remember past cases, and give you an audit trail of what changed and why.
 
+Current release: `3.0.0`
+
+Freeman `3.0` closes the operational local-agent loop:
+
+- continuous ingestion into a persistent world model
+- universal semantic retrieval over persisted runtime artifacts
+- autonomous ontology repair for schema-backed runtimes
+- budget/cost governance with persisted runtime ledger
+- evidence-grounded `ask` / `query` against the saved daemon state
+
 ## Why Use It
 
 Use Freeman when you need an agent that can:
@@ -60,6 +70,7 @@ Current operational path:
 - `python -m freeman.runtime.stream_runtime` is the single daemon-like runtime entrypoint.
 - Domain behavior is supplied by `agent.sources`, `agent.bootstrap`, and the schema or natural-language brief, not by separate runtime modules.
 - The consciousness layer is deterministic and replayable; LLMs may translate state, but do not mutate it.
+- Runtime cost governance is now part of the operational path, not an external benchmark-only concern.
 
 ## Install
 
@@ -174,6 +185,14 @@ They now answer against persisted runtime context, not only raw KG nodes:
 
 This lets a clean local instance answer semantically meaningful questions against a trained graph even before `kg-reindex` or Chroma setup.
 
+`freeman ask` also returns live budget telemetry sourced from the runtime ledger:
+
+- `spent_usd`
+- `remaining_usd`
+- `allowed_count`
+- `blocked_count`
+- `by_task_type`
+
 Human-in-the-loop workflow:
 
 ```bash
@@ -234,10 +253,10 @@ Repository CI now runs `pytest -q` plus release builds on every push to `main` a
 
 It supports two bootstrap modes:
 
-- `schema_path`: start from an explicit schema such as `freeman/domain/profiles/gim15.json`
-- `llm_synthesize`: use the built-in Freeman orchestrator to synthesize and repair a domain schema from a natural-language brief before the stream loop starts
+- `llm_synthesize`: the primary path; use the built-in Freeman orchestrator to synthesize and repair a domain schema from a natural-language brief before the stream loop starts
+- `schema_path`: the secondary path; start from an explicit schema such as `freeman/domain/profiles/gim15.json`
 
-`llm_synthesize` now runs a verifier-guided repair loop. `bootstrap_package.json` persists `bootstrap_attempts` with per-attempt verifier errors, and local models can still fall back to `fallback_schema_path` if they never produce a verifier-clean package.
+`llm_synthesize` now runs a verifier-guided repair loop. `bootstrap_package.json` persists `bootstrap_attempts` with per-attempt verifier errors, and the default clean config is local-model-first (`ollama` + `qwen2.5-coder:14b`) with `fallback_schema_path` only as a secondary recovery path.
 
 The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
 
@@ -309,7 +328,16 @@ Ontology-blind low-relevance signals are not dropped silently anymore:
 
 - if both ontology overlap and hypothesis overlap are zero, the signal is written to KG as `anomaly_candidate`
 - `ConsciousnessEngine` reviews repeated anomaly clusters and escalates them into `identity_trait` nodes with `trait_key=ontology_gap`
-- once enough unhandled ontology gaps accumulate, the runtime appends those topics to the current domain brief, writes `domain_brief_history.jsonl`, and re-runs verifier-guided bootstrap while preserving monotonic `runtime_step`
+- once enough unhandled ontology gaps accumulate, runtime triggers ontology repair automatically
+- for `schema_path` / fallback runtimes, repair writes an overlay `bootstrap_package.json`, auto-applies inferred causal edges to the live world and base template, and persists an audit queue in `ontology_repair_queue.jsonl`
+- for `llm_synthesize` runtimes, repair appends topics to the current domain brief, writes `domain_brief_history.jsonl`, and re-runs verifier-guided bootstrap while preserving monotonic `runtime_step`
+
+Runtime budget governance is now also first-class:
+
+- `signal_processing`, `ontology_repair`, and `answer_generation` all pass through the same cost policy
+- decisions are persisted into `runtime/cost_ledger.jsonl`
+- hard limits can downgrade `DEEP_DIVE -> ANALYZE -> WATCH` or stop execution
+- `freeman status` surfaces the live ledger summary from disk
 
 The reconciler is also configurable through `memory.reconciler`:
 
@@ -331,7 +359,7 @@ This keeps the separation strict: `ConsciousState -> LLM -> external world`, nev
 - `freeman init`: create a config file and empty storage for the knowledge graph and session logs.
 - `freeman run`: compile a schema and run the full analysis pipeline.
 - `freeman ask`: retrieve relevant runtime evidence and, when an LLM is configured, answer a question from stored KG/forecast/causal/world context.
-- `freeman status`: inspect configured storage paths and current active-memory counts.
+- `freeman status`: inspect configured storage paths, current active-memory counts, and persisted budget ledger state.
 - `freeman query`: query graph nodes directly; `--text` uses runtime semantic retrieval over KG + forecasts + causal edges + world state.
 - `freeman export-kg`: export the graph for inspection or downstream tooling.
 - `freeman reconcile`: merge one saved session log back into the long-term graph.
@@ -348,6 +376,22 @@ If you are integrating Freeman into Python code rather than only using the CLI, 
 - `freeman.agent.ParameterEstimator`: ask an LLM to adjust an existing world when new evidence changes the regime.
 - `freeman.memory.KnowledgeGraph`: persistent graph memory with universal semantic retrieval, optional Chroma acceleration, and strict no-match behavior.
 - `freeman.runtime.queryengine`: shared runtime semantic retrieval and answer synthesis over persisted runtime artifacts.
+- `freeman.agent.costmodel`: persisted budget ledger plus shared downgrade/stop policy across runtime tasks.
+
+## Operational Readiness
+
+For `3.0`, the remaining issues are no longer architecture blockers for local deployment/training. The loop is closed end-to-end:
+
+- signal ingestion persists state and resumes cleanly
+- the world model can expand from anomaly pressure without human review for schema-backed runtimes
+- runtime query/answer uses the same semantic retrieval layer as the CLI
+- budget/cost accounting is visible and enforced
+
+What remains is mostly tuning, not missing infrastructure:
+
+- budget coefficients may need calibration per provider or hardware profile
+- semantic thresholds may need per-domain tuning on very noisy streams
+- autonomous ontology induction is safest when new relations stay within an existing schema vocabulary
 - `freeman.verifier.Verifier`: structural and causal checks for world consistency.
 
 This advanced path is the right place if you want an agent that reacts to incoming news/data streams, updates its internal state, and keeps learning from prior forecast errors.
