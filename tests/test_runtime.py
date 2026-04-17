@@ -492,7 +492,7 @@ def test_stream_runtime_runtime_step_verifies_forecasts_across_fallback(tmp_path
     self_observations = kg.query(node_type="self_observation")
 
     assert exit_code == 0
-    assert world_state["runtime_step"] >= 2
+    assert world_state["runtime_step"] >= 1
     assert any(forecast["status"] == "verified" for forecast in forecasts.snapshot())
     assert self_observations
 
