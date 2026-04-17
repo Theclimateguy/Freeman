@@ -4,7 +4,6 @@ from freeman.llm.adapter import DeterministicEmbeddingAdapter, EmbeddingAdapter,
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.llm.explanation_renderer import ExplanationRenderer
 from freeman.llm.identity_narrator import IdentityNarrator
-from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator, LLMDrivenSimulationRun
 from freeman.llm.ollama import OllamaChatClient, OllamaEmbeddingClient
 from freeman.llm.openai import OpenAIChatClient, OpenAIEmbeddingClient
 
@@ -22,3 +21,15 @@ __all__ = [
     "OllamaEmbeddingClient",
     "OpenAIEmbeddingClient",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"DeepSeekFreemanOrchestrator", "LLMDrivenSimulationRun"}:
+        from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator, LLMDrivenSimulationRun
+
+        exports = {
+            "DeepSeekFreemanOrchestrator": DeepSeekFreemanOrchestrator,
+            "LLMDrivenSimulationRun": LLMDrivenSimulationRun,
+        }
+        return exports[name]
+    raise AttributeError(name)

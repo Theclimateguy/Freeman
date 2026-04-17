@@ -20,7 +20,12 @@ def _write_runtime_fixture(tmp_path: Path, water_market_schema: dict) -> Path:
     config_path.write_text(
         yaml.safe_dump(
             {
-                "memory": {"json_path": str(kg_path)},
+                "memory": {
+                    "json_path": str(kg_path),
+                    "embedding_provider": "hashing",
+                    "hashing_embedding_dimension": 64,
+                    "semantic_min_score": 0.05,
+                },
                 "runtime": {
                     "runtime_path": str(runtime_path),
                     "event_log_path": str(runtime_path / "event_log.jsonl"),
@@ -172,6 +177,38 @@ def test_runtime_query_tools_read_persisted_runtime(tmp_path, water_market_schem
     assert relation["current_matches"][0]["confidence"] == 0.85
 
 
+def test_runtime_semantic_query_reads_persisted_runtime_context(tmp_path, water_market_schema) -> None:
+    config_path = _write_runtime_fixture(tmp_path, water_market_schema)
+
+    payload = tool_api.freeman_query_runtime_context(
+        str(config_path),
+        text="greenhouse warming forecast",
+        limit=3,
+    )
+
+    assert payload["matched"] is True
+    assert payload["semantic"] is True
+    assert payload["count"] >= 1
+    assert payload["matches"][0]["id"] in {"ghg", "warming"}
+    assert any(item["kind"] == "forecast" for item in payload["evidence"])
+    assert any(item["kind"] == "causal_edge" for item in payload["evidence"])
+
+
+def test_runtime_semantic_query_reports_no_match(tmp_path, water_market_schema) -> None:
+    config_path = _write_runtime_fixture(tmp_path, water_market_schema)
+
+    payload = tool_api.freeman_query_runtime_context(
+        str(config_path),
+        text="sovereign bond spread default",
+        limit=3,
+    )
+
+    assert payload["matched"] is False
+    assert payload["count"] == 0
+    assert payload["matches"] == []
+    assert payload["no_match_reason"] == "no_runtime_evidence_matched"
+
+
 def test_invoke_tool_dispatches_runtime_query(tmp_path, water_market_schema) -> None:
     config_path = _write_runtime_fixture(tmp_path, water_market_schema)
 
@@ -182,3 +219,10 @@ def test_invoke_tool_dispatches_runtime_query(tmp_path, water_market_schema) -> 
 
     assert payload["count"] == 1
     assert payload["items"][0]["status"] == "pending"
+
+    semantic = tool_api.invoke_tool(
+        "freeman_query_runtime_context",
+        {"config_path": str(config_path), "text": "greenhouse warming", "limit": 3},
+    )
+
+    assert semantic["matched"] is True

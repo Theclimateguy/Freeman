@@ -172,6 +172,49 @@ class KGEdge:
         )
 
 
+@dataclass
+class KGSemanticHit:
+    """One ranked semantic-retrieval hit."""
+
+    node: KGNode
+    score: float
+    matched_directly: bool
+    source: str
+    seed_id: str | None = None
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "node_id": self.node.id,
+            "score": float(self.score),
+            "matched_directly": bool(self.matched_directly),
+            "source": str(self.source),
+            "seed_id": str(self.seed_id) if self.seed_id is not None else None,
+        }
+
+
+@dataclass
+class KGSemanticSearchResult:
+    """Structured semantic-query response with ranking trace."""
+
+    query_text: str
+    top_k: int
+    min_score: float
+    hits: List[KGSemanticHit]
+    direct_hits: List[KGSemanticHit]
+    query_embedding_used: bool
+
+    @property
+    def matched(self) -> bool:
+        return bool(self.direct_hits)
+
+    @property
+    def nodes(self) -> List[KGNode]:
+        return [hit.node for hit in self.hits]
+
+    def trace(self) -> List[Dict[str, Any]]:
+        return [hit.snapshot() for hit in self.direct_hits]
+
+
 class KnowledgeGraph:
     """NetworkX-backed knowledge graph with optional semantic retrieval."""
 
@@ -356,30 +399,62 @@ class KnowledgeGraph:
             value = value[part]
         return value
 
-    def semantic_query(self, query_text: str, top_k: int = 15) -> List[KGNode]:
-        """Return semantically relevant nodes plus 1-hop graph neighbors."""
+    def semantic_search(
+        self,
+        query_text: str,
+        top_k: int = 15,
+        *,
+        min_score: float = 0.05,
+    ) -> KGSemanticSearchResult:
+        """Return a structured semantic retrieval result plus 1-hop neighbors."""
 
         top_k = max(int(top_k), 0)
         if top_k <= 0:
-            return []
+            return KGSemanticSearchResult(
+                query_text=str(query_text),
+                top_k=0,
+                min_score=float(min_score),
+                hits=[],
+                direct_hits=[],
+                query_embedding_used=False,
+            )
         query_text = str(query_text).strip()
         if not query_text:
-            return self.query(status="active")[:top_k]
+            active_hits = [
+                KGSemanticHit(
+                    node=node,
+                    score=float(node.confidence),
+                    matched_directly=True,
+                    source="empty_query",
+                )
+                for node in self.query(status="active")[:top_k]
+            ]
+            return KGSemanticSearchResult(
+                query_text=query_text,
+                top_k=top_k,
+                min_score=float(min_score),
+                hits=active_hits,
+                direct_hits=active_hits,
+                query_embedding_used=False,
+            )
 
         query_embedding: list[float] | None = None
         if self.llm_adapter is not None:
             query_embedding = [float(value) for value in self.llm_adapter.embed(query_text)]
 
-        candidate_ids = self._semantic_candidate_ids(query_text, query_embedding=query_embedding, top_k=top_k)
-        ordered_ids: List[str] = []
+        direct_hits = self._semantic_ranked_hits(
+            query_text,
+            query_embedding=query_embedding,
+            top_k=top_k,
+            min_score=float(min_score),
+        )
+        ordered_hits: List[KGSemanticHit] = []
         seen = set()
-        for node_id in candidate_ids:
+        for hit in direct_hits:
+            node_id = hit.node.id
             if node_id not in self.graph or node_id in seen:
                 continue
-            node = self.get_node(node_id)
-            if node is None or node.status == "archived":
-                continue
-            ordered_ids.append(node_id)
+            ordered_hits.append(hit)
             seen.add(node_id)
             for neighbor_id in [*self.graph.predecessors(node_id), *self.graph.successors(node_id)]:
                 if neighbor_id in seen:
@@ -387,44 +462,87 @@ class KnowledgeGraph:
                 neighbor = self.get_node(neighbor_id)
                 if neighbor is None or neighbor.status == "archived":
                     continue
-                ordered_ids.append(neighbor_id)
+                ordered_hits.append(
+                    KGSemanticHit(
+                        node=neighbor,
+                        score=max(float(hit.score) * 0.5, 0.01 + 0.02 * float(neighbor.confidence)),
+                        matched_directly=False,
+                        source="graph_neighbor",
+                        seed_id=node_id,
+                    )
+                )
                 seen.add(neighbor_id)
-        nodes: List[KGNode] = []
-        for node_id in ordered_ids:
-            node = self.get_node(node_id)
-            if node is not None:
-                nodes.append(node)
-        return nodes
+        return KGSemanticSearchResult(
+            query_text=query_text,
+            top_k=top_k,
+            min_score=float(min_score),
+            hits=ordered_hits,
+            direct_hits=direct_hits,
+            query_embedding_used=query_embedding is not None,
+        )
 
-    def _semantic_candidate_ids(
+    def semantic_query(self, query_text: str, top_k: int = 15, *, min_score: float = 0.05) -> List[KGNode]:
+        """Return semantically relevant nodes plus 1-hop graph neighbors."""
+
+        return self.semantic_search(query_text, top_k=top_k, min_score=min_score).nodes
+
+    def _semantic_ranked_hits(
         self,
         query_text: str,
         *,
         query_embedding: list[float] | None,
         top_k: int,
-    ) -> List[str]:
+        min_score: float,
+    ) -> List[KGSemanticHit]:
         """Rank active nodes by embedding similarity or lexical-semantic fallback."""
 
         active_nodes = [node for node in self.nodes(lazy_embed=bool(self.llm_adapter is not None)) if node.status != "archived"]
         if not active_nodes:
             return []
 
-        if self.vectorstore is not None and query_embedding:
-            node_ids = self.vectorstore.query(query_embedding, top_k=max(top_k, min(top_k * 3, len(active_nodes))))
-            ranked_ids = [node_id for node_id in node_ids if node_id in self.graph]
-            if ranked_ids:
-                return ranked_ids[:top_k]
-
         scored: list[tuple[float, str]] = []
-        for node in active_nodes:
+        vector_ranked_ids: list[str] = []
+        if self.vectorstore is not None and query_embedding:
+            vector_ranked_ids = [
+                node_id
+                for node_id in self.vectorstore.query(
+                    query_embedding,
+                    top_k=max(top_k * 3, top_k),
+                )
+                if node_id in self.graph
+            ]
+        candidate_pool = (
+            [self.get_node(node_id, lazy_embed=True) for node_id in vector_ranked_ids]
+            if vector_ranked_ids
+            else active_nodes
+        )
+        seen_ids: set[str] = set()
+        for node in candidate_pool:
+            if node is None or node.id in seen_ids:
+                continue
+            seen_ids.add(node.id)
             score = self._semantic_score_node(query_text, node=node, query_embedding=query_embedding)
-            if score <= 0.0:
+            if score < float(min_score):
                 continue
             scored.append((score, node.id))
         if not scored:
-            return [node.id for node in sorted(active_nodes, key=lambda item: (-item.confidence, item.id))[:top_k]]
+            return []
         scored.sort(key=lambda item: (-item[0], item[1]))
-        return [node_id for _, node_id in scored[:top_k]]
+        hits: list[KGSemanticHit] = []
+        for score, node_id in scored[:top_k]:
+            node = self.get_node(node_id, lazy_embed=False)
+            if node is None:
+                continue
+            source = "vectorstore" if node_id in vector_ranked_ids else ("embedding" if query_embedding is not None else "lexical")
+            hits.append(
+                KGSemanticHit(
+                    node=node,
+                    score=float(score),
+                    matched_directly=True,
+                    source=source,
+                )
+            )
+        return hits
 
     def _semantic_score_node(
         self,
@@ -833,4 +951,4 @@ class KnowledgeGraph:
             self.save()
 
 
-__all__ = ["KGEdge", "KGNode", "KnowledgeGraph"]
+__all__ = ["KGEdge", "KGSemanticHit", "KGSemanticSearchResult", "KGNode", "KnowledgeGraph"]

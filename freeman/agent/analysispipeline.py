@@ -655,10 +655,7 @@ class AnalysisPipeline:
     def _get_context_nodes(self, signal_text: str) -> List[KGNode]:
         """Select retrieval context without exposing the full KG to downstream LLMs."""
 
-        if self.knowledge_graph.vectorstore is not None:
-            nodes = self.knowledge_graph.semantic_query(signal_text, top_k=self.config.retrieval_top_k)
-        else:
-            nodes = [node for node in self.knowledge_graph.nodes() if node.status != "archived"]
+        nodes = self.knowledge_graph.semantic_query(signal_text, top_k=self.config.retrieval_top_k)
         return nodes[: self.config.max_context_nodes]
 
     def _record_forecasts(

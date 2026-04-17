@@ -19,6 +19,11 @@ from freeman.domain.compiler import DomainCompiler
 from freeman.exceptions import HardStopException
 from freeman.game.runner import GameRunner, SimConfig
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
+from freeman.runtime.queryengine import (
+    RuntimeAnswerEngine,
+    RuntimeQueryEngine,
+    load_runtime_artifacts as _load_runtime_query_artifacts,
+)
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
@@ -87,51 +92,25 @@ def _build_sim_config(config: dict[str, Any]) -> SimConfig:
     )
 
 
-def _load_runtime_artifacts(config_path: str | Path | None = None) -> RuntimeArtifacts:
-    config, resolved_config_path = _load_config(config_path)
-    config_base = resolved_config_path.parent
-    runtime_cfg = dict(config.get("runtime", {}))
-    memory_cfg = dict(config.get("memory", {}))
-    runtime_path = _resolve_path(config_base, runtime_cfg.get("runtime_path"), "./data/runtime")
-    kg_path = _resolve_path(config_base, memory_cfg.get("json_path"), "./data/kg_state.json")
-    world_state_path = runtime_path / "world_state.json"
-    snapshot_cfg = dict(runtime_cfg.get("kg_snapshots", {}))
-    snapshot_dir = _resolve_path(config_base, snapshot_cfg.get("path"), str(runtime_path / "kg_snapshots"))
-
-    knowledge_graph = KnowledgeGraph(
-        json_path=kg_path,
-        auto_load=kg_path.exists(),
-        auto_save=False,
+def _load_runtime_artifacts(config_path: str | Path | None = None) -> Any:
+    artifacts = _load_runtime_query_artifacts(config_path)
+    snapshot_cfg = dict(artifacts.config.get("runtime", {}).get("kg_snapshots", {}))
+    snapshot_dir = _resolve_path(
+        artifacts.config_path.parent,
+        snapshot_cfg.get("path"),
+        str(artifacts.runtime_path / "kg_snapshots"),
     )
-    forecasts_path = runtime_path / "forecasts.json"
-    forecast_registry = ForecastRegistry(
-        json_path=forecasts_path,
-        auto_load=forecasts_path.exists(),
-        auto_save=False,
-    )
-    pipeline = AnalysisPipeline(
-        knowledge_graph=knowledge_graph,
-        forecast_registry=forecast_registry,
-        sim_config=_build_sim_config(config),
-        config_path=resolved_config_path,
-    )
-    checkpoint_path = runtime_path / "checkpoint.json"
-    if checkpoint_path.exists():
-        checkpoint_state = CheckpointManager().load(checkpoint_path)
-        pipeline.conscious_state = ConsciousState.from_dict(checkpoint_state.to_dict(), knowledge_graph)
-    world_state = None
-    if world_state_path.exists():
-        world_state = WorldState.from_snapshot(json.loads(world_state_path.read_text(encoding="utf-8")))
+    world_state_path = artifacts.runtime_path / "world_state.json"
     return RuntimeArtifacts(
-        config=config,
-        config_path=resolved_config_path,
-        runtime_path=runtime_path,
-        kg_path=kg_path,
+        config=artifacts.config,
+        config_path=artifacts.config_path,
+        runtime_path=artifacts.runtime_path,
+        kg_path=artifacts.kg_path,
         world_state_path=world_state_path,
         snapshot_dir=snapshot_dir,
-        knowledge_graph=knowledge_graph,
-        pipeline=pipeline,
-        world_state=world_state,
+        knowledge_graph=artifacts.knowledge_graph,
+        pipeline=artifacts.pipeline,
+        world_state=artifacts.world_state,
     )
 
 
@@ -431,6 +410,32 @@ def freeman_query_causal_edges(
     }
 
 
+def freeman_query_runtime_context(
+    config_path: str = "config.yaml",
+    text: str = "",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Return semantic runtime evidence across KG, forecasts, edges, and world state."""
+
+    if not str(text).strip():
+        raise ValueError("text is required.")
+    artifacts = _load_runtime_query_artifacts(config_path)
+    return RuntimeQueryEngine(artifacts).semantic_query(str(text), limit=max(int(limit), 1)).to_dict()
+
+
+def freeman_answer_query(
+    config_path: str = "config.yaml",
+    text: str = "",
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Answer a question from persisted runtime evidence using the configured LLM."""
+
+    if not str(text).strip():
+        raise ValueError("text is required.")
+    artifacts = _load_runtime_query_artifacts(config_path)
+    return RuntimeAnswerEngine(artifacts).answer(str(text), limit=max(int(limit), 1))
+
+
 def freeman_trace_relation_learning(
     config_path: str = "config.yaml",
     source: str = "",
@@ -640,6 +645,32 @@ FREEMAN_TOOLS = [
             "required": ["source", "target"],
         },
     },
+    {
+        "name": "freeman_query_runtime_context",
+        "description": "Run semantic retrieval over persisted runtime evidence: KG nodes, forecasts, causal edges, and world state.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "config_path": {"type": "string", "default": "config.yaml"},
+                "text": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "freeman_answer_query",
+        "description": "Answer a user question strictly from persisted runtime evidence using the configured LLM.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "config_path": {"type": "string", "default": "config.yaml"},
+                "text": {"type": "string"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["text"],
+        },
+    },
 ]
 
 FREEMAN_TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
@@ -653,6 +684,8 @@ FREEMAN_TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "freeman_query_anomalies": freeman_query_anomalies,
     "freeman_query_causal_edges": freeman_query_causal_edges,
     "freeman_trace_relation_learning": freeman_trace_relation_learning,
+    "freeman_query_runtime_context": freeman_query_runtime_context,
+    "freeman_answer_query": freeman_answer_query,
 }
 
 
@@ -684,6 +717,8 @@ __all__ = [
     "freeman_query_anomalies",
     "freeman_query_causal_edges",
     "freeman_trace_relation_learning",
+    "freeman_query_runtime_context",
+    "freeman_answer_query",
     "invoke_tool",
     "resolve_tool",
 ]

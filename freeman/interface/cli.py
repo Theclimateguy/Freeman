@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -14,29 +13,29 @@ import yaml
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.game.runner import SimConfig
 from freeman.interface.api import InterfaceAPI
+from freeman.interface.factory import (
+    build_chat_client as _shared_build_chat_client,
+    build_embedding_adapter as _shared_build_embedding_adapter,
+    build_knowledge_graph as _shared_build_knowledge_graph,
+    build_vectorstore as _shared_build_vectorstore,
+    resolve_event_log_path as _shared_event_log_path,
+    resolve_memory_json_path as _shared_memory_json_path,
+    resolve_path as _shared_resolve_path,
+    resolve_runtime_path as _shared_runtime_path,
+)
 from freeman.interface.identity import build_identity_state
 from freeman.interface.kgevolution import KnowledgeGraphEvolutionExporter
 from freeman.interface.kgexport import KnowledgeGraphExporter
 from freeman.interface.modeloverride import ModelOverrideAPI
 from freeman.interface.simulationdiff import build_simulation_diff, export_simulation_diff
-from freeman.llm import (
-    DeepSeekChatClient,
-    DeterministicEmbeddingAdapter,
-    ExplanationRenderer,
-    HashingEmbeddingAdapter,
-    IdentityNarrator,
-    OllamaChatClient,
-    OllamaEmbeddingClient,
-    OpenAIChatClient,
-    OpenAIEmbeddingClient,
-)
+from freeman.llm import ExplanationRenderer, IdentityNarrator
 from freeman.core.world import WorldState
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import SessionLog
-from freeman.memory.vectorstore import KGVectorStore
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
+from freeman.runtime.queryengine import RuntimeAnswerEngine, RuntimeQueryEngine, load_runtime_artifacts
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "agent": {
@@ -197,111 +196,27 @@ def _add_config_option(command_parser: argparse.ArgumentParser) -> None:
 
 
 def _memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
-    memory_cfg = config.get("memory", {})
-    return _resolve_path(config_path.parent, memory_cfg.get("json_path"), "./data/kg_state.json")
+    return _shared_memory_json_path(config, config_path=config_path)
 
 
 def _runtime_path(config: dict[str, Any], *, config_path: Path) -> Path:
-    runtime_cfg = config.get("runtime", {})
-    return _resolve_path(config_path.parent, runtime_cfg.get("runtime_path"), "./data/runtime")
+    return _shared_runtime_path(config, config_path=config_path)
 
 
 def _event_log_path(config: dict[str, Any], *, config_path: Path) -> Path:
-    runtime_cfg = config.get("runtime", {})
-    return _resolve_path(config_path.parent, runtime_cfg.get("event_log_path"), "./data/runtime/event_log.jsonl")
+    return _shared_event_log_path(config, config_path=config_path)
 
 
-def _build_vectorstore(config: dict[str, Any], *, config_path: Path) -> KGVectorStore | None:
-    memory_cfg = config.get("memory", {})
-    vector_cfg = memory_cfg.get("vector_store", {})
-    if not vector_cfg.get("enabled", False):
-        return None
-    backend = str(vector_cfg.get("backend", "chroma")).lower()
-    if backend != "chroma":
-        raise ValueError(f"Unsupported vector store backend: {backend}")
-    path = _resolve_path(config_path.parent, vector_cfg.get("path"), "./data/chroma_db")
-    collection = str(vector_cfg.get("collection", "kg_nodes"))
-    return KGVectorStore(path=path, collection_name=collection)
+def _build_vectorstore(config: dict[str, Any], *, config_path: Path):
+    return _shared_build_vectorstore(config, config_path=config_path)
 
 
 def _build_embedding_adapter(config: dict[str, Any], *, use_stub: bool = False) -> tuple[Any, str]:
-    memory_cfg = config.get("memory", {})
-    provider = str(memory_cfg.get("embedding_provider", "")).strip().lower()
-    model = str(memory_cfg.get("embedding_model", "nomic-embed-text"))
-    timeout_seconds = float(memory_cfg.get("embedding_timeout_seconds", 120.0))
-    prompt_prefix = str(memory_cfg.get("embedding_prompt_prefix", ""))
-    if use_stub:
-        return DeterministicEmbeddingAdapter(), "deterministic_stub"
-    if provider in {"deterministic", "stub"}:
-        return DeterministicEmbeddingAdapter(), "deterministic_stub"
-    if provider in {"hash", "hashing"}:
-        dimension = int(memory_cfg.get("hashing_embedding_dimension", 384))
-        return HashingEmbeddingAdapter(dimension=dimension), f"hashing:{dimension}"
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when memory.embedding_provider=openai")
-        return OpenAIEmbeddingClient(api_key=api_key, model=model), f"openai:{model}"
-    if provider in {"", "ollama"}:
-        base_url = str(memory_cfg.get("embedding_base_url", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")))
-        return (
-            OllamaEmbeddingClient(
-                model=model,
-                base_url=base_url,
-                timeout_seconds=timeout_seconds,
-                prompt_prefix=prompt_prefix,
-            ),
-            f"ollama:{model}",
-        )
-    raise ValueError(f"Unsupported embedding provider: {provider}")
+    return _shared_build_embedding_adapter(config, use_stub=use_stub)
 
 
 def _build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
-    """Build an optional text-generation client for `freeman ask`."""
-
-    llm_cfg = config.get("llm", {})
-    provider = str(llm_cfg.get("provider", "")).strip().lower()
-    model = str(llm_cfg.get("model", "")).strip()
-    base_url = str(llm_cfg.get("base_url", "")).strip()
-    timeout_seconds = float(llm_cfg.get("timeout_seconds", 90.0))
-    if provider in {"", "none"}:
-        return None, "llm provider is not configured"
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
-        if not api_key:
-            return None, "OPENAI_API_KEY or LLM_API_KEY is not set"
-        return (
-            OpenAIChatClient(
-                api_key=api_key,
-                model=model or "gpt-4o-mini",
-                base_url=base_url or "https://api.openai.com/v1",
-                timeout_seconds=timeout_seconds,
-            ),
-            None,
-        )
-    if provider == "deepseek":
-        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
-        if not api_key:
-            return None, "DEEPSEEK_API_KEY or LLM_API_KEY is not set"
-        return (
-            DeepSeekChatClient(
-                api_key=api_key,
-                model=model or "deepseek-chat",
-                base_url=base_url or "https://api.deepseek.com",
-                timeout_seconds=timeout_seconds,
-            ),
-            None,
-        )
-    if provider == "ollama":
-        return (
-            OllamaChatClient(
-                model=model or "qwen2.5-coder:14b",
-                base_url=base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
-                timeout_seconds=timeout_seconds,
-            ),
-            None,
-        )
-    return None, f"unsupported llm provider: {provider}"
+    return _shared_build_chat_client(config)
 
 
 def _build_sim_config(config: dict[str, Any]) -> SimConfig:
@@ -362,16 +277,17 @@ def _build_knowledge_graph(
     *,
     config_path: Path,
     embedding_adapter: Any | None = None,
-    vectorstore: KGVectorStore | None = None,
+    vectorstore: Any | None = None,
 ) -> KnowledgeGraph:
     """Instantiate the KG using the resolved config paths."""
 
-    return KnowledgeGraph(
-        json_path=_memory_json_path(config, config_path=config_path),
+    return _shared_build_knowledge_graph(
+        config,
+        config_path=config_path,
+        embedding_adapter=embedding_adapter,
+        vectorstore=vectorstore,
         auto_load=True,
         auto_save=True,
-        llm_adapter=embedding_adapter,
-        vectorstore=vectorstore,
     )
 
 
@@ -649,26 +565,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ask":
-        nodes = _retrieve_nodes(
-            knowledge_graph,
+        runtime_artifacts = load_runtime_artifacts(config_path)
+        chat_client, llm_error = _build_chat_client(config)
+        payload = RuntimeAnswerEngine(runtime_artifacts).answer(
             args.query,
             limit=args.limit,
-            status=args.status,
-            node_type=args.node_type,
-            min_confidence=args.min_confidence,
+            chat_client=chat_client,
         )
-        chat_client, llm_error = _build_chat_client(config)
-        answer, answer_error = _summarize_query(args.query, nodes, chat_client=chat_client)
-        _print_json(
-            {
-                "query": args.query,
-                "answer": answer,
-                "answer_generated": answer is not None,
-                "llm_error": answer_error or llm_error,
-                "match_count": len(nodes),
-                "matches": [_query_node_payload(node) for node in nodes],
-            }
-        )
+        payload["llm_error"] = payload.get("llm_error") or llm_error
+        payload["match_count"] = payload.get("count", 0)
+        _print_json(payload)
         return 0
 
     if args.command == "status":
@@ -686,14 +592,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "query":
         if args.text:
-            payload = InterfaceAPI(knowledge_graph).post_query(
-                text=args.text,
-                status=args.status,
-                node_type=args.node_type,
-                min_confidence=args.min_confidence,
-                semantic=True,
+            runtime_artifacts = load_runtime_artifacts(config_path)
+            payload = RuntimeQueryEngine(runtime_artifacts).semantic_query(
+                args.text,
                 limit=args.limit or int(config.get("memory", {}).get("retrieval_top_k", 15)),
-            )
+            ).to_dict()
         else:
             payload = InterfaceAPI(knowledge_graph).post_query(
                 text=args.text,

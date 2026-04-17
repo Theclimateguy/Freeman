@@ -38,6 +38,7 @@ from freeman.agent.parameterestimator import ParameterEstimator
 from freeman.agent.signalingestion import ManualSignalSource, Signal, SignalIngestionEngine, SignalMemory
 from freeman.core.scorer import score_outcomes
 from freeman.game.runner import SimConfig
+from freeman.interface.factory import build_embedding_adapter, build_knowledge_graph, build_vectorstore
 from freeman.llm import DeepSeekChatClient, OllamaChatClient, OpenAIChatClient
 from freeman.llm.orchestrator import DeepSeekFreemanOrchestrator
 from freeman.memory.knowledgegraph import KnowledgeGraph
@@ -45,6 +46,7 @@ from freeman.core.world import WorldState
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.kgsnapshot import KGSnapshotManager, snapshot_manager_from_config
+from freeman.runtime.queryengine import RuntimeAnswerEngine, RuntimeQueryEngine, load_runtime_artifacts as _load_runtime_query_artifacts
 from freeman.runtime.stream import StreamCursorStore
 from freeman.utils import deep_copy_jsonable
 
@@ -681,8 +683,9 @@ def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--include-watch", action="store_true")
     parser.add_argument("--keyword", action="append", default=None)
-    parser.add_argument("--query", choices=["forecasts", "explain", "anomalies", "causal"], default=None)
+    parser.add_argument("--query", choices=["forecasts", "explain", "anomalies", "causal", "semantic", "answer"], default=None)
     parser.add_argument("--forecast-id", default=None)
+    parser.add_argument("--text", default=None)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--status", default=None)
     parser.add_argument("--log-level", default="INFO")
@@ -690,24 +693,8 @@ def _build_parser(*, default_config_path: str) -> argparse.ArgumentParser:
 
 
 def _load_query_pipeline(config: dict[str, Any], paths: RuntimePaths) -> AnalysisPipeline:
-    kg = KnowledgeGraph(json_path=paths.kg_path, auto_load=paths.kg_path.exists(), auto_save=False)
-    forecasts_path = paths.runtime_path / "forecasts.json"
-    forecast_registry = ForecastRegistry(
-        json_path=forecasts_path,
-        auto_load=forecasts_path.exists(),
-        auto_save=False,
-    )
-    pipeline = AnalysisPipeline(
-        knowledge_graph=kg,
-        forecast_registry=forecast_registry,
-        sim_config=_build_sim_config(config),
-        config_path=paths.config_path,
-    )
-    checkpoint_path = paths.runtime_path / "checkpoint.json"
-    if checkpoint_path.exists():
-        loaded_state = CheckpointManager().load(checkpoint_path)
-        pipeline.conscious_state = ConsciousState.from_dict(loaded_state.to_dict(), kg)
-    return pipeline
+    del config
+    return _load_runtime_query_artifacts(paths.config_path).pipeline
 
 
 def _query_anomalies(pipeline: AnalysisPipeline) -> dict[str, Any]:
@@ -746,6 +733,27 @@ def _query_causal_edges(pipeline: AnalysisPipeline, *, limit: int) -> list[dict[
 
 
 def _handle_query_mode(args: argparse.Namespace, config: dict[str, Any], paths: RuntimePaths) -> int:
+    if args.query in {"semantic", "answer"}:
+        if not str(args.text or "").strip():
+            raise RuntimeError(f"--query {args.query} requires --text.")
+        artifacts = _load_runtime_query_artifacts(paths.config_path)
+        if args.query == "semantic":
+            print(
+                json.dumps(
+                    RuntimeQueryEngine(artifacts).semantic_query(str(args.text), limit=args.limit).to_dict(),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        print(
+            json.dumps(
+                RuntimeAnswerEngine(artifacts).answer(str(args.text), limit=args.limit),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     pipeline = _load_query_pipeline(config, paths)
     if args.query == "forecasts":
         payload = [summary.to_dict() for summary in pipeline.list_forecasts(status=args.status)]
@@ -986,7 +994,18 @@ def _bootstrap(
         auto_load=bool(args.resume),
         auto_save=True,
     )
-    knowledge_graph = knowledge_graph or KnowledgeGraph(json_path=paths.kg_path, auto_load=True, auto_save=True)
+    vectorstore = build_vectorstore(config, config_path=paths.config_path)
+    embedding_adapter = None
+    if vectorstore is not None or str(config.get("memory", {}).get("embedding_provider", "")).strip():
+        embedding_adapter, _embedding_backend = build_embedding_adapter(config)
+    knowledge_graph = knowledge_graph or build_knowledge_graph(
+        config,
+        config_path=paths.config_path,
+        embedding_adapter=embedding_adapter,
+        vectorstore=vectorstore,
+        auto_load=True,
+        auto_save=True,
+    )
     pipeline = AnalysisPipeline(
         knowledge_graph=knowledge_graph,
         sim_config=_build_sim_config(config),

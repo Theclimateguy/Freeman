@@ -88,20 +88,30 @@ def test_semantic_query_returns_seed_nodes_plus_neighbors(tmp_path, chroma_clien
     assert [node.id for node in results] == ["water", "reservoir"]
 
 
-def test_pipeline_context_falls_back_to_active_nodes_without_vectorstore(tmp_path) -> None:
+def test_pipeline_context_uses_lexical_semantics_without_vectorstore(tmp_path) -> None:
     kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
-    kg.add_node(KGNode(id="a", label="A", content="A", confidence=0.8))
-    kg.add_node(KGNode(id="b", label="B", content="B", confidence=0.7))
-    kg.add_node(KGNode(id="c", label="C", content="C", confidence=0.6))
+    kg.add_node(KGNode(id="a", label="Drought Alert", content="Water drought risk is rising.", confidence=0.8))
+    kg.add_node(KGNode(id="b", label="Power", content="Power demand is stable.", confidence=0.7))
+    kg.add_node(KGNode(id="c", label="Markets", content="Commodity markets are quiet.", confidence=0.6))
     kg.add_node(KGNode(id="archived", label="Archived", content="Archived", confidence=0.1, status="archived"))
     pipeline = AnalysisPipeline(
         knowledge_graph=kg,
         config=AnalysisPipelineConfig(retrieval_top_k=1, max_context_nodes=2),
     )
 
-    context = pipeline._get_context_nodes("unused")
+    context = pipeline._get_context_nodes("drought water")
 
-    assert [node.id for node in context] == ["a", "b"]
+    assert [node.id for node in context] == ["a"]
+
+
+def test_semantic_query_returns_empty_when_no_nodes_match(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(KGNode(id="adapt", label="Adapt", content="Heat adaptation lowers migration losses.", confidence=0.8))
+    kg.add_node(KGNode(id="power", label="Power", content="Power demand rises during cold snaps.", confidence=0.9))
+
+    results = kg.semantic_query("sovereign bond spread", top_k=2)
+
+    assert results == []
 
 
 def test_semantic_query_without_vectorstore_uses_embeddings(tmp_path) -> None:
@@ -357,5 +367,65 @@ def test_cli_query_uses_semantic_retrieval_without_vectorstore(tmp_path, monkeyp
 
     assert exit_code == 0
     assert output["semantic"] is True
+    assert output["matched"] is True
     assert output["count"] == 1
     assert output["matches"][0]["id"] == "adapt"
+
+
+def test_cli_query_reports_no_match_without_fallback(tmp_path, monkeypatch, capsys) -> None:
+    graph_path = tmp_path / "kg.json"
+    config_path = tmp_path / "config.yaml"
+    payload = {
+        "backend": "networkx-json",
+        "json_path": str(graph_path),
+        "nodes": [
+            {
+                "id": "adapt",
+                "label": "Adapt",
+                "node_type": "claim",
+                "content": "Heat adaptation lowers migration losses.",
+                "confidence": 0.8,
+                "status": "active",
+                "evidence": [],
+                "sources": [],
+                "metadata": {},
+                "embedding": [],
+                "created_at": "2026-03-27T00:00:00+00:00",
+                "updated_at": "2026-03-27T00:00:00+00:00",
+                "archived_at": None,
+            }
+        ],
+        "edges": [],
+    }
+    graph_path.write_text(json.dumps(payload), encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "memory": {
+                    "json_path": str(graph_path),
+                    "embedding_provider": "hashing",
+                    "retrieval_top_k": 5,
+                    "max_context_nodes": 10,
+                    "session_log_path": str(tmp_path / "sessions"),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = MappingEmbeddingAdapter(
+        {
+            "Heat adaptation lowers migration losses.": [1.0, 0.0, 0.0],
+            "sovereign bond spread": [0.0, 1.0, 0.0],
+        }
+    )
+    monkeypatch.setattr("freeman.interface.cli._build_embedding_adapter", lambda config, use_stub=False: (adapter, "mock"))
+
+    exit_code = cli_main(["--config-path", str(config_path), "query", "--text", "sovereign bond spread", "--limit", "2"])
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["semantic"] is True
+    assert output["matched"] is False
+    assert output["count"] == 0
+    assert output["matches"] == []
+    assert output["no_match_reason"] == "no_runtime_evidence_matched"

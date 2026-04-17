@@ -162,6 +162,15 @@ freeman query --config-path config.climate.clean.yaml --text "heat adaptation mi
 - embedding retrieval through the configured adapter when available
 - ChromaDB nearest-neighbor lookup when the optional vector store is enabled
 - deterministic lexical-semantic ranking when no vector store is configured
+- strict no-match semantics instead of falling back to unrelated high-confidence nodes
+
+They now answer against persisted runtime context, not only raw KG nodes:
+
+- semantic KG matches
+- saved forecasts
+- current causal edges
+- current world snapshot
+- self-model and anomaly nodes already stored in the KG
 
 This lets a clean local instance answer semantically meaningful questions against a trained graph even before `kg-reindex` or Chroma setup.
 
@@ -254,6 +263,8 @@ python -m freeman.runtime.stream_runtime --config-path config.yaml --query forec
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query explain --forecast-id <forecast_id>
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query anomalies
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query causal --limit 20
+python -m freeman.runtime.stream_runtime --config-path config.yaml --query semantic --text "greenhouse warming" --limit 10
+python -m freeman.runtime.stream_runtime --config-path config.yaml --query answer --text "What is the current warming risk?" --limit 10
 ```
 
 If you want other agents to call Freeman as a stateful knowledge daemon, run the MCP wrapper:
@@ -270,6 +281,8 @@ The MCP server exposes the in-memory simulation tools plus persistent runtime qu
 - `freeman_query_anomalies`
 - `freeman_query_causal_edges`
 - `freeman_trace_relation_learning`
+- `freeman_query_runtime_context`
+- `freeman_answer_query`
 
 `freeman_trace_relation_learning` reads recent KG snapshots and is the right tool when an external agent asks what Freeman learned about a relation `X -> Y` over the last `N` runtime steps.
 
@@ -317,9 +330,9 @@ This keeps the separation strict: `ConsciousState -> LLM -> external world`, nev
 
 - `freeman init`: create a config file and empty storage for the knowledge graph and session logs.
 - `freeman run`: compile a schema and run the full analysis pipeline.
-- `freeman ask`: retrieve relevant memory and, when an LLM is configured, answer a question from stored graph context.
+- `freeman ask`: retrieve relevant runtime evidence and, when an LLM is configured, answer a question from stored KG/forecast/causal/world context.
 - `freeman status`: inspect configured storage paths and current active-memory counts.
-- `freeman query`: query graph nodes directly; `--text` uses semantic retrieval and the remaining filters are applied after ranking.
+- `freeman query`: query graph nodes directly; `--text` uses runtime semantic retrieval over KG + forecasts + causal edges + world state.
 - `freeman export-kg`: export the graph for inspection or downstream tooling.
 - `freeman reconcile`: merge one saved session log back into the long-term graph.
 - `freeman kg-archive`: archive low-confidence or obsolete graph nodes.
@@ -333,7 +346,8 @@ If you are integrating Freeman into Python code rather than only using the CLI, 
 - `freeman.agent.AnalysisPipeline`: compile -> simulate -> verify -> write to memory.
 - `freeman.agent.SignalIngestionEngine`: normalize incoming signals and decide whether they deserve attention.
 - `freeman.agent.ParameterEstimator`: ask an LLM to adjust an existing world when new evidence changes the regime.
-- `freeman.memory.KnowledgeGraph`: persistent graph memory with universal semantic retrieval, optional Chroma acceleration, and deterministic fallback ranking.
+- `freeman.memory.KnowledgeGraph`: persistent graph memory with universal semantic retrieval, optional Chroma acceleration, and strict no-match behavior.
+- `freeman.runtime.queryengine`: shared runtime semantic retrieval and answer synthesis over persisted runtime artifacts.
 - `freeman.verifier.Verifier`: structural and causal checks for world consistency.
 
 This advanced path is the right place if you want an agent that reacts to incoming news/data streams, updates its internal state, and keeps learning from prior forecast errors.

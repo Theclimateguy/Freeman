@@ -82,10 +82,14 @@ This is the implementation-facing map of modules, classes, and primary functions
 - Knowledge graph:
   - `KGNode`
   - `KGEdge`
+  - `KGSemanticHit`
+  - `KGSemanticSearchResult`
   - `KnowledgeGraph`
   - `KnowledgeGraph.explain_causal_path()`
   - `semantic_query()`
+  - `semantic_search()`
     - universal semantic retrieval: vector store when available, direct embedding ranking otherwise, deterministic lexical-semantic fallback if no vector store is configured
+    - strict no-match semantics: unrelated nodes are not substituted as fallback hits
 - Semantic index:
   - `KGVectorStore`
 - Session log:
@@ -174,6 +178,8 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `main()`
   - `identity`
   - `explain --trace-id <id>`
+  - `factory.py`
+    - shared builders for config-backed embeddings, vector stores, chat clients, and KG paths
 - REST:
   - `InterfaceAPI`
   - `run_server()`
@@ -222,6 +228,12 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `AgentRuntime`
 - `KGSnapshotManager`
 - `stream_runtime_main()`
+- `RuntimeArtifacts`
+- `RuntimeEvidence`
+- `RuntimeQueryResult`
+- `RuntimeQueryEngine`
+- `RuntimeAnswerEngine`
+- `load_runtime_artifacts()`
 
 ### `freeman.api`
 
@@ -238,6 +250,11 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `freeman_get_runtime_summary()`
   - `freeman_query_forecasts()`
   - `freeman_explain_forecast()`
+  - `freeman_query_anomalies()`
+  - `freeman_query_causal_edges()`
+  - `freeman_trace_relation_learning()`
+  - `freeman_query_runtime_context()`
+  - `freeman_answer_query()`
   - `freeman_query_anomalies()`
   - `freeman_query_causal_edges()`
   - `freeman_trace_relation_learning()`
@@ -340,6 +357,10 @@ Runtime command:
   - print saved `anomaly_candidate` nodes together with escalated `ontology_gap` traits
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query causal --limit 20`
   - print recent exported causal edges (`causes`, `propagates_to`, `threshold_exceeded`)
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --query semantic --text "greenhouse warming" --limit 10`
+  - run semantic retrieval over persisted runtime context: KG nodes, saved forecasts, causal edges, and the latest world snapshot
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --query answer --text "What changed in warming risk?" --limit 10`
+  - answer a user question strictly from persisted runtime evidence using the configured LLM summarizer
 - `freeman-mcp --transport stdio`
   - expose Freeman through MCP for external agents; wraps the OpenAI-style tool surface from `freeman.api.tool_api`
 - `freeman-mcp --transport streamable-http --host 127.0.0.1 --port 8000`
