@@ -39,7 +39,12 @@ from freeman.game.runner import SimConfig  # noqa: E402
 from freeman.llm import HashingEmbeddingAdapter, OllamaEmbeddingClient  # noqa: E402
 from freeman.llm.deepseek import DeepSeekChatClient  # noqa: E402
 from freeman.memory import KGDelta, KGEdge, KGNode, KGVectorStore, KnowledgeGraph, Reconciler, SessionLog  # noqa: E402
-from scripts.benchmark_faab.metrics import brier_score  # noqa: E402
+from scripts.benchmark_faab.metrics import (  # noqa: E402
+    brier_score,
+    max_distribution_l1_distance,
+    outcome_tar_at_n,
+    probability_tar_at_n,
+)
 
 LOGGER = logging.getLogger("faab")
 
@@ -168,12 +173,21 @@ class EvaluationResult:
     t1_accuracy: float | None
     t0_brier_score: float | None
     t1_brier_score: float | None
-    retrieval_precision: float
-    autonomy_flag: bool
+    retrieval_precision: float = 0.0
+    autonomy_flag: bool = False
+    t0_max_l1_repeat_distance: float | None = None
+    t1_max_l1_repeat_distance: float | None = None
+    t0_primary_tar: float | None = None
+    t1_primary_tar: float | None = None
+    t0_secondary_tar: float | None = None
+    t1_secondary_tar: float | None = None
+    repeat_runs: int = 1
+    successful_runs: int = 1
     status: str = "ok"
     error: str = ""
     t0_prediction: StepPrediction | None = None
     t1_prediction: StepPrediction | None = None
+    repeats: List[Dict[str, Any]] = field(default_factory=list)
 
     def metrics_row(self) -> Dict[str, Any]:
         return {
@@ -183,8 +197,16 @@ class EvaluationResult:
             "t1_accuracy": self.t1_accuracy,
             "t0_brier_score": self.t0_brier_score,
             "t1_brier_score": self.t1_brier_score,
+            "t0_primary_tar": self.t0_primary_tar,
+            "t1_primary_tar": self.t1_primary_tar,
+            "t0_secondary_tar": self.t0_secondary_tar,
+            "t1_secondary_tar": self.t1_secondary_tar,
             "retrieval_precision": self.retrieval_precision,
             "autonomy_flag": self.autonomy_flag,
+            "t0_max_l1_repeat_distance": self.t0_max_l1_repeat_distance,
+            "t1_max_l1_repeat_distance": self.t1_max_l1_repeat_distance,
+            "repeat_runs": self.repeat_runs,
+            "successful_runs": self.successful_runs,
         }
 
     def snapshot(self) -> Dict[str, Any]:
@@ -195,12 +217,21 @@ class EvaluationResult:
             "t1_accuracy": self.t1_accuracy,
             "t0_brier_score": self.t0_brier_score,
             "t1_brier_score": self.t1_brier_score,
+            "t0_primary_tar": self.t0_primary_tar,
+            "t1_primary_tar": self.t1_primary_tar,
+            "t0_secondary_tar": self.t0_secondary_tar,
+            "t1_secondary_tar": self.t1_secondary_tar,
             "retrieval_precision": self.retrieval_precision,
             "autonomy_flag": self.autonomy_flag,
+            "t0_max_l1_repeat_distance": self.t0_max_l1_repeat_distance,
+            "t1_max_l1_repeat_distance": self.t1_max_l1_repeat_distance,
+            "repeat_runs": self.repeat_runs,
+            "successful_runs": self.successful_runs,
             "status": self.status,
             "error": self.error,
             "t0_prediction": self.t0_prediction.snapshot() if self.t0_prediction is not None else None,
             "t1_prediction": self.t1_prediction.snapshot() if self.t1_prediction is not None else None,
+            "repeats": self.repeats,
         }
 
 
@@ -220,6 +251,8 @@ class RunnerConfig:
     deepseek_timeout_seconds: float = 90.0
     shared_memory_across_cases: bool = False
     state_time_decay: float = 0.5
+    repeat_runs: int = 1
+    tar_probability_epsilon: float = 1.0e-9
 
 
 class HeuristicBenchmarkClient:
@@ -988,6 +1021,13 @@ def _prediction_distribution(prediction: StepPrediction, allowed_outcomes: Seque
     return distribution
 
 
+def _mean_or_none(values: Sequence[float | None]) -> float | None:
+    numeric = [float(value) for value in values if value is not None]
+    if not numeric:
+        return None
+    return float(sum(numeric) / len(numeric))
+
+
 def _default_trace_payload(case: BenchmarkCase, mode: str) -> Dict[str, Any]:
     return {
         "case": case.snapshot(),
@@ -1508,13 +1548,15 @@ class BenchmarkRunner:
             autonomy_flag=bool(step == "t1" and len(retrieved_nodes) > 0),
         )
 
-    def _write_trace(self, case: BenchmarkCase, trace: Dict[str, Any]) -> Path:
-        target = self.traces_dir / f"{_slugify(case.case_id)}__{_slugify(self.mode)}.json"
+    def _write_trace(self, case: BenchmarkCase, trace: Dict[str, Any], *, repeat_index: int | None = None) -> Path:
+        suffix = "" if repeat_index is None else f"__repeat_{int(repeat_index):02d}"
+        target = self.traces_dir / f"{_slugify(case.case_id)}__{_slugify(self.mode)}{suffix}.json"
         target.write_text(json.dumps(trace, indent=2, sort_keys=True, ensure_ascii=False), encoding="utf-8")
         return target
 
-    def _write_kg_snapshot(self, case: BenchmarkCase) -> Path:
-        target = self.snapshots_dir / f"{_slugify(case.case_id)}__{_slugify(self.mode)}__t1.json"
+    def _write_kg_snapshot(self, case: BenchmarkCase, *, repeat_index: int | None = None) -> Path:
+        suffix = "" if repeat_index is None else f"__repeat_{int(repeat_index):02d}"
+        target = self.snapshots_dir / f"{_slugify(case.case_id)}__{_slugify(self.mode)}{suffix}__t1.json"
         knowledge_graph: KnowledgeGraph | None = self._state.get("knowledge_graph")
         if knowledge_graph is None:
             payload = {"backend": "none", "mode": self.mode, "case_id": case.case_id}
@@ -1523,7 +1565,12 @@ class BenchmarkRunner:
         knowledge_graph.save(target)
         return target
 
-    def evaluate_case(self, case: BenchmarkCase | Dict[str, Any]) -> EvaluationResult:
+    def _evaluate_case_once(
+        self,
+        case: BenchmarkCase | Dict[str, Any],
+        *,
+        repeat_index: int | None = None,
+    ) -> EvaluationResult:
         """Evaluate one case under the runner mode."""
 
         benchmark_case = case if isinstance(case, BenchmarkCase) else BenchmarkCase.from_payload(case)
@@ -1566,9 +1613,9 @@ class BenchmarkRunner:
                 )
             trace["steps"]["t0"] = t0_prediction.snapshot()
             trace["steps"]["t1"] = t1_prediction.snapshot()
-            snapshot_path = self._write_kg_snapshot(benchmark_case)
+            snapshot_path = self._write_kg_snapshot(benchmark_case, repeat_index=repeat_index)
             trace["kg_snapshot_path"] = str(snapshot_path)
-            self._write_trace(benchmark_case, trace)
+            self._write_trace(benchmark_case, trace, repeat_index=repeat_index)
             return EvaluationResult(
                 case_id=benchmark_case.case_id,
                 mode=self.mode,
@@ -1584,15 +1631,17 @@ class BenchmarkRunner:
                 ),
                 retrieval_precision=float(t1_prediction.retrieval_precision),
                 autonomy_flag=bool(t1_prediction.autonomy_flag),
+                repeat_runs=1,
+                successful_runs=1,
                 t0_prediction=t0_prediction,
                 t1_prediction=t1_prediction,
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("case=%s mode=%s failed: %s", benchmark_case.case_id, self.mode, exc)
             trace["errors"].append({"timestamp": _utc_now(), "message": str(exc)})
-            self._write_trace(benchmark_case, trace)
+            self._write_trace(benchmark_case, trace, repeat_index=repeat_index)
             try:
-                self._write_kg_snapshot(benchmark_case)
+                self._write_kg_snapshot(benchmark_case, repeat_index=repeat_index)
             except Exception:  # noqa: BLE001
                 LOGGER.exception("case=%s mode=%s snapshot write failed", benchmark_case.case_id, self.mode)
             return EvaluationResult(
@@ -1604,9 +1653,104 @@ class BenchmarkRunner:
                 t1_brier_score=None,
                 retrieval_precision=0.0,
                 autonomy_flag=False,
+                repeat_runs=1,
+                successful_runs=0,
                 status="failed",
                 error=str(exc),
             )
+
+    def _aggregate_repeated_case(
+        self,
+        case: BenchmarkCase,
+        repeats: Sequence[EvaluationResult],
+    ) -> EvaluationResult:
+        """Aggregate repeated runs of one benchmark case into one result row."""
+
+        successful = [result for result in repeats if result.status == "ok"]
+        representative = successful[0] if successful else repeats[0]
+        allowed_outcomes = [outcome["id"] for outcome in _domain_template(case.domain, case_id=case.case_id)["outcomes"]]
+        t0_max_l1_repeat_distance = None
+        t1_max_l1_repeat_distance = None
+        primary_t0 = None
+        primary_t1 = None
+        secondary_t0 = None
+        secondary_t1 = None
+        if len(successful) == len(repeats) and successful:
+            t0_distributions = [
+                _prediction_distribution(result.t0_prediction, allowed_outcomes)
+                for result in successful
+                if result.t0_prediction is not None
+            ]
+            t1_distributions = [
+                _prediction_distribution(result.t1_prediction, allowed_outcomes)
+                for result in successful
+                if result.t1_prediction is not None
+            ]
+            t0_outcomes = [result.t0_prediction.dominant_outcome for result in successful if result.t0_prediction is not None]
+            t1_outcomes = [result.t1_prediction.dominant_outcome for result in successful if result.t1_prediction is not None]
+            if len(t0_distributions) == len(repeats):
+                t0_max_l1_repeat_distance = max_distribution_l1_distance(t0_distributions)
+                primary_t0 = probability_tar_at_n(
+                    t0_distributions,
+                    epsilon=self.config.tar_probability_epsilon,
+                )
+            if len(t1_distributions) == len(repeats):
+                t1_max_l1_repeat_distance = max_distribution_l1_distance(t1_distributions)
+                primary_t1 = probability_tar_at_n(
+                    t1_distributions,
+                    epsilon=self.config.tar_probability_epsilon,
+                )
+            if len(t0_outcomes) == len(repeats):
+                secondary_t0 = outcome_tar_at_n(t0_outcomes)
+            if len(t1_outcomes) == len(repeats):
+                secondary_t1 = outcome_tar_at_n(t1_outcomes)
+
+        errors = [result.error for result in repeats if result.error]
+        aggregate_status = "ok" if len(successful) == len(repeats) else "failed"
+        return EvaluationResult(
+            case_id=case.case_id,
+            mode=self.mode,
+            t0_accuracy=_mean_or_none([result.t0_accuracy for result in successful]),
+            t1_accuracy=_mean_or_none([result.t1_accuracy for result in successful]),
+            t0_brier_score=_mean_or_none([result.t0_brier_score for result in successful]),
+            t1_brier_score=_mean_or_none([result.t1_brier_score for result in successful]),
+            t0_max_l1_repeat_distance=t0_max_l1_repeat_distance,
+            t1_max_l1_repeat_distance=t1_max_l1_repeat_distance,
+            t0_primary_tar=primary_t0,
+            t1_primary_tar=primary_t1,
+            t0_secondary_tar=secondary_t0,
+            t1_secondary_tar=secondary_t1,
+            retrieval_precision=float(_mean_or_none([result.retrieval_precision for result in successful]) or 0.0),
+            autonomy_flag=any(result.autonomy_flag for result in successful),
+            repeat_runs=len(repeats),
+            successful_runs=len(successful),
+            status=aggregate_status,
+            error=" | ".join(errors),
+            t0_prediction=representative.t0_prediction,
+            t1_prediction=representative.t1_prediction,
+            repeats=[
+                {
+                    "repeat_index": index,
+                    **result.snapshot(),
+                }
+                for index, result in enumerate(repeats, start=1)
+            ],
+        )
+
+    def evaluate_case(self, case: BenchmarkCase | Dict[str, Any]) -> EvaluationResult:
+        """Evaluate one case under the runner mode."""
+
+        benchmark_case = case if isinstance(case, BenchmarkCase) else BenchmarkCase.from_payload(case)
+        repeat_runs = max(int(self.config.repeat_runs), 1)
+        repeats: List[EvaluationResult] = []
+        for repeat_index in range(1, repeat_runs + 1):
+            trace_repeat_index = repeat_index if repeat_runs > 1 else None
+            if repeat_runs > 1 or not self.config.shared_memory_across_cases:
+                self._initialize_case_state(benchmark_case)
+            else:
+                self._ensure_case_state(benchmark_case)
+            repeats.append(self._evaluate_case_once(benchmark_case, repeat_index=trace_repeat_index))
+        return self._aggregate_repeated_case(benchmark_case, repeats)
 
     def run_cases(self, cases: Iterable[BenchmarkCase | Dict[str, Any]]) -> List[EvaluationResult]:
         """Evaluate a sequence of cases."""
@@ -1614,8 +1758,6 @@ class BenchmarkRunner:
         results: List[EvaluationResult] = []
         items = [item if isinstance(item, BenchmarkCase) else BenchmarkCase.from_payload(item) for item in cases]
         for case in tqdm(items, desc=f"{self.mode}", unit="case"):
-            if not self.config.shared_memory_across_cases:
-                self._initialize_case_state(case)
             results.append(self.evaluate_case(case))
         metrics = pd.DataFrame([result.metrics_row() for result in results])
         metrics.to_csv(self.run_dir / f"metrics_{_slugify(self.mode)}.csv", index=False)

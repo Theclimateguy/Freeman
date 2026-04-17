@@ -28,7 +28,7 @@ Typical fits:
 - Carry state forward when new events arrive, including shock decay and dynamic recalibration of outcome weights or causal strengths.
 - Check the world for invalid, unstable, or contradictory behavior before and during simulation.
 - Store analyses in a persistent knowledge graph.
-- Optionally add semantic retrieval over that graph with ChromaDB.
+- Use universal semantic retrieval over that graph; ChromaDB is optional acceleration, not a requirement.
 - Answer questions against stored memory with `freeman ask`.
 - Track forecasts, conflicts, anomalies, and proactive events in the agent layer.
 - Export the knowledge graph as HTML, JSON-LD, DOT, or interactive 3D HTML.
@@ -149,6 +149,21 @@ Ask a follow-up question after you have accumulated relevant memory and configur
 ```bash
 freeman ask "What changed most since the previous similar case?" --config-path config.yaml
 ```
+
+Run direct semantic lookup over graph memory:
+
+```bash
+freeman query --config-path config.yaml --text "power outage extreme weather" --limit 5
+freeman query --config-path config.climate.clean.yaml --text "heat adaptation migration" --limit 5
+```
+
+`freeman ask` and `freeman query --text ...` now use the same retrieval stack:
+
+- embedding retrieval through the configured adapter when available
+- ChromaDB nearest-neighbor lookup when the optional vector store is enabled
+- deterministic lexical-semantic ranking when no vector store is configured
+
+This lets a clean local instance answer semantically meaningful questions against a trained graph even before `kg-reindex` or Chroma setup.
 
 Human-in-the-loop workflow:
 
@@ -304,11 +319,11 @@ This keeps the separation strict: `ConsciousState -> LLM -> external world`, nev
 - `freeman run`: compile a schema and run the full analysis pipeline.
 - `freeman ask`: retrieve relevant memory and, when an LLM is configured, answer a question from stored graph context.
 - `freeman status`: inspect configured storage paths and current active-memory counts.
-- `freeman query`: query graph nodes directly without summarization.
+- `freeman query`: query graph nodes directly; `--text` uses semantic retrieval and the remaining filters are applied after ranking.
 - `freeman export-kg`: export the graph for inspection or downstream tooling.
 - `freeman reconcile`: merge one saved session log back into the long-term graph.
 - `freeman kg-archive`: archive low-confidence or obsolete graph nodes.
-- `freeman kg-reindex`: rebuild embeddings for semantic retrieval.
+- `freeman kg-reindex`: rebuild embeddings and sync them into ChromaDB for faster semantic retrieval on large graphs.
 - `freeman override-param`, `override-sign`, `rerun-domain`, `diff-domain`: edit assumptions and compare before/after simulations.
 
 ## Advanced Use Cases
@@ -318,7 +333,7 @@ If you are integrating Freeman into Python code rather than only using the CLI, 
 - `freeman.agent.AnalysisPipeline`: compile -> simulate -> verify -> write to memory.
 - `freeman.agent.SignalIngestionEngine`: normalize incoming signals and decide whether they deserve attention.
 - `freeman.agent.ParameterEstimator`: ask an LLM to adjust an existing world when new evidence changes the regime.
-- `freeman.memory.KnowledgeGraph`: persistent graph memory with optional semantic retrieval.
+- `freeman.memory.KnowledgeGraph`: persistent graph memory with universal semantic retrieval, optional Chroma acceleration, and deterministic fallback ranking.
 - `freeman.verifier.Verifier`: structural and causal checks for world consistency.
 
 This advanced path is the right place if you want an agent that reacts to incoming news/data streams, updates its internal state, and keeps learning from prior forecast errors.

@@ -12,6 +12,14 @@ from freeman.interface.modeloverride import ModelOverrideAPI
 from freeman.memory.knowledgegraph import KnowledgeGraph
 
 
+def _query_node_payload(node: Any) -> Dict[str, Any]:
+    """Serialize a node for query responses without large embedding vectors."""
+
+    payload = node.snapshot()
+    payload["embedding"] = []
+    return payload
+
+
 class InterfaceAPI:
     """Read-only v0.1 API surface over the knowledge graph."""
 
@@ -43,16 +51,34 @@ class InterfaceAPI:
         status: str | None = None,
         node_type: str | None = None,
         min_confidence: float | None = None,
+        semantic: bool = False,
+        limit: int | None = None,
     ) -> Dict[str, Any]:
-        matches = self.knowledge_graph.query(
-            text=text,
-            status=status,
-            node_type=node_type,
-            min_confidence=min_confidence,
-        )
+        if semantic and text:
+            matches = self.knowledge_graph.semantic_query(text, top_k=max(int(limit or 15), 1))
+            filtered = []
+            for node in matches:
+                if status is not None and node.status != status:
+                    continue
+                if node_type is not None and node.node_type != node_type:
+                    continue
+                if min_confidence is not None and node.confidence < min_confidence:
+                    continue
+                filtered.append(node)
+            matches = filtered
+        else:
+            matches = self.knowledge_graph.query(
+                text=text,
+                status=status,
+                node_type=node_type,
+                min_confidence=min_confidence,
+            )
+            if limit is not None:
+                matches = matches[: max(int(limit), 0)]
         return {
-            "matches": [node.snapshot() for node in matches],
+            "matches": [_query_node_payload(node) for node in matches],
             "count": len(matches),
+            "semantic": bool(semantic and text),
         }
 
     def register_domain(self, world: WorldState, *, machine_simulation: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -117,6 +143,8 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, api: InterfaceAPI | No
                         status=payload.get("status"),
                         node_type=payload.get("node_type"),
                         min_confidence=payload.get("min_confidence"),
+                        semantic=bool(payload.get("semantic", False)),
+                        limit=payload.get("limit"),
                     )
                 )
                 return

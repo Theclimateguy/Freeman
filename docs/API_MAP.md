@@ -85,6 +85,7 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `KnowledgeGraph`
   - `KnowledgeGraph.explain_causal_path()`
   - `semantic_query()`
+    - universal semantic retrieval: vector store when available, direct embedding ranking otherwise, deterministic lexical-semantic fallback if no vector store is configured
 - Semantic index:
   - `KGVectorStore`
 - Session log:
@@ -298,8 +299,8 @@ Command:
   - print structured consciousness snapshot; optional LLM narrative projection
 - `python -m freeman.interface.cli explain --trace-id <id>`
   - render causal explanation for one trace event from runtime event log/checkpoint
-- `python -m freeman.interface.cli query [--text ...] [--status ...] [--node-type ...] [--min-confidence ...]`
-  - query KG nodes
+- `python -m freeman.interface.cli query [--text ...] [--limit <n>] [--status ...] [--node-type ...] [--min-confidence ...]`
+  - query KG nodes; `--text` triggers semantic retrieval and applies the remaining filters after ranking
 - `python -m freeman.interface.cli export-kg <html|html-3d|json-ld|dot> <output_path> [--config-path <config>]`
   - export KG in one of the supported formats; `html-3d` is the interactive 3D viewer
 - `python -m freeman.interface.cli export-kg-evolution <snapshot_dir_or_glob> <output_path>`
@@ -425,14 +426,17 @@ Returns:
 Accepted fields:
 
 - `text`
+- `limit`
 - `status`
 - `node_type`
 - `min_confidence`
+- `semantic`
 
 Returns:
 
 - `matches`
 - `count`
+- `semantic`
 
 ### `PATCH /domain/{id}/params`
 

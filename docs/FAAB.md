@@ -124,6 +124,24 @@ BS_random = (K - 1) / K
 
 For the common binary case this reduces to `0.5`.
 
+## Repeatability Metrics
+
+FAAB now also records repeatability under repeated execution of the same `(case, mode)` pair:
+
+```text
+primary TAR@N   = 1{ max_{r,s<=N} ||p^(r) - p^(s)||_1 <= epsilon }
+secondary TAR@N = 1{ dominant_outcome^(1) = ... = dominant_outcome^(N) }
+```
+
+where `p^(r)` is the normalized outcome distribution from repeat `r`.
+
+Operational notes:
+
+- `--repeat-runs N` repeats each case `N` times
+- `--tar-probability-epsilon <eps>` sets the L1 tolerance for primary TAR
+- `t0_max_l1_repeat_distance` and `t1_max_l1_repeat_distance` are stored alongside the binary TAR flags for diagnostics
+- on deterministic dry-run paths these values should be near `0.0` and TAR should be `1.0`
+
 ## Interpretation
 
 - The stateful simulator update now materially improves `MODE_A_FULL` at `T_1` relative to its own `T_0` and relative to `MODE_B_AMNESIC`.
@@ -148,7 +166,8 @@ Dry-run means after the universal update integration:
 ## Output Files
 
 - `metrics.csv`: one row per `(case_id, mode)`
-  includes `t0_accuracy`, `t1_accuracy`, `t0_brier_score`, `t1_brier_score`
+  includes `t0_accuracy`, `t1_accuracy`, `t0_brier_score`, `t1_brier_score`, `t0_max_l1_repeat_distance`, `t1_max_l1_repeat_distance`, `t0_primary_tar`, `t1_primary_tar`, `t0_secondary_tar`, `t1_secondary_tar`, `repeat_runs`, `successful_runs`
 - `summary.json`: full serialized benchmark output
+  includes per-repeat payloads under `repeats`
 - `traces/*.json`: prompts, retrieval, and predictions for each case/mode
 - `kg_snapshots/*.json`: persisted KG after `T_1`

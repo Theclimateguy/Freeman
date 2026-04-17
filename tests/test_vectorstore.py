@@ -104,6 +104,28 @@ def test_pipeline_context_falls_back_to_active_nodes_without_vectorstore(tmp_pat
     assert [node.id for node in context] == ["a", "b"]
 
 
+def test_semantic_query_without_vectorstore_uses_embeddings(tmp_path) -> None:
+    adapter = MappingEmbeddingAdapter(
+        {
+            "Heat adaptation lowers migration losses.": [1.0, 0.0, 0.0],
+            "Power demand rises during cold snaps.": [0.0, 1.0, 0.0],
+            "adaptation migration": [1.0, 0.0, 0.0],
+        }
+    )
+    kg = KnowledgeGraph(
+        json_path=tmp_path / "kg.json",
+        auto_load=False,
+        auto_save=False,
+        llm_adapter=adapter,
+    )
+    kg.add_node(KGNode(id="adapt", label="Adapt", content="Heat adaptation lowers migration losses.", confidence=0.8))
+    kg.add_node(KGNode(id="power", label="Power", content="Power demand rises during cold snaps.", confidence=0.9))
+
+    results = kg.semantic_query("adaptation migration", top_k=1)
+
+    assert [node.id for node in results] == ["adapt"]
+
+
 def test_legacy_nodes_are_embedded_lazily_on_first_access(tmp_path, chroma_client) -> None:
     graph_path = tmp_path / "kg.json"
     payload = {
@@ -264,3 +286,76 @@ def test_cli_kg_reindex_populates_embeddings_and_creates_chroma_dir(tmp_path, mo
     assert chroma_path.exists()
     assert node is not None
     assert node.embedding == [0.4, 0.5, 0.6]
+
+
+def test_cli_query_uses_semantic_retrieval_without_vectorstore(tmp_path, monkeypatch, capsys) -> None:
+    graph_path = tmp_path / "kg.json"
+    config_path = tmp_path / "config.yaml"
+    payload = {
+        "backend": "networkx-json",
+        "json_path": str(graph_path),
+        "nodes": [
+            {
+                "id": "adapt",
+                "label": "Adapt",
+                "node_type": "claim",
+                "content": "Heat adaptation lowers migration losses.",
+                "confidence": 0.8,
+                "status": "active",
+                "evidence": [],
+                "sources": [],
+                "metadata": {},
+                "embedding": [],
+                "created_at": "2026-03-27T00:00:00+00:00",
+                "updated_at": "2026-03-27T00:00:00+00:00",
+                "archived_at": None,
+            },
+            {
+                "id": "power",
+                "label": "Power",
+                "node_type": "claim",
+                "content": "Power demand rises during cold snaps.",
+                "confidence": 0.9,
+                "status": "active",
+                "evidence": [],
+                "sources": [],
+                "metadata": {},
+                "embedding": [],
+                "created_at": "2026-03-27T00:00:00+00:00",
+                "updated_at": "2026-03-27T00:00:00+00:00",
+                "archived_at": None,
+            },
+        ],
+        "edges": [],
+    }
+    graph_path.write_text(json.dumps(payload), encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "memory": {
+                    "json_path": str(graph_path),
+                    "embedding_provider": "hashing",
+                    "retrieval_top_k": 5,
+                    "max_context_nodes": 10,
+                    "session_log_path": str(tmp_path / "sessions"),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = MappingEmbeddingAdapter(
+        {
+            "Heat adaptation lowers migration losses.": [1.0, 0.0, 0.0],
+            "Power demand rises during cold snaps.": [0.0, 1.0, 0.0],
+            "adaptation migration": [1.0, 0.0, 0.0],
+        }
+    )
+    monkeypatch.setattr("freeman.interface.cli._build_embedding_adapter", lambda config, use_stub=False: (adapter, "mock"))
+
+    exit_code = cli_main(["--config-path", str(config_path), "query", "--text", "adaptation migration", "--limit", "1"])
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["semantic"] is True
+    assert output["count"] == 1
+    assert output["matches"][0]["id"] == "adapt"

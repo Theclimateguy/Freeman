@@ -182,6 +182,14 @@ def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _query_node_payload(node: KGNode) -> dict[str, Any]:
+    """Serialize a node for CLI query responses without embedding payloads."""
+
+    payload = node.snapshot()
+    payload["embedding"] = []
+    return payload
+
+
 def _add_config_option(command_parser: argparse.ArgumentParser) -> None:
     """Attach the shared config option to a subcommand parser."""
 
@@ -389,7 +397,7 @@ def _retrieve_nodes(
 ) -> list[KGNode]:
     """Retrieve KG nodes using semantic search when available."""
 
-    if knowledge_graph.vectorstore is not None and knowledge_graph.llm_adapter is not None:
+    if query.strip():
         candidates = knowledge_graph.semantic_query(query, top_k=limit)
         filtered = []
         for node in candidates:
@@ -479,6 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser = subparsers.add_parser("query")
     _add_config_option(query_parser)
     query_parser.add_argument("--text")
+    query_parser.add_argument("--limit", type=int)
     query_parser.add_argument("--status")
     query_parser.add_argument("--node-type")
     query_parser.add_argument("--min-confidence", type=float)
@@ -571,7 +580,12 @@ def main(argv: list[str] | None = None) -> int:
     config = _load_config(config_path)
     storage = _bootstrap_storage(config, config_path=config_path)
     vectorstore = _build_vectorstore(config, config_path=config_path)
-    needs_embeddings = vectorstore is not None or args.command == "kg-reindex"
+    needs_embeddings = (
+        vectorstore is not None
+        or args.command == "kg-reindex"
+        or args.command == "ask"
+        or (args.command == "query" and bool(getattr(args, "text", None)))
+    )
     embedding_adapter = None
     embedding_backend = None
     if needs_embeddings:
@@ -652,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
                 "answer_generated": answer is not None,
                 "llm_error": answer_error or llm_error,
                 "match_count": len(nodes),
-                "matches": [node.snapshot() for node in nodes],
+                "matches": [_query_node_payload(node) for node in nodes],
             }
         )
         return 0
@@ -671,12 +685,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "query":
-        payload = InterfaceAPI(knowledge_graph).post_query(
-            text=args.text,
-            status=args.status,
-            node_type=args.node_type,
-            min_confidence=args.min_confidence,
-        )
+        if args.text:
+            payload = InterfaceAPI(knowledge_graph).post_query(
+                text=args.text,
+                status=args.status,
+                node_type=args.node_type,
+                min_confidence=args.min_confidence,
+                semantic=True,
+                limit=args.limit or int(config.get("memory", {}).get("retrieval_top_k", 15)),
+            )
+        else:
+            payload = InterfaceAPI(knowledge_graph).post_query(
+                text=args.text,
+                status=args.status,
+                node_type=args.node_type,
+                min_confidence=args.min_confidence,
+                limit=args.limit,
+            )
         _print_json(payload)
         return 0
 

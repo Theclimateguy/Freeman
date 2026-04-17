@@ -58,6 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--deepseek-base-url", default="https://api.deepseek.com")
     parser.add_argument("--deepseek-timeout-seconds", type=float, default=90.0)
     parser.add_argument("--state-time-decay", type=float, default=0.5)
+    parser.add_argument("--repeat-runs", type=int, default=1, help="Repeat each case N times to measure TAR@N.")
+    parser.add_argument(
+        "--tar-probability-epsilon",
+        type=float,
+        default=1.0e-9,
+        help="Maximum L1 distance between repeated forecast distributions for primary TAR@N.",
+    )
     parser.add_argument("--shared-memory-across-cases", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Use the deterministic heuristic client instead of real LLM calls.")
     parser.add_argument("--generate-dummy-if-missing", action="store_true")
@@ -91,6 +98,8 @@ def main(argv: List[str] | None = None) -> int:
         deepseek_timeout_seconds=args.deepseek_timeout_seconds,
         shared_memory_across_cases=bool(args.shared_memory_across_cases),
         state_time_decay=args.state_time_decay,
+        repeat_runs=max(int(args.repeat_runs), 1),
+        tar_probability_epsilon=float(args.tar_probability_epsilon),
     )
     llm_client = HeuristicBenchmarkClient() if args.dry_run else None
 
@@ -114,8 +123,16 @@ def main(argv: List[str] | None = None) -> int:
                 "t1_accuracy": item["t1_accuracy"],
                 "t0_brier_score": item["t0_brier_score"],
                 "t1_brier_score": item["t1_brier_score"],
+                "t0_max_l1_repeat_distance": item["t0_max_l1_repeat_distance"],
+                "t1_max_l1_repeat_distance": item["t1_max_l1_repeat_distance"],
+                "t0_primary_tar": item["t0_primary_tar"],
+                "t1_primary_tar": item["t1_primary_tar"],
+                "t0_secondary_tar": item["t0_secondary_tar"],
+                "t1_secondary_tar": item["t1_secondary_tar"],
                 "retrieval_precision": item["retrieval_precision"],
                 "autonomy_flag": item["autonomy_flag"],
+                "repeat_runs": item["repeat_runs"],
+                "successful_runs": item["successful_runs"],
             }
             for item in all_results
         ]

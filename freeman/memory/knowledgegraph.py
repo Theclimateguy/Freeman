@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Sequence
 
 import networkx as nx
@@ -358,14 +359,21 @@ class KnowledgeGraph:
     def semantic_query(self, query_text: str, top_k: int = 15) -> List[KGNode]:
         """Return semantically relevant nodes plus 1-hop graph neighbors."""
 
-        if self.vectorstore is None or self.llm_adapter is None:
+        top_k = max(int(top_k), 0)
+        if top_k <= 0:
+            return []
+        query_text = str(query_text).strip()
+        if not query_text:
             return self.query(status="active")[:top_k]
 
-        query_embedding = [float(value) for value in self.llm_adapter.embed(query_text)]
-        node_ids = self.vectorstore.query(query_embedding, top_k=top_k)
+        query_embedding: list[float] | None = None
+        if self.llm_adapter is not None:
+            query_embedding = [float(value) for value in self.llm_adapter.embed(query_text)]
+
+        candidate_ids = self._semantic_candidate_ids(query_text, query_embedding=query_embedding, top_k=top_k)
         ordered_ids: List[str] = []
         seen = set()
-        for node_id in node_ids:
+        for node_id in candidate_ids:
             if node_id not in self.graph or node_id in seen:
                 continue
             node = self.get_node(node_id)
@@ -387,6 +395,136 @@ class KnowledgeGraph:
             if node is not None:
                 nodes.append(node)
         return nodes
+
+    def _semantic_candidate_ids(
+        self,
+        query_text: str,
+        *,
+        query_embedding: list[float] | None,
+        top_k: int,
+    ) -> List[str]:
+        """Rank active nodes by embedding similarity or lexical-semantic fallback."""
+
+        active_nodes = [node for node in self.nodes(lazy_embed=bool(self.llm_adapter is not None)) if node.status != "archived"]
+        if not active_nodes:
+            return []
+
+        if self.vectorstore is not None and query_embedding:
+            node_ids = self.vectorstore.query(query_embedding, top_k=max(top_k, min(top_k * 3, len(active_nodes))))
+            ranked_ids = [node_id for node_id in node_ids if node_id in self.graph]
+            if ranked_ids:
+                return ranked_ids[:top_k]
+
+        scored: list[tuple[float, str]] = []
+        for node in active_nodes:
+            score = self._semantic_score_node(query_text, node=node, query_embedding=query_embedding)
+            if score <= 0.0:
+                continue
+            scored.append((score, node.id))
+        if not scored:
+            return [node.id for node in sorted(active_nodes, key=lambda item: (-item.confidence, item.id))[:top_k]]
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [node_id for _, node_id in scored[:top_k]]
+
+    def _semantic_score_node(
+        self,
+        query_text: str,
+        *,
+        node: KGNode,
+        query_embedding: list[float] | None,
+    ) -> float:
+        """Score one node for semantic retrieval."""
+
+        lexical = self._lexical_semantic_score(query_text, node)
+        embedding_similarity = self._embedding_similarity(query_embedding, node)
+        confidence_bonus = 0.02 * float(node.confidence)
+        if embedding_similarity is not None:
+            return float((0.75 * embedding_similarity) + (0.25 * lexical) + confidence_bonus)
+        return float(lexical + confidence_bonus)
+
+    def _lexical_semantic_score(self, query_text: str, node: KGNode) -> float:
+        """Return a deterministic lexical-semantic relevance score."""
+
+        haystack = self._semantic_haystack(node)
+        if not haystack:
+            return 0.0
+        query_text = str(query_text).strip().lower()
+        if not query_text:
+            return 0.0
+        score = 0.0
+        if query_text in haystack:
+            score += 1.0
+        query_tokens = self._semantic_tokens(query_text)
+        haystack_token_list = self._semantic_tokens(haystack)
+        haystack_tokens = set(haystack_token_list)
+        if query_tokens:
+            overlap = sum(1 for token in query_tokens if token in haystack_tokens)
+            score += 0.6 * (overlap / len(query_tokens))
+        query_bigrams = self._semantic_ngrams(query_tokens, size=2)
+        haystack_bigrams = self._semantic_ngrams(haystack_token_list, size=2)
+        if query_bigrams:
+            overlap = len(query_bigrams & haystack_bigrams)
+            score += 0.3 * (overlap / len(query_bigrams))
+        query_trigrams = self._semantic_ngrams(query_tokens, size=3)
+        haystack_trigrams = self._semantic_ngrams(haystack_token_list, size=3)
+        if query_trigrams:
+            overlap = len(query_trigrams & haystack_trigrams)
+            score += 0.2 * (overlap / len(query_trigrams))
+        return float(score)
+
+    def _semantic_haystack(self, node: KGNode) -> str:
+        """Build one lowercase retrieval document for a node."""
+
+        return " ".join(
+            [
+                str(node.id),
+                str(node.label),
+                str(node.content),
+                " ".join(str(item) for item in node.evidence),
+                " ".join(str(item) for item in node.sources),
+                json.dumps(node.metadata, sort_keys=True),
+            ]
+        ).lower()
+
+    def _semantic_tokens(self, text: str) -> List[str]:
+        """Tokenize text for deterministic lexical retrieval."""
+
+        normalized = str(text).lower().replace("_", " ")
+        return re.findall(r"[a-z0-9]+", normalized)
+
+    def _semantic_ngrams(self, tokens: Sequence[str], *, size: int) -> set[str]:
+        """Return ordered token n-grams."""
+
+        values = [str(token) for token in tokens if str(token)]
+        if len(values) < size:
+            return set()
+        return {" ".join(values[index : index + size]) for index in range(len(values) - size + 1)}
+
+    def _embedding_similarity(self, query_embedding: list[float] | None, node: KGNode) -> float | None:
+        """Return cosine similarity between query and node embeddings."""
+
+        if not query_embedding:
+            return None
+        candidate = node
+        if not candidate.embedding and candidate.id in self.graph:
+            stored = self.get_node(candidate.id, lazy_embed=True)
+            if stored is not None:
+                candidate = stored
+        if not candidate.embedding or len(candidate.embedding) != len(query_embedding):
+            return None
+        return self._cosine_similarity(query_embedding, candidate.embedding)
+
+    def _cosine_similarity(self, left: Sequence[float], right: Sequence[float]) -> float | None:
+        """Return cosine similarity for two vectors."""
+
+        if not left or not right or len(left) != len(right):
+            return None
+        left_norm = sum(float(value) * float(value) for value in left) ** 0.5
+        right_norm = sum(float(value) * float(value) for value in right) ** 0.5
+        if left_norm == 0.0 or right_norm == 0.0:
+            return None
+        dot = sum(float(a) * float(b) for a, b in zip(left, right, strict=False))
+        return float(dot / (left_norm * right_norm))
 
     def explain_causal_path(self, edge_ids: list[str]) -> list[Any]:
         """Resolve ordered edge ids into human-readable causal steps."""
@@ -656,14 +794,7 @@ class KnowledgeGraph:
             right_node.embedding = [float(value) for value in self.llm_adapter.embed(right_node.content)]
         if not left_node.embedding or not right_node.embedding:
             return None
-        if len(left_node.embedding) != len(right_node.embedding):
-            return None
-        left_norm = sum(value * value for value in left_node.embedding) ** 0.5
-        right_norm = sum(value * value for value in right_node.embedding) ** 0.5
-        if left_norm == 0.0 or right_norm == 0.0:
-            return None
-        dot = sum(a * b for a, b in zip(left_node.embedding, right_node.embedding))
-        return float(dot / (left_norm * right_norm))
+        return self._cosine_similarity(left_node.embedding, right_node.embedding)
 
     def _prepare_node(self, node: KGNode, previous: KGNode | None) -> KGNode:
         prepared = KGNode.from_snapshot(node.snapshot())
