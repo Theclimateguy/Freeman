@@ -536,6 +536,10 @@ class AnalysisPipeline:
             step_index=int(getattr(final_world, "runtime_step", final_world.t)),
             last_compaction_step=int(prior_kg_health.get("compaction_last_step", -1)),
         )
+        trail_deposit_count = self.knowledge_graph.deposit_trail(
+            causal_edge_ids,
+            quality=float(sim_result.confidence),
+        )
 
         result = AnalysisPipelineResult(
             world=final_world,
@@ -560,6 +564,7 @@ class AnalysisPipeline:
                 "parameter_effect_trace": parameter_effect_trace,
                 "parameter_effect_mismatches": parameter_effect_mismatches,
                 "policy_ranking": policy_ranking_payload,
+                "trail_deposit_count": trail_deposit_count,
                 **(extra_summary_metadata or {}),
             },
             policy_ranking=policy_ranking,

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Sequence
 
 import networkx as nx
@@ -75,6 +76,8 @@ class KGNode:
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
     archived_at: str | None = None
+    locked_by: str | None = None
+    locked_at: float | None = None
 
     def __post_init__(self) -> None:
         self.confidence = float(min(max(self.confidence, 0.0), 1.0))
@@ -101,6 +104,8 @@ class KGNode:
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
                 "archived_at": self.archived_at,
+                "locked_by": self.locked_by,
+                "locked_at": self.locked_at,
             }
         )
 
@@ -120,6 +125,12 @@ class KGNode:
             created_at=data.get("created_at", _now_iso()),
             updated_at=data.get("updated_at", _now_iso()),
             archived_at=data.get("archived_at"),
+            locked_by=data.get("locked_by"),
+            locked_at=(
+                float(data["locked_at"])
+                if data.get("locked_at") is not None
+                else None
+            ),
         )
 
 
@@ -132,6 +143,7 @@ class KGEdge:
     relation_type: str
     confidence: float = 0.5
     weight: float = 1.0
+    trail_weight: float = 0.0
     id: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now_iso)
@@ -140,6 +152,7 @@ class KGEdge:
     def __post_init__(self) -> None:
         self.confidence = float(min(max(self.confidence, 0.0), 1.0))
         self.weight = float(self.weight)
+        self.trail_weight = max(float(self.trail_weight), 0.0)
         self.metadata = deep_copy_jsonable(self.metadata)
 
     def snapshot(self) -> Dict[str, Any]:
@@ -151,6 +164,7 @@ class KGEdge:
                 "relation_type": self.relation_type,
                 "confidence": self.confidence,
                 "weight": self.weight,
+                "trail_weight": self.trail_weight,
                 "metadata": self.metadata,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
@@ -166,6 +180,7 @@ class KGEdge:
             relation_type=data["relation_type"],
             confidence=float(data.get("confidence", 0.5)),
             weight=float(data.get("weight", 1.0)),
+            trail_weight=float(data.get("trail_weight", 0.0)),
             metadata=deep_copy_jsonable(data.get("metadata", {})),
             created_at=data.get("created_at", _now_iso()),
             updated_at=data.get("updated_at", _now_iso()),
@@ -281,6 +296,83 @@ class KnowledgeGraph:
             edge.id = f"{edge.source}:{edge.relation_type}:{edge.target}:{self.graph.number_of_edges(edge.source, edge.target)}"
         self.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
         self._maybe_save()
+
+    def try_lock(self, node_id: str, agent_id: str, *, lock_ttl_seconds: float | None = None) -> bool:
+        """Attempt to acquire a cooperative lock for one node."""
+
+        if node_id not in self.graph:
+            return False
+        if not str(agent_id).strip():
+            raise ValueError("agent_id must be non-empty")
+        now = time.time()
+        lock_owner = self.graph.nodes[node_id].get("locked_by")
+        lock_timestamp = self.graph.nodes[node_id].get("locked_at")
+        if lock_owner is None:
+            self.graph.nodes[node_id]["locked_by"] = str(agent_id)
+            self.graph.nodes[node_id]["locked_at"] = now
+            self._maybe_save()
+            return True
+        if lock_owner == str(agent_id):
+            self.graph.nodes[node_id]["locked_at"] = now
+            self._maybe_save()
+            return True
+        if lock_ttl_seconds is not None and lock_timestamp is not None:
+            if (now - float(lock_timestamp)) >= max(float(lock_ttl_seconds), 0.0):
+                self.graph.nodes[node_id]["locked_by"] = str(agent_id)
+                self.graph.nodes[node_id]["locked_at"] = now
+                self._maybe_save()
+                return True
+        return False
+
+    def unlock(self, node_id: str, agent_id: str | None = None, *, force: bool = False) -> bool:
+        """Release a cooperative node lock."""
+
+        if node_id not in self.graph:
+            return False
+        node_payload = self.graph.nodes[node_id]
+        lock_owner = node_payload.get("locked_by")
+        if lock_owner is None:
+            return False
+        if not force and agent_id is not None and str(lock_owner) != str(agent_id):
+            return False
+        node_payload["locked_by"] = None
+        node_payload["locked_at"] = None
+        self._maybe_save()
+        return True
+
+    def deposit_trail(
+        self,
+        edge_ids: Sequence[str],
+        *,
+        quality: float,
+        allowed_relation_types: set[str] | None = None,
+    ) -> int:
+        """Increase trail weights on existing edges."""
+
+        relation_filter = allowed_relation_types or {"causes", "propagates_to"}
+        increment = max(float(quality), 0.0)
+        if increment <= 0.0:
+            return 0
+        updated = 0
+        edge_id_set = {str(edge_id) for edge_id in edge_ids}
+        if not edge_id_set:
+            return 0
+        for source, target, key, attrs in list(self.graph.edges(keys=True, data=True)):
+            edge_id = str(attrs.get("id", key))
+            if edge_id not in edge_id_set:
+                continue
+            relation_type = str(attrs.get("relation_type", ""))
+            if relation_type not in relation_filter:
+                continue
+            current = float(attrs.get("trail_weight", 0.0))
+            edge = KGEdge.from_snapshot(dict(attrs))
+            edge.trail_weight = current + increment
+            edge.updated_at = _now_iso()
+            self.graph.add_edge(source, target, key=key, **edge.snapshot())
+            updated += 1
+        if updated > 0:
+            self._maybe_save()
+        return updated
 
     def remove_edge(self, edge_id: str) -> None:
         """Remove one edge by id if present."""
