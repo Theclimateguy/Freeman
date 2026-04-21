@@ -344,6 +344,25 @@ The reconciler is also configurable through `memory.reconciler`:
 - `merge_threshold`: cosine-similarity threshold for semantic merge instead of eager claim splitting
 - `compaction_interval`: periodic `__split_*` compaction cadence
 
+## Hive Mind (Multi-Agent Coordination)
+
+`hive_mind` adds cooperative multi-agent primitives on top of the existing deterministic core:
+
+- node-level cooperative lock in KG: `KnowledgeGraph.try_lock(node_id, agent_id, lock_ttl_seconds=...)` and `unlock(...)`
+- causal-edge pheromone trail: `KGEdge.trail_weight` persisted in JSON memory
+- trail deposit after successful analysis update: `KnowledgeGraph.deposit_trail(...)`
+- trail evaporation during reconciliation: exponential decay `trail <- trail * exp(-gamma)` on `causes`/`propagates_to` edges
+- trail-aware task ranking: `AttentionTask.trail_weight` now participates in scheduler interest
+
+Current operational policy is:
+
+- shared memory path (`memory.json_path`) across Freeman instances
+- each instance acquires node locks before critical node-level edits
+- successful causal traces increase trail weight
+- stale traces lose priority via reconciler decay
+
+This keeps multi-agent behavior auditably deterministic while still enabling emergent workload routing across a shared graph.
+
 `checkpoint.json` now includes `runtime_metadata.kg_health`, including split-node count, average live-node degree, and the last compaction step.
 
 The consciousness layer stays deterministic. It does not read narrative text back into state. Instead it projects:
@@ -375,6 +394,7 @@ If you are integrating Freeman into Python code rather than only using the CLI, 
 - `freeman.agent.SignalIngestionEngine`: normalize incoming signals and decide whether they deserve attention.
 - `freeman.agent.ParameterEstimator`: ask an LLM to adjust an existing world when new evidence changes the regime.
 - `freeman.memory.KnowledgeGraph`: persistent graph memory with universal semantic retrieval, optional Chroma acceleration, and strict no-match behavior.
+- `freeman.agent.AttentionScheduler`: UCB-like scheduling with anomaly/semantic/confidence/obligation and trail-weight components.
 - `freeman.runtime.queryengine`: shared runtime semantic retrieval and answer synthesis over persisted runtime artifacts.
 - `freeman.agent.costmodel`: persisted budget ledger plus shared downgrade/stop policy across runtime tasks.
 

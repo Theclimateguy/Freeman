@@ -259,8 +259,19 @@ sequenceDiagram
 - split node
 - archive node
 - export HTML / JSON / DOT
+- cooperative node lock (`try_lock` / `unlock`)
+- causal trail deposit (`deposit_trail`) on selected edge ids
 
 When semantic memory is enabled, each `KGNode` also stores an embedding vector and the graph is synchronized with `freeman.memory.vectorstore.KGVectorStore` backed by ChromaDB.
+
+For multi-agent coordination, node payload now supports cooperative lock metadata:
+
+- `locked_by: str | None`
+- `locked_at: float | None`
+
+and causal edges support:
+
+- `trail_weight: float` (non-negative)
 
 ### Causal Trajectory Export
 
@@ -273,6 +284,12 @@ Current exported edge sequence:
 - `threshold_exceeded`: state variable contributes to an outcome regime crossing
 
 These edges are written during `AnalysisPipeline.update()` and referenced by `Forecast.causal_path`.
+
+After reconciliation succeeds, the pipeline deposits trail on exported `causes` / `propagates_to` edges with:
+
+```text
+trail_e <- trail_e + quality,  quality = simulation confidence
+```
 
 `Reconciler.verify_causal_path()` then verifies whether that stored path remains:
 
@@ -331,6 +348,14 @@ sigmoid(x) = 1 / (1 + exp(-x))
 ```
 
 So support multiplies posterior odds, conflict divides them, and `exp(-gamma)` decays stale evidence back toward neutral confidence `0.5`. A compatibility path remains available through `Reconciler(mode="legacy")`, which preserves the older multiplicative update.
+
+The same `gamma` now also controls trail evaporation for causal routing:
+
+```text
+trail_e(n+1) = exp(-gamma) * trail_e(n)
+```
+
+applied to live `causes` / `propagates_to` edges after delta reconciliation.
 
 Conflict handling:
 
@@ -629,6 +654,7 @@ interest_i(t) =
     + semanticGap_tilde_i
     + confidenceGap_tilde_i
     + obligationPressure_tilde_i(t)
+    + trailWeight_tilde_i
   ) / cost_i
 ```
 
