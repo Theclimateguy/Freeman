@@ -140,6 +140,7 @@ class AttentionTask:
     anomaly_score: float = 0.0
     semantic_gap: float = 0.0
     confidence_gap: float = 0.0
+    trail_weight: float = 0.0
     state: str = "PENDING"
     pulls: int = 0
     last_interest_score: float = 0.0
@@ -153,6 +154,7 @@ class AttentionTask:
         self.anomaly_score = float(self.anomaly_score)
         self.semantic_gap = float(self.semantic_gap)
         self.confidence_gap = float(self.confidence_gap)
+        self.trail_weight = max(float(self.trail_weight), 0.0)
 
 
 @dataclass
@@ -209,12 +211,14 @@ class AttentionScheduler:
         """Return raw component values before normalization."""
 
         obligation = self.obligation_queue.pressure(task.task_id) if self.obligation_queue is not None else 0.0
+        metadata_trail = float(task.metadata.get("trail_weight", 0.0)) if task.metadata else 0.0
         return {
             "expected_information_gain": task.expected_information_gain,
             "anomaly_score": task.anomaly_score,
             "semantic_gap": task.semantic_gap,
             "confidence_gap": task.confidence_gap,
             "obligation_pressure": obligation,
+            "trail_weight": max(task.trail_weight, metadata_trail),
         }
 
     def _normalize_components(self, components: Dict[str, float]) -> Dict[str, float]:
