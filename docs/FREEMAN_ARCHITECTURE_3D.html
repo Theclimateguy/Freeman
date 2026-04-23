@@ -1,0 +1,6306 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Freeman 3D Architecture Graph</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101317;
+      --panel: #171b21;
+      --panel-2: #20262d;
+      --text: #eef2f5;
+      --muted: #a9b4bf;
+      --line: #343d48;
+      --accent: #78d7c6;
+      --warn: #ff9f64;
+      --danger: #ff6b57;
+      --critical: #76e3a4;
+      --blue: #63b3ed;
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      overflow: hidden;
+    }
+    #app {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+    }
+    #graph-wrap {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      z-index: 0;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.025), transparent 28%),
+        radial-gradient(circle at 75% 15%, rgba(120, 215, 198, 0.08), transparent 30%),
+        #0f1216;
+    }
+    #graph {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      z-index: 0;
+    }
+    #graph canvas,
+    #graph .scene-container {
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #hud {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 2;
+      pointer-events: none;
+      max-width: 760px;
+      padding: 12px 14px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(16, 19, 23, 0.86);
+      backdrop-filter: blur(8px);
+      border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+    #hud h1 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 720;
+    }
+    #hud p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    #axis-help {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      z-index: 2;
+      pointer-events: none;
+      display: grid;
+      gap: 6px;
+      min-width: 300px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(16, 19, 23, 0.84);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .axis-row {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+    .axis-mark {
+      width: 22px;
+      height: 3px;
+      border-radius: 2px;
+      background: var(--accent);
+    }
+    .axis-mark.y { background: #d68be8; }
+    .axis-mark.z { background: #ff9f64; }
+    aside {
+      position: relative;
+      z-index: 10;
+      isolation: isolate;
+      pointer-events: auto;
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      min-width: 0;
+      overflow: hidden;
+    }
+    .section {
+      border-bottom: 1px solid var(--line);
+      padding: 14px;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric {
+      background: var(--panel-2);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 10px;
+      min-width: 0;
+    }
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1;
+      margin-bottom: 5px;
+    }
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    label {
+      display: block;
+      margin: 10px 0 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    input[type="text"], select {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #3a4652;
+      border-radius: 7px;
+      background: #10151b;
+      color: var(--text);
+      padding: 8px 9px;
+      font-size: 13px;
+      outline: none;
+    }
+    input[type="range"] {
+      width: 100%;
+    }
+    button {
+      appearance: none;
+      border: 1px solid #3a4652;
+      color: var(--text);
+      background: #111820;
+      border-radius: 7px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { border-color: var(--accent); }
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .checks {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .checks label {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      margin: 0;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+    #detail {
+      overflow: auto;
+      padding: 14px;
+      min-width: 0;
+    }
+    .detail-title {
+      margin: 0 0 5px;
+      font-size: 18px;
+      line-height: 1.25;
+      font-weight: 720;
+      overflow-wrap: anywhere;
+    }
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0 12px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: #111820;
+      color: var(--muted);
+      font-size: 11px;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+    .swatch {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex: none;
+    }
+    .detail-block {
+      margin-top: 13px;
+    }
+    .detail-block h3 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .detail-block p, .detail-block li {
+      font-size: 13px;
+      line-height: 1.42;
+      color: #dbe4ea;
+    }
+    .detail-block p {
+      margin: 0;
+    }
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .legend {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 10px;
+      max-height: 170px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 0;
+    }
+    .legend-item span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .stage-list {
+      display: grid;
+      gap: 4px;
+      max-height: 150px;
+      overflow: auto;
+      margin-top: 8px;
+    }
+    .stage-item {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .stage-item strong { color: var(--text); }
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .fail {
+      display: none;
+      position: absolute;
+      inset: 0;
+      place-content: center;
+      padding: 30px;
+      text-align: center;
+      color: var(--text);
+      background: #101317;
+      z-index: 5;
+    }
+    @media (max-width: 980px) {
+      #app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 48vh; }
+      aside { border-left: 0; border-top: 1px solid var(--line); }
+      #hud { max-width: calc(100vw - 56px); }
+    }
+  </style>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/3d-force-graph@1.76.0/dist/3d-force-graph.min.js"></script>
+  <script src="https://unpkg.com/three-spritetext@1.9.6/dist/three-spritetext.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <main id="graph-wrap">
+      <div id="hud">
+        <h1>Freeman: единый 3D-граф архитектуры</h1>
+        <p>X = порядок исполнения, Y = слой системы, Z = основной поток / интерфейсы / исследовательские ветви / fallback. Узлы закреплены в пространстве, поэтому граф отражает время и преобразования, а не случайную force-раскладку.</p>
+      </div>
+      <div id="graph"></div>
+      <div id="axis-help">
+        <div class="axis-row"><span class="axis-mark"></span><span><strong>X:</strong> от конфигурации и bootstrap к query/API/export.</span></div>
+        <div class="axis-row"><span class="axis-mark y"></span><span><strong>Y:</strong> архитектурные слои от входов до persistence/interface.</span></div>
+        <div class="axis-row"><span class="axis-mark z"></span><span><strong>Z:</strong> main flow, interfaces, research и fallback/repair.</span></div>
+      </div>
+      <div id="fail" class="fail">Не удалось загрузить 3D-библиотеки с CDN. Откройте файл при доступном интернете или замените CDN на локальные копии Three.js, 3d-force-graph и three-spritetext.</div>
+    </main>
+    <aside>
+      <section class="section">
+        <div class="meta-grid">
+          <div class="metric"><strong id="node-count">0</strong><span>узлов в фильтре</span></div>
+          <div class="metric"><strong id="edge-count">0</strong><span>ребер в фильтре</span></div>
+        </div>
+        <label for="search">Поиск</label>
+        <input id="search" type="text" placeholder="function, module, fallback, KG..." />
+        <label for="layer-filter">Слой</label>
+        <select id="layer-filter"><option value="all">Все слои</option></select>
+        <label for="relation-filter">Тип связи</label>
+        <select id="relation-filter"><option value="all">Все связи</option></select>
+        <label for="stage-range">Показать стадии до: <span id="stage-value">13</span></label>
+        <input id="stage-range" type="range" min="0" max="13" value="13" />
+        <div class="checks">
+          <label><input id="show-fallback" type="checkbox" checked /> fallback</label>
+          <label><input id="show-interface" type="checkbox" checked /> interface</label>
+          <label><input id="show-test" type="checkbox" checked /> research/tests</label>
+          <label><input id="particles" type="checkbox" checked /> flow particles</label>
+        </div>
+        <div class="button-row">
+          <button id="critical-btn">Критический путь</button>
+          <button id="reset-btn">Сброс камеры</button>
+        </div>
+      </section>
+      <section class="section">
+        <div class="legend" id="legend"></div>
+        <div class="stage-list" id="stage-list"></div>
+      </section>
+      <section id="detail">
+        <p class="empty">Выберите узел или ребро. Минимальные комментарии по функциям, преобразованиям, входам и выходам появятся здесь.</p>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const payload = {
+  "meta": {
+    "title": "Freeman 3D Architecture Graph",
+    "generatedFromBranch": "main",
+    "generatedAt": "2026-04-23",
+    "nodeCount": 109,
+    "edgeCount": 137,
+    "comment": "Single visual architecture map. X axis is execution time, Y axis is subsystem layer, Z axis separates main flow, interfaces, research, and fallback branches."
+  },
+  "stages": [
+    {
+      "index": 0,
+      "label": "Config and inputs",
+      "comment": "CLI args, YAML config, schema/domain brief, source definitions."
+    },
+    {
+      "index": 1,
+      "label": "Runtime storage",
+      "comment": "Paths, checkpoints, cursors, signal memory, pending queue, snapshots."
+    },
+    {
+      "index": 2,
+      "label": "Bootstrap",
+      "comment": "LLM/schema bootstrap, package synthesis, schema repair, KG construction."
+    },
+    {
+      "index": 3,
+      "label": "Compile and initial run",
+      "comment": "DomainCompiler -> WorldState -> initial pipeline run."
+    },
+    {
+      "index": 4,
+      "label": "Polling",
+      "comment": "Fetch signals, coarse filtering, queue admission."
+    },
+    {
+      "index": 5,
+      "label": "Agent relevance",
+      "comment": "Self-calibrated relevance, anomaly candidate, agent filter."
+    },
+    {
+      "index": 6,
+      "label": "Signal semantics",
+      "comment": "Mahalanobis features, shock classification, trigger mode."
+    },
+    {
+      "index": 7,
+      "label": "Budget and parameters",
+      "comment": "Cost gate, downgrade/stop, parameter estimation from signal."
+    },
+    {
+      "index": 8,
+      "label": "Simulation pipeline",
+      "comment": "Pipeline update, verification, simulation, scoring, causal trace."
+    },
+    {
+      "index": 9,
+      "label": "Memory and epistemics",
+      "comment": "KG updates, forecasts, reconciliation, conflict logs."
+    },
+    {
+      "index": 10,
+      "label": "Consciousness",
+      "comment": "Self-model refresh, idle deliberation, anomaly review."
+    },
+    {
+      "index": 11,
+      "label": "Repair",
+      "comment": "Ontology patch or LLM re-bootstrap with previous state preserved."
+    },
+    {
+      "index": 12,
+      "label": "Persistence",
+      "comment": "World/KG/checkpoint/cursor/snapshot/event artifacts."
+    },
+    {
+      "index": 13,
+      "label": "Query and interfaces",
+      "comment": "CLI query modes, runtime answer engine, API/MCP/export/UI."
+    }
+  ],
+  "layers": {
+    "input": {
+      "label": "Inputs",
+      "y": 360,
+      "color": "#e7c76f"
+    },
+    "config": {
+      "label": "Configuration",
+      "y": 300,
+      "color": "#d9a441"
+    },
+    "runtime": {
+      "label": "Runtime loop",
+      "y": 230,
+      "color": "#63b3ed"
+    },
+    "bootstrap": {
+      "label": "Bootstrap",
+      "y": 160,
+      "color": "#66d9a6"
+    },
+    "domain": {
+      "label": "Domain compile",
+      "y": 95,
+      "color": "#8fd175"
+    },
+    "signal": {
+      "label": "Signal processing",
+      "y": 25,
+      "color": "#52c7ea"
+    },
+    "budget": {
+      "label": "Budget governance",
+      "y": -45,
+      "color": "#f2b36d"
+    },
+    "estimator": {
+      "label": "Parameter estimation",
+      "y": -110,
+      "color": "#ff9f8a"
+    },
+    "simulation": {
+      "label": "Simulation and verifier",
+      "y": -180,
+      "color": "#8fb3ff"
+    },
+    "memory": {
+      "label": "Memory and KG",
+      "y": -250,
+      "color": "#b7a3ff"
+    },
+    "consciousness": {
+      "label": "Consciousness",
+      "y": -320,
+      "color": "#d68be8"
+    },
+    "repair": {
+      "label": "Repair",
+      "y": -390,
+      "color": "#ff7e67"
+    },
+    "persistence": {
+      "label": "Persistence",
+      "y": -460,
+      "color": "#9aa5b1"
+    },
+    "interface": {
+      "label": "Interfaces",
+      "y": -530,
+      "color": "#78d7c6"
+    },
+    "test": {
+      "label": "Tests and research",
+      "y": -600,
+      "color": "#c8d86b"
+    },
+    "fallback": {
+      "label": "Fallbacks",
+      "y": -670,
+      "color": "#ff6b57"
+    }
+  },
+  "branches": {
+    "-2": {
+      "label": "hard fallback",
+      "z": -360
+    },
+    "-1": {
+      "label": "soft fallback",
+      "z": -190
+    },
+    "0": {
+      "label": "main execution",
+      "z": 0
+    },
+    "1": {
+      "label": "query/interface",
+      "z": 190
+    },
+    "2": {
+      "label": "research/tests",
+      "z": 360
+    }
+  },
+  "relations": [
+    "answers",
+    "builds",
+    "calls",
+    "checks",
+    "dequeues",
+    "drives",
+    "exports",
+    "exposes",
+    "fallback",
+    "feeds",
+    "filters",
+    "gates",
+    "iterates",
+    "loads",
+    "persists",
+    "queues",
+    "reads",
+    "records",
+    "repairs",
+    "retrieves",
+    "routes",
+    "schedules",
+    "scores",
+    "supports",
+    "then",
+    "transforms",
+    "updates",
+    "verifies",
+    "wraps"
+  ],
+  "graphData": {
+    "nodes": [
+      {
+        "id": "cli_args",
+        "label": "CLI / main(argv)",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "main",
+          "_build_parser"
+        ],
+        "inputs": [],
+        "outputs": [
+          "argparse.Namespace"
+        ],
+        "comment": "Точка входа stream runtime и query-mode.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -990,
+        "fy": 360,
+        "fz": 0,
+        "x": -990,
+        "y": 360,
+        "z": 0,
+        "val": 8,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "config_yaml",
+        "label": "config.yaml",
+        "layer": "config",
+        "layerLabel": "Configuration",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "config.yaml",
+        "functions": [],
+        "inputs": [],
+        "outputs": [
+          "runtime",
+          "agent",
+          "memory",
+          "llm",
+          "sim"
+        ],
+        "comment": "Единый источник режимов, путей, бюджетов, источников и LLM-настроек.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -990,
+        "fy": 300,
+        "fz": 0,
+        "x": -990,
+        "y": 300,
+        "z": 0,
+        "val": 7,
+        "color": "#d9a441"
+      },
+      {
+        "id": "schema_path",
+        "label": "schema_path JSON",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "",
+        "functions": [],
+        "inputs": [],
+        "outputs": [
+          "schema"
+        ],
+        "comment": "Готовая доменная схема для bootstrap.mode=schema_path.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -990,
+        "fy": 360,
+        "fz": -190,
+        "x": -990,
+        "y": 360,
+        "z": -190,
+        "val": 6.0,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "domain_brief",
+        "label": "domain brief",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "",
+        "functions": [],
+        "inputs": [],
+        "outputs": [
+          "natural language domain"
+        ],
+        "comment": "Текстовая постановка домена для LLM-синтеза.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -990,
+        "fy": 360,
+        "fz": 0,
+        "x": -990,
+        "y": 360,
+        "z": 0,
+        "val": 6.0,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "source_configs",
+        "label": "agent.sources",
+        "layer": "config",
+        "layerLabel": "Configuration",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "",
+        "functions": [],
+        "inputs": [],
+        "outputs": [
+          "connector configs"
+        ],
+        "comment": "RSS/HTTP/Web/manual источники входящих сигналов.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -990,
+        "fy": 300,
+        "fz": 0,
+        "x": -990,
+        "y": 300,
+        "z": 0,
+        "val": 6.0,
+        "color": "#d9a441"
+      },
+      {
+        "id": "env_keys",
+        "label": "environment keys",
+        "layer": "config",
+        "layerLabel": "Configuration",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "",
+        "functions": [],
+        "inputs": [],
+        "outputs": [
+          "API credentials"
+        ],
+        "comment": "DEEPSEEK_API_KEY, OPENAI_API_KEY, LLM_API_KEY, OLLAMA_HOST.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -990,
+        "fy": 300,
+        "fz": -190,
+        "x": -990,
+        "y": 300,
+        "z": -190,
+        "val": 6.0,
+        "color": "#d9a441"
+      },
+      {
+        "id": "human_override",
+        "label": "human override",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 0,
+        "stageLabel": "Config and inputs",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.interface.modeloverride",
+        "functions": [
+          "patch_params",
+          "patch_edge",
+          "rerun_domain",
+          "get_diff"
+        ],
+        "inputs": [],
+        "outputs": [
+          "patched world",
+          "audit log"
+        ],
+        "comment": "Ручное вмешательство в параметры/ребра и повторный прогон.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -990,
+        "fy": 360,
+        "fz": 190,
+        "x": -990,
+        "y": 360,
+        "z": 190,
+        "val": 6.0,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "load_yaml",
+        "label": "_load_yaml",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_load_yaml",
+          "_merge_dicts"
+        ],
+        "inputs": [
+          "config_path"
+        ],
+        "outputs": [
+          "merged config"
+        ],
+        "comment": "Загружает YAML и накладывает DEFAULT_RUNTIME_CONFIG.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -825,
+        "fy": 230,
+        "fz": 0,
+        "x": -825,
+        "y": 230,
+        "z": 0,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "resolve_paths",
+        "label": "_resolve_runtime_paths",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_resolve_runtime_paths",
+          "_resolve_path"
+        ],
+        "inputs": [
+          "config",
+          "CLI args"
+        ],
+        "outputs": [
+          "RuntimePaths"
+        ],
+        "comment": "Нормализует config/runtime/memory/schema пути.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -825,
+        "fy": 230,
+        "fz": 0,
+        "x": -825,
+        "y": 230,
+        "z": 0,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "storage_init",
+        "label": "_initialize_runtime_storage",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_initialize_runtime_storage",
+          "_load_logged_ids_and_backfill_cursor",
+          "_load_signal_memory",
+          "_load_pending_queue"
+        ],
+        "inputs": [
+          "runtime_path",
+          "event_log_path",
+          "resume flag"
+        ],
+        "outputs": [
+          "RuntimeStorage"
+        ],
+        "comment": "Восстанавливает checkpoint, cursors, event log, memory, pending queue.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -825,
+        "fy": 230,
+        "fz": 0,
+        "x": -825,
+        "y": 230,
+        "z": 0,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "checkpoint",
+        "label": "CheckpointManager",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.checkpoint",
+        "functions": [
+          "load",
+          "save"
+        ],
+        "inputs": [
+          "checkpoint.json"
+        ],
+        "outputs": [
+          "ConsciousState"
+        ],
+        "comment": "Сериализация self-model/checkpoint runtime-состояния.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -825,
+        "fy": -460,
+        "fz": 0,
+        "x": -825,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "cursor_store",
+        "label": "StreamCursorStore",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream",
+        "functions": [
+          "load",
+          "commit",
+          "save",
+          "is_committed"
+        ],
+        "inputs": [
+          "cursors.json"
+        ],
+        "outputs": [
+          "processed signal ids"
+        ],
+        "comment": "Защищает от повторной обработки сигналов.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -825,
+        "fy": -460,
+        "fz": 0,
+        "x": -825,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "event_log",
+        "label": "EventLog",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.event_log",
+        "functions": [
+          "append",
+          "slice_from",
+          "replay"
+        ],
+        "inputs": [
+          "event_log.jsonl"
+        ],
+        "outputs": [
+          "TraceEvent stream"
+        ],
+        "comment": "Append-only журнал внешних и внутренних переходов.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -825,
+        "fy": -460,
+        "fz": 0,
+        "x": -825,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "signal_memory",
+        "label": "SignalMemory",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.signalingestion",
+        "functions": [
+          "see",
+          "is_duplicate",
+          "effective_weight"
+        ],
+        "inputs": [],
+        "outputs": [
+          "dedupe",
+          "novelty"
+        ],
+        "comment": "Кросс-сессионная память сигналов и decayed novelty.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -825,
+        "fy": -460,
+        "fz": 0,
+        "x": -825,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "pending_queue",
+        "label": "pending_signals",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 1,
+        "stageLabel": "Runtime storage",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "",
+        "functions": [],
+        "inputs": [],
+        "outputs": [
+          "FIFO queue"
+        ],
+        "comment": "Очередь сигналов, переживающая рестарт процесса.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -825,
+        "fy": -460,
+        "fz": 0,
+        "x": -825,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "select_llm",
+        "label": "LLM client",
+        "layer": "bootstrap",
+        "layerLabel": "Bootstrap",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_select_ollama_model",
+          "_build_chat_client"
+        ],
+        "inputs": [
+          "llm config",
+          "env keys"
+        ],
+        "outputs": [
+          "Ollama/DeepSeek/OpenAI client"
+        ],
+        "comment": "Выбирает provider/model; Ollama auto-поиск имеет fallback на qwen.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -660,
+        "fy": 160,
+        "fz": 0,
+        "x": -660,
+        "y": 160,
+        "z": 0,
+        "val": 6.0,
+        "color": "#66d9a6"
+      },
+      {
+        "id": "vectorstore",
+        "label": "vector store / embeddings",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.interface.factory",
+        "functions": [
+          "build_vectorstore",
+          "build_embedding_adapter"
+        ],
+        "inputs": [
+          "memory config"
+        ],
+        "outputs": [
+          "KGVectorStore | None",
+          "embedding adapter | None"
+        ],
+        "comment": "Опциональная семантическая память; при отключении KG работает lexical/in-memory.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -660,
+        "fy": -250,
+        "fz": 0,
+        "x": -660,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "knowledge_graph",
+        "label": "KnowledgeGraph",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.interface.factory",
+        "functions": [
+          "build_knowledge_graph"
+        ],
+        "inputs": [
+          "kg_path",
+          "embedding adapter",
+          "vectorstore"
+        ],
+        "outputs": [
+          "persistent KG"
+        ],
+        "comment": "Основная долговременная память узлов, ребер, поисковых индексов.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -660,
+        "fy": -250,
+        "fz": 0,
+        "x": -660,
+        "y": -250,
+        "z": 0,
+        "val": 8,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "forecast_registry",
+        "label": "ForecastRegistry",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.forecastregistry",
+        "functions": [
+          "record",
+          "due",
+          "verify",
+          "save",
+          "load"
+        ],
+        "inputs": [
+          "forecasts.json"
+        ],
+        "outputs": [
+          "forecast lifecycle"
+        ],
+        "comment": "Регистр прогнозов и последующей верификации.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -660,
+        "fy": -250,
+        "fz": 0,
+        "x": -660,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "pipeline_init",
+        "label": "AnalysisPipeline",
+        "layer": "bootstrap",
+        "layerLabel": "Bootstrap",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "__init__"
+        ],
+        "inputs": [
+          "compiler",
+          "sim_config",
+          "KG",
+          "forecast_registry"
+        ],
+        "outputs": [
+          "pipeline"
+        ],
+        "comment": "Собирает compiler, runner, verifier, reconciler, logs, self-model.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -660,
+        "fy": 160,
+        "fz": 0,
+        "x": -660,
+        "y": 160,
+        "z": 0,
+        "val": 8,
+        "color": "#66d9a6"
+      },
+      {
+        "id": "resume_state",
+        "label": "resume checkpoint",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "CheckpointManager.load",
+          "ConsciousState.from_dict",
+          "WorldState.from_snapshot"
+        ],
+        "inputs": [
+          "checkpoint.json",
+          "world_state.json"
+        ],
+        "outputs": [
+          "live state"
+        ],
+        "comment": "Если --resume и файлы есть, runtime продолжает прошлую траекторию.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -660,
+        "fy": 230,
+        "fz": -190,
+        "x": -660,
+        "y": 230,
+        "z": -190,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "bootstrap_mode",
+        "label": "bootstrap mode resolver",
+        "layer": "bootstrap",
+        "layerLabel": "Bootstrap",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_bootstrap"
+        ],
+        "inputs": [
+          "CLI",
+          "config",
+          "schema_path",
+          "domain brief"
+        ],
+        "outputs": [
+          "schema_path | llm_synthesize"
+        ],
+        "comment": "Порядок: explicit mode -> domain brief -> schema_path -> llm_synthesize.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -660,
+        "fy": 160,
+        "fz": 0,
+        "x": -660,
+        "y": 160,
+        "z": 0,
+        "val": 6.0,
+        "color": "#66d9a6"
+      },
+      {
+        "id": "schema_package",
+        "label": "schema package",
+        "layer": "bootstrap",
+        "layerLabel": "Bootstrap",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_bootstrap"
+        ],
+        "inputs": [
+          "schema_path"
+        ],
+        "outputs": [
+          "bootstrap_package.json"
+        ],
+        "comment": "schema_path превращается в пакет {schema, policies, assumptions}.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -660,
+        "fy": 160,
+        "fz": -190,
+        "x": -660,
+        "y": 160,
+        "z": -190,
+        "val": 6.0,
+        "color": "#66d9a6"
+      },
+      {
+        "id": "llm_synthesis",
+        "label": "LLM synthesize package",
+        "layer": "bootstrap",
+        "layerLabel": "Bootstrap",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.llm.orchestrator",
+        "functions": [
+          "FreemanOrchestrator.compile_and_repair",
+          "_normalize_package"
+        ],
+        "inputs": [
+          "domain brief"
+        ],
+        "outputs": [
+          "schema",
+          "policies",
+          "assumptions"
+        ],
+        "comment": "LLM генерирует пакет и проходит repair loop до verifier-clean.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -660,
+        "fy": 160,
+        "fz": 0,
+        "x": -660,
+        "y": 160,
+        "z": 0,
+        "val": 6.0,
+        "color": "#66d9a6"
+      },
+      {
+        "id": "repair_loop_compile",
+        "label": "compile repair loop",
+        "layer": "repair",
+        "layerLabel": "Repair",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.llm.orchestrator",
+        "functions": [
+          "_compiler_feedback",
+          "repair_schema"
+        ],
+        "inputs": [
+          "compile exception"
+        ],
+        "outputs": [
+          "corrected package"
+        ],
+        "comment": "Ошибки компиляции превращаются в feedback для LLM repair.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -660,
+        "fy": -390,
+        "fz": 0,
+        "x": -660,
+        "y": -390,
+        "z": 0,
+        "val": 6.0,
+        "color": "#ff7e67"
+      },
+      {
+        "id": "repair_loop_verifier",
+        "label": "verifier repair loop",
+        "layer": "repair",
+        "layerLabel": "Repair",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.llm.orchestrator",
+        "functions": [
+          "level1_check",
+          "_trial_level0_violations",
+          "level2_check",
+          "repair_schema"
+        ],
+        "inputs": [
+          "violations"
+        ],
+        "outputs": [
+          "corrected package"
+        ],
+        "comment": "Нарушения L1/L0 trial/L2 приводят к следующей попытке схемы.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -660,
+        "fy": -390,
+        "fz": 0,
+        "x": -660,
+        "y": -390,
+        "z": 0,
+        "val": 6.0,
+        "color": "#ff7e67"
+      },
+      {
+        "id": "bootstrap_fallback_schema",
+        "label": "fallback_schema_path",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": -2,
+        "branchLabel": "hard fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_bootstrap"
+        ],
+        "inputs": [
+          "LLM bootstrap exception"
+        ],
+        "outputs": [
+          "llm_synthesize_fallback package"
+        ],
+        "comment": "Если LLM bootstrap падает и задан fallback_schema_path, runtime грузит запасную схему.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -660,
+        "fy": -670,
+        "fz": -360,
+        "x": -660,
+        "y": -670,
+        "z": -360,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "schema_repair_failed",
+        "label": "SchemaRepairFailed",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 2,
+        "stageLabel": "Bootstrap",
+        "branch": -2,
+        "branchLabel": "hard fallback",
+        "kind": "process",
+        "module": "freeman.llm.orchestrator",
+        "functions": [
+          "compile_and_repair"
+        ],
+        "inputs": [
+          "max_retries exhausted"
+        ],
+        "outputs": [
+          "hard failure"
+        ],
+        "comment": "Без fallback_schema_path bootstrap завершается исключением.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -660,
+        "fy": -670,
+        "fz": -360,
+        "x": -660,
+        "y": -670,
+        "z": -360,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "domain_compile",
+        "label": "DomainCompiler.compile",
+        "layer": "domain",
+        "layerLabel": "Domain compile",
+        "stage": 3,
+        "stageLabel": "Compile and initial run",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.domain.compiler",
+        "functions": [
+          "compile",
+          "_validate_schema"
+        ],
+        "inputs": [
+          "schema"
+        ],
+        "outputs": [
+          "WorldState"
+        ],
+        "comment": "Проверяет ссылки, operators, outcomes, DAG и строит WorldState.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -495,
+        "fy": 95,
+        "fz": 0,
+        "x": -495,
+        "y": 95,
+        "z": 0,
+        "val": 8,
+        "color": "#8fd175"
+      },
+      {
+        "id": "world_state",
+        "label": "WorldState",
+        "layer": "domain",
+        "layerLabel": "Domain compile",
+        "stage": 3,
+        "stageLabel": "Compile and initial run",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.core.world",
+        "functions": [],
+        "inputs": [
+          "actors",
+          "resources",
+          "relations",
+          "outcomes",
+          "causal_dag"
+        ],
+        "outputs": [
+          "simulation state"
+        ],
+        "comment": "Состояние мира с t, runtime_step, parameter_vector и metadata.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -495,
+        "fy": 95,
+        "fz": 0,
+        "x": -495,
+        "y": 95,
+        "z": 0,
+        "val": 8,
+        "color": "#8fd175"
+      },
+      {
+        "id": "initial_pipeline_run",
+        "label": "pipeline.run",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 3,
+        "stageLabel": "Compile and initial run",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "run",
+          "_run_world"
+        ],
+        "inputs": [
+          "schema | WorldState"
+        ],
+        "outputs": [
+          "AnalysisPipelineResult"
+        ],
+        "comment": "Первый compile/simulate/verify/score/update-KG прогон.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -495,
+        "fy": -180,
+        "fz": 0,
+        "x": -495,
+        "y": -180,
+        "z": 0,
+        "val": 8,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "historical_validation",
+        "label": "CompileValidator",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 3,
+        "stageLabel": "Compile and initial run",
+        "branch": 2,
+        "branchLabel": "research/tests",
+        "kind": "process",
+        "module": "freeman.core.compilevalidator",
+        "functions": [
+          "validate",
+          "backtest",
+          "ensemble_compile",
+          "compare_operators"
+        ],
+        "inputs": [
+          "historical_data"
+        ],
+        "outputs": [
+          "operator fit reports",
+          "warnings"
+        ],
+        "comment": "Если в схеме есть исторические ряды, проверяет качество операторов.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -495,
+        "fy": -180,
+        "fz": 360,
+        "x": -495,
+        "y": -180,
+        "z": 360,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "persist_bootstrap",
+        "label": "persist initial runtime",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 3,
+        "stageLabel": "Compile and initial run",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_persist_runtime_state",
+          "_write_kg_snapshot"
+        ],
+        "inputs": [
+          "pipeline",
+          "world",
+          "storage"
+        ],
+        "outputs": [
+          "kg_state",
+          "world_state",
+          "checkpoint",
+          "snapshot"
+        ],
+        "comment": "Фиксирует начальный KG/world/checkpoint и snapshot reason=bootstrap.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -495,
+        "fy": -460,
+        "fz": 0,
+        "x": -495,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "collect_sources",
+        "label": "_collect_sources",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_collect_sources",
+          "build_signal_source"
+        ],
+        "inputs": [
+          "agent.sources"
+        ],
+        "outputs": [
+          "source objects"
+        ],
+        "comment": "Строит коннекторы RSS/HTTP/Web/manual из конфигурации.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -330,
+        "fy": 230,
+        "fz": 0,
+        "x": -330,
+        "y": 230,
+        "z": 0,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "connector_http",
+        "label": "HTTP JSON source",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "packages.freeman-connectors.http",
+        "functions": [
+          "HTTPJSONSignalSource.fetch_payload",
+          "fetch"
+        ],
+        "inputs": [],
+        "outputs": [
+          "Signal[]"
+        ],
+        "comment": "Загружает JSON, применяет field mapping и нормализацию.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -330,
+        "fy": 360,
+        "fz": 190,
+        "x": -330,
+        "y": 360,
+        "z": 190,
+        "val": 6.0,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "connector_rss",
+        "label": "RSS source",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "packages.freeman-connectors.rss",
+        "functions": [
+          "fetch"
+        ],
+        "inputs": [],
+        "outputs": [
+          "Signal[]"
+        ],
+        "comment": "Парсит feed entries в нормализованные сигналы.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -330,
+        "fy": 360,
+        "fz": 190,
+        "x": -330,
+        "y": 360,
+        "z": 190,
+        "val": 6.0,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "connector_web",
+        "label": "Web page source",
+        "layer": "input",
+        "layerLabel": "Inputs",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "packages.freeman-connectors.web",
+        "functions": [
+          "fetch"
+        ],
+        "inputs": [],
+        "outputs": [
+          "Signal[]"
+        ],
+        "comment": "Извлекает текст веб-страницы как сигнал.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -330,
+        "fy": 360,
+        "fz": 190,
+        "x": -330,
+        "y": 360,
+        "z": 190,
+        "val": 6.0,
+        "color": "#e7c76f"
+      },
+      {
+        "id": "poll_sources",
+        "label": "_run_poll",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_run_poll"
+        ],
+        "inputs": [
+          "sources",
+          "keywords",
+          "current_world"
+        ],
+        "outputs": [
+          "eligible signals"
+        ],
+        "comment": "Периодический сбор и coarse relevance filter.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -330,
+        "fy": 230,
+        "fz": 0,
+        "x": -330,
+        "y": 230,
+        "z": 0,
+        "val": 8,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "source_fetch_failed",
+        "label": "source fetch failed",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_run_poll"
+        ],
+        "inputs": [
+          "source.fetch exception"
+        ],
+        "outputs": [
+          "warning",
+          "continue"
+        ],
+        "comment": "Ошибка одного источника логируется; остальные источники продолжаются.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -330,
+        "fy": -670,
+        "fz": -190,
+        "x": -330,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "external_filter",
+        "label": "external relevance filter",
+        "layer": "signal",
+        "layerLabel": "Signal processing",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_signal_matches_keywords",
+          "_relevance_score"
+        ],
+        "inputs": [
+          "Signal",
+          "keywords",
+          "ontology_terms"
+        ],
+        "outputs": [
+          "accepted/rejected"
+        ],
+        "comment": "Ключевые слова и ontology overlap фильтруют поток до очереди.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -330,
+        "fy": 25,
+        "fz": 0,
+        "x": -330,
+        "y": 25,
+        "z": 0,
+        "val": 6.0,
+        "color": "#52c7ea"
+      },
+      {
+        "id": "dedupe_queue",
+        "label": "cursor/dedupe queue gate",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 4,
+        "stageLabel": "Polling",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "StreamCursorStore.is_committed",
+          "queued_signal_ids"
+        ],
+        "inputs": [
+          "eligible signals"
+        ],
+        "outputs": [
+          "pending_signals"
+        ],
+        "comment": "Уже обработанные и уже поставленные в очередь сигналы пропускаются.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -330,
+        "fy": 230,
+        "fz": 0,
+        "x": -330,
+        "y": 230,
+        "z": 0,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "process_signal",
+        "label": "_process_one_signal",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 5,
+        "stageLabel": "Agent relevance",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_process_one_signal"
+        ],
+        "inputs": [
+          "Signal",
+          "RuntimeContext"
+        ],
+        "outputs": [
+          "SignalResult"
+        ],
+        "comment": "Основной одно-сигнальный state transition runtime.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -165,
+        "fy": 230,
+        "fz": 0,
+        "x": -165,
+        "y": 230,
+        "z": 0,
+        "val": 9,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "runtime_step_increment",
+        "label": "runtime_step += 1",
+        "layer": "runtime",
+        "layerLabel": "Runtime loop",
+        "stage": 5,
+        "stageLabel": "Agent relevance",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_process_one_signal"
+        ],
+        "inputs": [
+          "current_world"
+        ],
+        "outputs": [
+          "monotonic runtime_step"
+        ],
+        "comment": "Логическое время увеличивается до обработки сигнала.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": -165,
+        "fy": 230,
+        "fz": 0,
+        "x": -165,
+        "y": 230,
+        "z": 0,
+        "val": 6.0,
+        "color": "#63b3ed"
+      },
+      {
+        "id": "self_calibration_gate",
+        "label": "_self_calibration_started",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 5,
+        "stageLabel": "Agent relevance",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_self_calibration_started"
+        ],
+        "inputs": [
+          "KG self_observation nodes"
+        ],
+        "outputs": [
+          "agent relevance active?"
+        ],
+        "comment": "После появления self_observation включается второй, агентный фильтр.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -165,
+        "fy": -320,
+        "fz": 0,
+        "x": -165,
+        "y": -320,
+        "z": 0,
+        "val": 6.0,
+        "color": "#d68be8"
+      },
+      {
+        "id": "agent_relevance",
+        "label": "agent relevance score",
+        "layer": "signal",
+        "layerLabel": "Signal processing",
+        "stage": 5,
+        "stageLabel": "Agent relevance",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_relevance_score",
+          "_active_hypothesis_terms",
+          "_world_ontology_terms"
+        ],
+        "inputs": [
+          "Signal",
+          "ontology",
+          "active hypotheses"
+        ],
+        "outputs": [
+          "agent_score",
+          "details"
+        ],
+        "comment": "Оценка релевантности уже с учетом текущей self-model гипотезы.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": -165,
+        "fy": 25,
+        "fz": 0,
+        "x": -165,
+        "y": 25,
+        "z": 0,
+        "val": 6.0,
+        "color": "#52c7ea"
+      },
+      {
+        "id": "filtered_out",
+        "label": "FILTERED_OUT",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 5,
+        "stageLabel": "Agent relevance",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_runtime_trace_for_signal"
+        ],
+        "inputs": [
+          "low agent relevance"
+        ],
+        "outputs": [
+          "TraceEvent",
+          "cursor commit",
+          "snapshot"
+        ],
+        "comment": "Нерелевантный сигнал сохраняет trace, но мир не обновляет.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -165,
+        "fy": -670,
+        "fz": -190,
+        "x": -165,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "anomaly_candidate",
+        "label": "record_anomaly_candidate",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 5,
+        "stageLabel": "Agent relevance",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "record_anomaly_candidate"
+        ],
+        "inputs": [
+          "zero ontology/hypothesis overlap"
+        ],
+        "outputs": [
+          "anomaly_candidate KG node"
+        ],
+        "comment": "Совсем новый семантический кластер уходит в anomaly debt.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": -165,
+        "fy": -320,
+        "fz": -190,
+        "x": -165,
+        "y": -320,
+        "z": -190,
+        "val": 6.0,
+        "color": "#d68be8"
+      },
+      {
+        "id": "ingest_signal",
+        "label": "SignalIngestionEngine.ingest",
+        "layer": "signal",
+        "layerLabel": "Signal processing",
+        "stage": 6,
+        "stageLabel": "Signal semantics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.signalingestion",
+        "functions": [
+          "ingest",
+          "mahalanobis_scores",
+          "classify_shock",
+          "trigger_mode",
+          "interest_score",
+          "novelty_score"
+        ],
+        "inputs": [
+          "Signal"
+        ],
+        "outputs": [
+          "SignalTrigger[]"
+        ],
+        "comment": "Нормализует сигнал, считает novelty/anomaly/severity и выбирает WATCH/ANALYZE/DEEP_DIVE.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 0,
+        "fy": 25,
+        "fz": 0,
+        "x": 0,
+        "y": 25,
+        "z": 0,
+        "val": 8,
+        "color": "#52c7ea"
+      },
+      {
+        "id": "duplicate_signal",
+        "label": "duplicate signal",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 6,
+        "stageLabel": "Signal semantics",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.signalingestion",
+        "functions": [
+          "SignalMemory.is_duplicate"
+        ],
+        "inputs": [
+          "same signal within window"
+        ],
+        "outputs": [
+          "no trigger"
+        ],
+        "comment": "Повтор в пределах окна дает WATCH/no-update trace.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 0,
+        "fy": -670,
+        "fz": -190,
+        "x": 0,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "llm_classifier_fallback",
+        "label": "heuristic shock classifier",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 6,
+        "stageLabel": "Signal semantics",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.signalingestion",
+        "functions": [
+          "classify_shock"
+        ],
+        "inputs": [
+          "no classifier/chat_json"
+        ],
+        "outputs": [
+          "routine/policy_shift/shock"
+        ],
+        "comment": "Если LLM-классификатор недоступен, работает keyword heuristic.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 0,
+        "fy": -670,
+        "fz": -190,
+        "x": 0,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "watch_mode",
+        "label": "WATCH mode",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 6,
+        "stageLabel": "Signal semantics",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_process_one_signal"
+        ],
+        "inputs": [
+          "no trigger or low interest"
+        ],
+        "outputs": [
+          "trace",
+          "forecast verification",
+          "no world update"
+        ],
+        "comment": "Наблюдение без дорогого update; может быть пропущено если include_watch=false.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 0,
+        "fy": -670,
+        "fz": -190,
+        "x": 0,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "budget_decision",
+        "label": "_signal_budget_decision",
+        "layer": "budget",
+        "layerLabel": "Budget governance",
+        "stage": 7,
+        "stageLabel": "Budget and parameters",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_signal_budget_decision",
+          "resolve_budget_decision",
+          "CostModel.estimate",
+          "CostModel.precheck"
+        ],
+        "inputs": [
+          "SignalTrigger",
+          "world complexity",
+          "spent budget"
+        ],
+        "outputs": [
+          "BudgetDecision",
+          "approved cost"
+        ],
+        "comment": "Предварительный gate: лимиты LLM/sim/domains/deep dive/session budget.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 165,
+        "fy": -45,
+        "fz": 0,
+        "x": 165,
+        "y": -45,
+        "z": 0,
+        "val": 8,
+        "color": "#f2b36d"
+      },
+      {
+        "id": "budget_downgrade",
+        "label": "budget downgrade / stop",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 7,
+        "stageLabel": "Budget and parameters",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.costmodel",
+        "functions": [
+          "resolve_budget_decision",
+          "BudgetLedger.record"
+        ],
+        "inputs": [
+          "over budget estimate"
+        ],
+        "outputs": [
+          "ANALYZE/WATCH/blocked"
+        ],
+        "comment": "DEEP_DIVE может стать ANALYZE, ANALYZE -> WATCH, WATCH может остановить runtime.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 165,
+        "fy": -670,
+        "fz": -190,
+        "x": 165,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "budget_ledger",
+        "label": "BudgetLedger",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 7,
+        "stageLabel": "Budget and parameters",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.costmodel",
+        "functions": [
+          "record",
+          "summary",
+          "load"
+        ],
+        "inputs": [
+          "BudgetDecision",
+          "actual_cost"
+        ],
+        "outputs": [
+          "cost_ledger.jsonl"
+        ],
+        "comment": "Append-only учет стоимости задач и stop reasons.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 165,
+        "fy": -460,
+        "fz": 0,
+        "x": 165,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "parameter_estimator",
+        "label": "ParameterEstimator.estimate",
+        "layer": "estimator",
+        "layerLabel": "Parameter estimation",
+        "stage": 7,
+        "stageLabel": "Budget and parameters",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.parameterestimator",
+        "functions": [
+          "estimate",
+          "_world_summary",
+          "_validate_sign_consistency",
+          "_repair_outcome_ids"
+        ],
+        "inputs": [
+          "current_world",
+          "signal_text",
+          "epistemic context"
+        ],
+        "outputs": [
+          "ParameterVector"
+        ],
+        "comment": "LLM или совместимый клиент преобразует сигнал в динамический слой параметров.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 165,
+        "fy": -110,
+        "fz": 0,
+        "x": 165,
+        "y": -110,
+        "z": 0,
+        "val": 8,
+        "color": "#ff9f8a"
+      },
+      {
+        "id": "parameter_vector",
+        "label": "ParameterVector",
+        "layer": "estimator",
+        "layerLabel": "Parameter estimation",
+        "stage": 7,
+        "stageLabel": "Budget and parameters",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.core.types",
+        "functions": [
+          "snapshot",
+          "from_snapshot"
+        ],
+        "inputs": [
+          "outcome modifiers",
+          "edge deltas",
+          "rationale"
+        ],
+        "outputs": [
+          "world.parameter_vector"
+        ],
+        "comment": "Слой изменения outcomes/edges/shock_decay поверх базового мира.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 165,
+        "fy": -110,
+        "fz": 0,
+        "x": 165,
+        "y": -110,
+        "z": 0,
+        "val": 6.0,
+        "color": "#ff9f8a"
+      },
+      {
+        "id": "estimator_sign_repair",
+        "label": "sign consistency repair",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 7,
+        "stageLabel": "Budget and parameters",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.parameterestimator",
+        "functions": [
+          "_validate_sign_consistency",
+          "_repair_outcome_ids"
+        ],
+        "inputs": [
+          "rationale vs outcome direction"
+        ],
+        "outputs": [
+          "corrected/flagged vector"
+        ],
+        "comment": "Несоответствие знаков помечается или исправляется на уровне параметров.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 165,
+        "fy": -670,
+        "fz": -190,
+        "x": 165,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "pipeline_update",
+        "label": "pipeline.update",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "update",
+          "_run_world"
+        ],
+        "inputs": [
+          "previous_world",
+          "ParameterVector",
+          "signal"
+        ],
+        "outputs": [
+          "AnalysisPipelineResult"
+        ],
+        "comment": "Клонирует мир, применяет parameter_vector, запускает полный pipeline.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 9,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "base_world_retry",
+        "label": "base world fallback retry",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_process_one_signal"
+        ],
+        "inputs": [
+          "pipeline.update exception"
+        ],
+        "outputs": [
+          "retry from base_world_template"
+        ],
+        "comment": "При сбое primary update повторяет update от безопасного base_world с сохранением часов.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 330,
+        "fy": -670,
+        "fz": -190,
+        "x": 330,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "verifier_run",
+        "label": "Verifier.run(levels 1,2)",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.verifier.verifier",
+        "functions": [
+          "run",
+          "level1",
+          "level2"
+        ],
+        "inputs": [
+          "WorldState"
+        ],
+        "outputs": [
+          "VerificationReport"
+        ],
+        "comment": "Структурные и причинные проверки до симуляции.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 8,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "level1_check",
+        "label": "level1_check",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.verifier.level1",
+        "functions": [
+          "level1_check",
+          "compute_jacobian",
+          "spectral_radius"
+        ],
+        "inputs": [
+          "WorldState"
+        ],
+        "outputs": [
+          "structural violations"
+        ],
+        "comment": "Проверяет стабильность/Jacobian и structural constraints.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "level2_check",
+        "label": "level2_check",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.verifier.level2",
+        "functions": [
+          "level2_check"
+        ],
+        "inputs": [
+          "WorldState",
+          "causal_dag"
+        ],
+        "outputs": [
+          "sign consistency violations"
+        ],
+        "comment": "Проверяет направление причинных эффектов через малые шоки.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "fixedpoint_correction",
+        "label": "fixed-point correction",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.verifier.fixedpoint",
+        "functions": [
+          "iterate_fixed_point",
+          "find_fixed_point"
+        ],
+        "inputs": [
+          "violations",
+          "causal_dag"
+        ],
+        "outputs": [
+          "corrected world",
+          "iters"
+        ],
+        "comment": "Ограниченные итерации коррекции для sign consistency/fixed point.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "game_prepare",
+        "label": "GameRunner.prepare",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.game.runner",
+        "functions": [
+          "prepare",
+          "find_fixed_point",
+          "level1_check"
+        ],
+        "inputs": [
+          "WorldState"
+        ],
+        "outputs": [
+          "PreparedSimulationState"
+        ],
+        "comment": "Один раз выполняет policy-invariant prechecks и fixed point.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "game_run",
+        "label": "GameRunner.run_prepared",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.game.runner",
+        "functions": [
+          "run_prepared",
+          "run"
+        ],
+        "inputs": [
+          "prepared world",
+          "policies"
+        ],
+        "outputs": [
+          "SimResult"
+        ],
+        "comment": "Итерирует мир до max_steps, hard-stop, L2 stop или outcome convergence.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 8,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "step_world",
+        "label": "step_world",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.core.transition",
+        "functions": [
+          "step_world"
+        ],
+        "inputs": [
+          "WorldState",
+          "Policy[]",
+          "dt"
+        ],
+        "outputs": [
+          "next WorldState",
+          "L0 violations"
+        ],
+        "comment": "Одношаговый переход: resource operators, actor rules, bounds, L0 invariants.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "evolution_registry",
+        "label": "EvolutionOperator registry",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.core.evolution",
+        "functions": [
+          "LinearTransition",
+          "StockFlowTransition",
+          "LogisticGrowthTransition",
+          "ThresholdTransition",
+          "CoupledTransition",
+          "effective_edge_weight"
+        ],
+        "inputs": [
+          "resource.evolution_type",
+          "parameter_vector edge deltas"
+        ],
+        "outputs": [
+          "resource next value"
+        ],
+        "comment": "Динамические операторы ресурсов и поправки весов DAG.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "hard_level0_stop",
+        "label": "HardStopException",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.game.runner",
+        "functions": [
+          "run_prepared"
+        ],
+        "inputs": [
+          "level0 hard violation"
+        ],
+        "outputs": [
+          "stop_reason=hard_level0_violation"
+        ],
+        "comment": "Симуляция прекращается, нарушения сохраняются в SimResult.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 330,
+        "fy": -670,
+        "fz": -190,
+        "x": 330,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "hard_level2_stop",
+        "label": "hard level2 stop",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.game.runner",
+        "functions": [
+          "run_prepared"
+        ],
+        "inputs": [
+          "hard L2 violation"
+        ],
+        "outputs": [
+          "stop_reason=hard_level2_violation"
+        ],
+        "comment": "Если stop_on_hard_level2=true, rollout останавливается.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 330,
+        "fy": -670,
+        "fz": -190,
+        "x": 330,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "outcome_scoring",
+        "label": "score_outcomes",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.core.scorer",
+        "functions": [
+          "raw_outcome_scores",
+          "score_outcomes",
+          "compute_confidence"
+        ],
+        "inputs": [
+          "final WorldState",
+          "violations"
+        ],
+        "outputs": [
+          "probabilities",
+          "confidence",
+          "dominant_outcome"
+        ],
+        "comment": "Преобразует финальное состояние в outcome distribution и confidence.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 0,
+        "x": 330,
+        "y": -180,
+        "z": 0,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "policy_evaluator",
+        "label": "PolicyEvaluator",
+        "layer": "simulation",
+        "layerLabel": "Simulation and verifier",
+        "stage": 8,
+        "stageLabel": "Simulation pipeline",
+        "branch": 2,
+        "branchLabel": "research/tests",
+        "kind": "process",
+        "module": "freeman.agent.policyevaluator",
+        "functions": [
+          "evaluate"
+        ],
+        "inputs": [
+          "candidate_policies"
+        ],
+        "outputs": [
+          "policy_ranking"
+        ],
+        "comment": "Опциональный ранжировщик политик по expected utility.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 330,
+        "fy": -180,
+        "fz": 360,
+        "x": 330,
+        "y": -180,
+        "z": 360,
+        "val": 6.0,
+        "color": "#8fb3ff"
+      },
+      {
+        "id": "causal_trace_export",
+        "label": "_export_causal_edges",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "_export_causal_edges",
+          "_ensure_causal_node"
+        ],
+        "inputs": [
+          "signal",
+          "parameter deltas",
+          "trajectory"
+        ],
+        "outputs": [
+          "signal -> param -> variable -> outcome KG edges"
+        ],
+        "comment": "Детерминированный causal path для explain/verify forecast.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "forecast_record",
+        "label": "_record_forecasts",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "_record_forecasts",
+          "ForecastRegistry.record"
+        ],
+        "inputs": [
+          "outcome probs",
+          "causal_edge_ids"
+        ],
+        "outputs": [
+          "Forecast[]"
+        ],
+        "comment": "Каждый outcome получает прогноз с horizon=max_steps и causal path.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "analysis_node",
+        "label": "analysis_run KG node",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "KGNode",
+          "KnowledgeGraph.add_node"
+        ],
+        "inputs": [
+          "result summary"
+        ],
+        "outputs": [
+          "analysis_run node"
+        ],
+        "comment": "Сводный узел анализа с probs, verification, parameter vector и context ids.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "epistemic_nodes",
+        "label": "epistemic nodes",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.epistemic",
+        "functions": [
+          "build_disagreement_node",
+          "detect_belief_conflict",
+          "build_belief_conflict_node"
+        ],
+        "inputs": [
+          "reference probs",
+          "prior probs",
+          "signal"
+        ],
+        "outputs": [
+          "disagreement/conflict KG nodes"
+        ],
+        "comment": "Фиксирует расхождение с reference/momentum и sign mismatches.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "session_log",
+        "label": "SessionLog / KGDelta",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.memory.sessionlog",
+        "functions": [
+          "add_kg_delta"
+        ],
+        "inputs": [
+          "node/edge changes"
+        ],
+        "outputs": [
+          "support/contradiction deltas"
+        ],
+        "comment": "Локальный журнал изменений KG для reconciliation.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "reconciler",
+        "label": "Reconciler.reconcile",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.memory.reconciler",
+        "functions": [
+          "reconcile"
+        ],
+        "inputs": [
+          "KG",
+          "SessionLog",
+          "step_index"
+        ],
+        "outputs": [
+          "ReconciliationResult",
+          "kg_health"
+        ],
+        "comment": "Сливает/разделяет/архивирует конфликтующие claims и обновляет self-model metrics.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 8,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "vectorstore_sync",
+        "label": "vectorstore sync",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.memory.reconciler",
+        "functions": [
+          "sync_from_kg",
+          "upsert",
+          "delete"
+        ],
+        "inputs": [
+          "KG changes"
+        ],
+        "outputs": [
+          "semantic index"
+        ],
+        "comment": "Если vectorstore включен, reconciliation синхронизирует embedding index.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 495,
+        "fy": -250,
+        "fz": -190,
+        "x": 495,
+        "y": -250,
+        "z": -190,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "kg_compaction",
+        "label": "KG split/archive/compact",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.memory.reconciler",
+        "functions": [
+          "reconcile"
+        ],
+        "inputs": [
+          "low confidence",
+          "conflicting claims"
+        ],
+        "outputs": [
+          "archived nodes",
+          "split claims",
+          "health"
+        ],
+        "comment": "Fallback качества памяти: конфликтующие claims разделяются, слабые архивируются.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 495,
+        "fy": -250,
+        "fz": -190,
+        "x": 495,
+        "y": -250,
+        "z": -190,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "verify_forecasts",
+        "label": "_verify_due_forecasts",
+        "layer": "memory",
+        "layerLabel": "Memory and KG",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_verify_due_forecasts",
+          "ForecastRegistry.due",
+          "AnalysisPipeline.verify_forecast"
+        ],
+        "inputs": [
+          "runtime_step",
+          "current probabilities"
+        ],
+        "outputs": [
+          "verified forecasts",
+          "epistemic log"
+        ],
+        "comment": "Монотонный runtime_step определяет due forecasts и фактическую ошибку.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 495,
+        "fy": -250,
+        "fz": 0,
+        "x": 495,
+        "y": -250,
+        "z": 0,
+        "val": 6.0,
+        "color": "#b7a3ff"
+      },
+      {
+        "id": "explain_forecast",
+        "label": "explain_forecast",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 9,
+        "stageLabel": "Memory and epistemics",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.agent.analysispipeline",
+        "functions": [
+          "list_forecasts",
+          "explain_forecast"
+        ],
+        "inputs": [
+          "forecast_id",
+          "causal path"
+        ],
+        "outputs": [
+          "ForecastExplanation"
+        ],
+        "comment": "Собирает цепочку causal edges и статус confirmed/refuted.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 495,
+        "fy": -530,
+        "fz": 190,
+        "x": 495,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "conscious_refresh",
+        "label": "post_pipeline_update",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 10,
+        "stageLabel": "Consciousness",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.consciousness",
+        "functions": [
+          "post_pipeline_update",
+          "_sync_runtime_metrics",
+          "_project_goal_state",
+          "_project_active_hypotheses",
+          "_project_identity_traits"
+        ],
+        "inputs": [
+          "AnalysisPipelineResult",
+          "KG"
+        ],
+        "outputs": [
+          "ConsciousState"
+        ],
+        "comment": "Обновляет self-model, goals, active hypotheses, traits, attention state.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 660,
+        "fy": -320,
+        "fz": 0,
+        "x": 660,
+        "y": -320,
+        "z": 0,
+        "val": 8,
+        "color": "#d68be8"
+      },
+      {
+        "id": "runtime_feedback",
+        "label": "refresh_after_runtime_feedback",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 10,
+        "stageLabel": "Consciousness",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.consciousness",
+        "functions": [
+          "refresh_after_runtime_feedback"
+        ],
+        "inputs": [
+          "stream relevance stats"
+        ],
+        "outputs": [
+          "self observation"
+        ],
+        "comment": "Записывает метрики фильтра и откалиброванную runtime-память.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 660,
+        "fy": -320,
+        "fz": 0,
+        "x": 660,
+        "y": -320,
+        "z": 0,
+        "val": 6.0,
+        "color": "#d68be8"
+      },
+      {
+        "id": "epistemic_feedback",
+        "label": "refresh_after_epistemic_update",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 10,
+        "stageLabel": "Consciousness",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.agent.consciousness",
+        "functions": [
+          "refresh_after_epistemic_update"
+        ],
+        "inputs": [
+          "verified forecasts",
+          "MAE"
+        ],
+        "outputs": [
+          "self-model epistemic traits"
+        ],
+        "comment": "Обновляет self-model после верификации прогнозов.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 660,
+        "fy": -320,
+        "fz": 0,
+        "x": 660,
+        "y": -320,
+        "z": 0,
+        "val": 6.0,
+        "color": "#d68be8"
+      },
+      {
+        "id": "idle_scheduler",
+        "label": "IdleScheduler",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 10,
+        "stageLabel": "Consciousness",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.consciousness",
+        "functions": [
+          "maybe_deliberate",
+          "IdleScheduler.score",
+          "should_deliberate"
+        ],
+        "inputs": [
+          "ConsciousState",
+          "now"
+        ],
+        "outputs": [
+          "deliberation act | None"
+        ],
+        "comment": "Когда очередь пуста, выбирает внутренний акт по pressure/age/attention.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 660,
+        "fy": -320,
+        "fz": -190,
+        "x": 660,
+        "y": -320,
+        "z": -190,
+        "val": 6.0,
+        "color": "#d68be8"
+      },
+      {
+        "id": "deliberation_acts",
+        "label": "deliberation acts",
+        "layer": "consciousness",
+        "layerLabel": "Consciousness",
+        "stage": 10,
+        "stageLabel": "Consciousness",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.consciousness",
+        "functions": [
+          "_capability_review",
+          "_attention_rebalance",
+          "_trait_consolidation",
+          "_hypothesis_aging",
+          "_consistency_check",
+          "_anomaly_review"
+        ],
+        "inputs": [
+          "self-model"
+        ],
+        "outputs": [
+          "TraceEvent",
+          "KG updates"
+        ],
+        "comment": "Внутренние процессы сознания без внешнего сигнала.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 660,
+        "fy": -320,
+        "fz": -190,
+        "x": 660,
+        "y": -320,
+        "z": -190,
+        "val": 6.0,
+        "color": "#d68be8"
+      },
+      {
+        "id": "ontology_repair_request",
+        "label": "ontology_repair_request",
+        "layer": "repair",
+        "layerLabel": "Repair",
+        "stage": 10,
+        "stageLabel": "Consciousness",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.agent.consciousness",
+        "functions": [
+          "_should_trigger_ontology_repair",
+          "_emit_ontology_repair_request"
+        ],
+        "inputs": [
+          "anomaly clusters",
+          "ontology_gap traits"
+        ],
+        "outputs": [
+          "TraceEvent"
+        ],
+        "comment": "При устойчивых gaps формирует запрос на repair.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 660,
+        "fy": -390,
+        "fz": -190,
+        "x": 660,
+        "y": -390,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff7e67"
+      },
+      {
+        "id": "repair_dispatch",
+        "label": "_check_and_handle_repair_request",
+        "layer": "repair",
+        "layerLabel": "Repair",
+        "stage": 11,
+        "stageLabel": "Repair",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_pending_repair_requests",
+          "_trigger_ontology_repair"
+        ],
+        "inputs": [
+          "repair trace events"
+        ],
+        "outputs": [
+          "handled flag"
+        ],
+        "comment": "Runtime собирает gap_topics и запускает repair path.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 825,
+        "fy": -390,
+        "fz": -190,
+        "x": 825,
+        "y": -390,
+        "z": -190,
+        "val": 8,
+        "color": "#ff7e67"
+      },
+      {
+        "id": "schema_overlay_repair",
+        "label": "schema_path ontology overlay",
+        "layer": "repair",
+        "layerLabel": "Repair",
+        "stage": 11,
+        "stageLabel": "Repair",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_apply_schema_path_ontology_repair",
+          "_infer_topic_aliases",
+          "_topic_relation_candidates",
+          "_append_causal_edges_to_schema"
+        ],
+        "inputs": [
+          "gap topics",
+          "KG semantic search",
+          "package schema"
+        ],
+        "outputs": [
+          "metadata patch",
+          "causal edges",
+          "proposal node"
+        ],
+        "comment": "Для schema_path/fallback режимов auto-applies ontology topics/aliases/causal edges.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 825,
+        "fy": -390,
+        "fz": -190,
+        "x": 825,
+        "y": -390,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff7e67"
+      },
+      {
+        "id": "llm_rebootstrap_repair",
+        "label": "LLM re-bootstrap repair",
+        "layer": "repair",
+        "layerLabel": "Repair",
+        "stage": 11,
+        "stageLabel": "Repair",
+        "branch": -2,
+        "branchLabel": "hard fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_trigger_ontology_repair",
+          "_bootstrap"
+        ],
+        "inputs": [
+          "domain brief + observed topics"
+        ],
+        "outputs": [
+          "new bootstrap package",
+          "preserved state"
+        ],
+        "comment": "Для LLM mode дописывает brief, удаляет package и пересинтезирует схему с сохранением KG/state.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 825,
+        "fy": -390,
+        "fz": -360,
+        "x": 825,
+        "y": -390,
+        "z": -360,
+        "val": 6.0,
+        "color": "#ff7e67"
+      },
+      {
+        "id": "repair_blocked",
+        "label": "repair blocked/failed",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 11,
+        "stageLabel": "Repair",
+        "branch": -2,
+        "branchLabel": "hard fallback",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_repair_budget_decision",
+          "_mark_gap_traits_failed"
+        ],
+        "inputs": [
+          "budget stop",
+          "missing brief",
+          "bootstrap exception"
+        ],
+        "outputs": [
+          "repair_failed traits",
+          "ledger"
+        ],
+        "comment": "Repair может быть заблокирован бюджетом, отсутствием brief/topics или ошибкой bootstrap.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 825,
+        "fy": -670,
+        "fz": -360,
+        "x": 825,
+        "y": -670,
+        "z": -360,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "append_trace",
+        "label": "TraceEvent append",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 12,
+        "stageLabel": "Persistence",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_runtime_trace_for_signal",
+          "_append_unlogged_trace_events",
+          "EventLog.append"
+        ],
+        "inputs": [
+          "runtime diff"
+        ],
+        "outputs": [
+          "event_log.jsonl"
+        ],
+        "comment": "Каждый значимый переход получает TraceEvent с refs/diff/rationale.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 990,
+        "fy": -460,
+        "fz": 0,
+        "x": 990,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "persist_context",
+        "label": "_persist_context",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 12,
+        "stageLabel": "Persistence",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_persist_context",
+          "_persist_runtime_state"
+        ],
+        "inputs": [
+          "RuntimeContext"
+        ],
+        "outputs": [
+          "kg_state",
+          "world_state",
+          "signal_memory",
+          "pending_queue",
+          "checkpoint",
+          "cursors"
+        ],
+        "comment": "Единая точка durable-записи runtime state.",
+        "invariant": "",
+        "critical": true,
+        "fallback": false,
+        "fx": 990,
+        "fy": -460,
+        "fz": 0,
+        "x": 990,
+        "y": -460,
+        "z": 0,
+        "val": 8,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "kg_snapshot",
+        "label": "KGSnapshotManager",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 12,
+        "stageLabel": "Persistence",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.kgsnapshot",
+        "functions": [
+          "write_snapshot",
+          "snapshot_manager_from_config",
+          "_prune_if_needed"
+        ],
+        "inputs": [
+          "KG",
+          "reason",
+          "runtime_step"
+        ],
+        "outputs": [
+          "kg_snapshots/*.json",
+          "manifest.jsonl"
+        ],
+        "comment": "Версионированные snapshot-ы KG по bootstrap/signal/filter/watch/anomaly.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 990,
+        "fy": -460,
+        "fz": 0,
+        "x": 990,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "loop_summary",
+        "label": "LoopSummary",
+        "layer": "persistence",
+        "layerLabel": "Persistence",
+        "stage": 12,
+        "stageLabel": "Persistence",
+        "branch": 0,
+        "branchLabel": "main execution",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "LoopSummary.to_dict",
+          "_run_loop"
+        ],
+        "inputs": [
+          "stats"
+        ],
+        "outputs": [
+          "stdout JSON summary"
+        ],
+        "comment": "Финальный отчет остановленного runtime.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 990,
+        "fy": -460,
+        "fz": 0,
+        "x": 990,
+        "y": -460,
+        "z": 0,
+        "val": 6.0,
+        "color": "#9aa5b1"
+      },
+      {
+        "id": "query_mode",
+        "label": "stream_runtime --query",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.runtime.stream_runtime",
+        "functions": [
+          "_handle_query_mode"
+        ],
+        "inputs": [
+          "query args"
+        ],
+        "outputs": [
+          "JSON/text result"
+        ],
+        "comment": "Обходит runtime loop и читает persisted artifacts.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 8,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "runtime_artifacts",
+        "label": "load_runtime_artifacts",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.runtime.queryengine",
+        "functions": [
+          "load_runtime_artifacts"
+        ],
+        "inputs": [
+          "config",
+          "KG",
+          "checkpoint",
+          "world_state",
+          "forecasts"
+        ],
+        "outputs": [
+          "RuntimeArtifacts"
+        ],
+        "comment": "Единая загрузка runtime для semantic/answer/API tools.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "semantic_query",
+        "label": "RuntimeQueryEngine.semantic_query",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.runtime.queryengine",
+        "functions": [
+          "semantic_query",
+          "_forecast_evidence",
+          "_causal_edge_evidence",
+          "_world_state_evidence"
+        ],
+        "inputs": [
+          "question text"
+        ],
+        "outputs": [
+          "RuntimeQueryResult"
+        ],
+        "comment": "Собирает evidence из KG, forecast registry, causal edges и world_state.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "answer_engine",
+        "label": "RuntimeAnswerEngine.answer",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.runtime.queryengine",
+        "functions": [
+          "answer"
+        ],
+        "inputs": [
+          "RuntimeQueryResult",
+          "chat client optional"
+        ],
+        "outputs": [
+          "answer + evidence"
+        ],
+        "comment": "Ответ строится по evidence; без совпадений возвращает no-evidence структуру.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "answer_no_evidence",
+        "label": "no evidence answer",
+        "layer": "fallback",
+        "layerLabel": "Fallbacks",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": -1,
+        "branchLabel": "soft fallback",
+        "kind": "process",
+        "module": "freeman.runtime.queryengine",
+        "functions": [
+          "RuntimeAnswerEngine.answer"
+        ],
+        "inputs": [
+          "empty retrieval"
+        ],
+        "outputs": [
+          "matched=false",
+          "no_match_reason"
+        ],
+        "comment": "Fallback против галлюцинаций: ответ не синтезируется без runtime evidence.",
+        "invariant": "",
+        "critical": false,
+        "fallback": true,
+        "fx": 1155,
+        "fy": -670,
+        "fz": -190,
+        "x": 1155,
+        "y": -670,
+        "z": -190,
+        "val": 6.0,
+        "color": "#ff6b57"
+      },
+      {
+        "id": "tool_api",
+        "label": "freeman.api.tool_api",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.api.tool_api",
+        "functions": [
+          "freeman_compile_domain",
+          "freeman_run_simulation",
+          "freeman_get_world_state",
+          "freeman_verify_domain",
+          "invoke_tool"
+        ],
+        "inputs": [
+          "tool payloads"
+        ],
+        "outputs": [
+          "world registry",
+          "simulation JSON",
+          "verification"
+        ],
+        "comment": "OpenAI-compatible tool surface и in-memory registry.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "mcp_server",
+        "label": "MCP server",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.mcp.server",
+        "functions": [
+          "build_mcp_server",
+          "main"
+        ],
+        "inputs": [
+          "FREEMAN_TOOLS"
+        ],
+        "outputs": [
+          "FastMCP tools"
+        ],
+        "comment": "Экспортирует Freeman tools через stdio/SSE/HTTP transport.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "kg_export",
+        "label": "KG export viewers",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.interface.kgexport",
+        "functions": [
+          "export_html",
+          "export_html_3d",
+          "export_dot",
+          "export_json_ld"
+        ],
+        "inputs": [
+          "KnowledgeGraph"
+        ],
+        "outputs": [
+          "HTML/DOT/JSON-LD"
+        ],
+        "comment": "Визуальные и interoperable exports KG.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "kg_evolution",
+        "label": "KG evolution viewer",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.interface.kgevolution",
+        "functions": [
+          "export_html"
+        ],
+        "inputs": [
+          "kg_snapshots"
+        ],
+        "outputs": [
+          "timeline playback"
+        ],
+        "comment": "Интерактивный playback snapshots по runtime_step.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "cli_interface",
+        "label": "freeman.interface.cli/api",
+        "layer": "interface",
+        "layerLabel": "Interfaces",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 1,
+        "branchLabel": "query/interface",
+        "kind": "process",
+        "module": "freeman.interface.cli",
+        "functions": [
+          "main"
+        ],
+        "inputs": [
+          "user commands"
+        ],
+        "outputs": [
+          "compile/run/query/export"
+        ],
+        "comment": "Классический CLI/API слой поверх домена, симуляции, KG и identity.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -530,
+        "fz": 190,
+        "x": 1155,
+        "y": -530,
+        "z": 190,
+        "val": 6.0,
+        "color": "#78d7c6"
+      },
+      {
+        "id": "realworld_manifold",
+        "label": "realworld manifold experiments",
+        "layer": "test",
+        "layerLabel": "Tests and research",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 2,
+        "branchLabel": "research/tests",
+        "kind": "process",
+        "module": "freeman.realworld.manifold",
+        "functions": [
+          "build_binary_market_schema",
+          "run_manifold_backtest"
+        ],
+        "inputs": [
+          "market/news data"
+        ],
+        "outputs": [
+          "market schemas",
+          "backtest results"
+        ],
+        "comment": "Исследовательский слой связывает рыночные вероятности и Freeman schemas.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -600,
+        "fz": 360,
+        "x": 1155,
+        "y": -600,
+        "z": 360,
+        "val": 6.0,
+        "color": "#c8d86b"
+      },
+      {
+        "id": "causal_estimator",
+        "label": "causal estimator",
+        "layer": "test",
+        "layerLabel": "Tests and research",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 2,
+        "branchLabel": "research/tests",
+        "kind": "process",
+        "module": "freeman.causal.estimator",
+        "functions": [
+          "estimate"
+        ],
+        "inputs": [
+          "panel/time series"
+        ],
+        "outputs": [
+          "causal result"
+        ],
+        "comment": "Отдельный causal estimation модуль, используемый в экспериментах.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -600,
+        "fz": 360,
+        "x": 1155,
+        "y": -600,
+        "z": 360,
+        "val": 6.0,
+        "color": "#c8d86b"
+      },
+      {
+        "id": "faab_benchmark",
+        "label": "FAAB benchmark",
+        "layer": "test",
+        "layerLabel": "Tests and research",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 2,
+        "branchLabel": "research/tests",
+        "kind": "process",
+        "module": "scripts.benchmark_faab.runner",
+        "functions": [
+          "BenchmarkRunner.evaluate_case",
+          "_run_freeman_step",
+          "_persist_signal_and_inference"
+        ],
+        "inputs": [
+          "benchmark cases"
+        ],
+        "outputs": [
+          "metrics",
+          "traces",
+          "KG snapshots"
+        ],
+        "comment": "Бенчмарк проверяет forecast/answer behavior и repeatability.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -600,
+        "fz": 360,
+        "x": 1155,
+        "y": -600,
+        "z": 360,
+        "val": 6.0,
+        "color": "#c8d86b"
+      },
+      {
+        "id": "test_suite",
+        "label": "pytest scenarios",
+        "layer": "test",
+        "layerLabel": "Tests and research",
+        "stage": 13,
+        "stageLabel": "Query and interfaces",
+        "branch": 2,
+        "branchLabel": "research/tests",
+        "kind": "process",
+        "module": "tests/",
+        "functions": [
+          "test_runtime",
+          "test_repair_loop",
+          "test_forecastregistry",
+          "test_consciousness_stage*",
+          "test_mcp_server",
+          "test_benchmark_faab"
+        ],
+        "inputs": [
+          "fixtures"
+        ],
+        "outputs": [
+          "coverage of flows/fallbacks"
+        ],
+        "comment": "Тесты фиксируют runtime, repair, memory, consciousness, MCP/API и simulation contracts.",
+        "invariant": "",
+        "critical": false,
+        "fallback": false,
+        "fx": 1155,
+        "fy": -600,
+        "fz": 360,
+        "x": 1155,
+        "y": -600,
+        "z": 360,
+        "val": 6.0,
+        "color": "#c8d86b"
+      }
+    ],
+    "links": [
+      {
+        "source": "cli_args",
+        "target": "load_yaml",
+        "relation": "calls",
+        "order": 1,
+        "comment": "main loads config before resolving mode.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "config_yaml",
+        "target": "load_yaml",
+        "relation": "reads",
+        "order": 2,
+        "comment": "YAML overlays runtime defaults.",
+        "transformation": "YAML -> dict",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "load_yaml",
+        "target": "resolve_paths",
+        "relation": "transforms",
+        "order": 3,
+        "comment": "Configuration paths become absolute RuntimePaths.",
+        "transformation": "config + args -> RuntimePaths",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "resolve_paths",
+        "target": "storage_init",
+        "relation": "builds",
+        "order": 4,
+        "comment": "RuntimePaths feed checkpoint/cursor/log/memory recovery.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "storage_init",
+        "target": "cursor_store",
+        "relation": "builds",
+        "order": 5,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "storage_init",
+        "target": "event_log",
+        "relation": "builds",
+        "order": 6,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "storage_init",
+        "target": "signal_memory",
+        "relation": "builds",
+        "order": 7,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "storage_init",
+        "target": "pending_queue",
+        "relation": "builds",
+        "order": 8,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "storage_init",
+        "target": "select_llm",
+        "relation": "then",
+        "order": 9,
+        "comment": "Storage is ready before bootstrap uses resume artifacts.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "select_llm",
+        "target": "vectorstore",
+        "relation": "then",
+        "order": 10,
+        "comment": "LLM and memory backends are selected during bootstrap.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "vectorstore",
+        "target": "knowledge_graph",
+        "relation": "builds",
+        "order": 11,
+        "comment": "Embedding/vector backends are attached to KG if configured.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "knowledge_graph",
+        "target": "pipeline_init",
+        "relation": "builds",
+        "order": 12,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "forecast_registry",
+        "target": "pipeline_init",
+        "relation": "builds",
+        "order": 13,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "pipeline_init",
+        "target": "bootstrap_mode",
+        "relation": "then",
+        "order": 14,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "storage_init",
+        "target": "resume_state",
+        "relation": "retrieves",
+        "order": 15,
+        "comment": "Resume can replace fresh conscious/world state.",
+        "transformation": "",
+        "condition": "--resume and checkpoint/world_state exist",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "resume_state",
+        "target": "pipeline_init",
+        "relation": "updates",
+        "order": 16,
+        "comment": "Loaded state is rebound to the current KG.",
+        "transformation": "",
+        "condition": "checkpoint exists",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "schema_path",
+        "target": "schema_package",
+        "relation": "reads",
+        "order": 17,
+        "comment": "Existing JSON schema becomes bootstrap package.",
+        "transformation": "schema JSON -> package",
+        "condition": "bootstrap mode schema_path",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "domain_brief",
+        "target": "llm_synthesis",
+        "relation": "reads",
+        "order": 18,
+        "comment": "Domain brief drives LLM synthesis.",
+        "transformation": "text -> schema/policies/assumptions",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "bootstrap_mode",
+        "target": "llm_synthesis",
+        "relation": "routes",
+        "order": 19,
+        "comment": "Default route when a brief is present or no schema_path exists.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "bootstrap_mode",
+        "target": "schema_package",
+        "relation": "routes",
+        "order": 20,
+        "comment": "Explicit schema_path or schema_path argument route.",
+        "transformation": "",
+        "condition": "schema_path mode",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "llm_synthesis",
+        "target": "repair_loop_compile",
+        "relation": "fallback",
+        "order": 21,
+        "comment": "Compile exceptions become repair feedback.",
+        "transformation": "",
+        "condition": "DomainCompiler raises",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "llm_synthesis",
+        "target": "repair_loop_verifier",
+        "relation": "fallback",
+        "order": 22,
+        "comment": "L1/L0/L2 violations become repair feedback.",
+        "transformation": "",
+        "condition": "violations found",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "repair_loop_compile",
+        "target": "llm_synthesis",
+        "relation": "repairs",
+        "order": 23,
+        "comment": "LLM returns a full corrected package.",
+        "transformation": "feedback -> repaired package",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "repair_loop_verifier",
+        "target": "llm_synthesis",
+        "relation": "repairs",
+        "order": 24,
+        "comment": "Verifier feedback is accumulated across attempts.",
+        "transformation": "violations -> repaired package",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "llm_synthesis",
+        "target": "bootstrap_fallback_schema",
+        "relation": "fallback",
+        "order": 25,
+        "comment": "Configured fallback schema is loaded after LLM bootstrap failure.",
+        "transformation": "",
+        "condition": "exception and fallback_schema_path",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "llm_synthesis",
+        "target": "schema_repair_failed",
+        "relation": "fallback",
+        "order": 26,
+        "comment": "No clean package after retries raises hard failure.",
+        "transformation": "",
+        "condition": "max_retries exhausted",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "llm_synthesis",
+        "target": "domain_compile",
+        "relation": "transforms",
+        "order": 27,
+        "comment": "Verified synthesized schema compiles into WorldState.",
+        "transformation": "package.schema -> WorldState",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "schema_package",
+        "target": "domain_compile",
+        "relation": "transforms",
+        "order": 28,
+        "comment": "Schema path package compiles directly.",
+        "transformation": "schema -> WorldState",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "bootstrap_fallback_schema",
+        "target": "domain_compile",
+        "relation": "transforms",
+        "order": 29,
+        "comment": "Fallback schema compiles like normal schema.",
+        "transformation": "fallback schema -> WorldState",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "domain_compile",
+        "target": "world_state",
+        "relation": "builds",
+        "order": 30,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "domain_compile",
+        "target": "historical_validation",
+        "relation": "verifies",
+        "order": 31,
+        "comment": "Optional historical data can add operator warnings.",
+        "transformation": "",
+        "condition": "schema.historical_data present",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "world_state",
+        "target": "initial_pipeline_run",
+        "relation": "calls",
+        "order": 32,
+        "comment": "Fresh world gets initial analysis run if no resume world.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "initial_pipeline_run",
+        "target": "persist_bootstrap",
+        "relation": "persists",
+        "order": 33,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "persist_bootstrap",
+        "target": "collect_sources",
+        "relation": "then",
+        "order": 34,
+        "comment": "Runtime context can now collect external sources.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "source_configs",
+        "target": "collect_sources",
+        "relation": "reads",
+        "order": 35,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "collect_sources",
+        "target": "connector_http",
+        "relation": "builds",
+        "order": 36,
+        "comment": "HTTP JSON connector from config.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "collect_sources",
+        "target": "connector_rss",
+        "relation": "builds",
+        "order": 37,
+        "comment": "RSS connector from config.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "collect_sources",
+        "target": "connector_web",
+        "relation": "builds",
+        "order": 38,
+        "comment": "Web connector from config.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "collect_sources",
+        "target": "poll_sources",
+        "relation": "calls",
+        "order": 39,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "connector_http",
+        "target": "poll_sources",
+        "relation": "feeds",
+        "order": 40,
+        "comment": "HTTP signals enter fetched list.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "connector_rss",
+        "target": "poll_sources",
+        "relation": "feeds",
+        "order": 41,
+        "comment": "RSS signals enter fetched list.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "connector_web",
+        "target": "poll_sources",
+        "relation": "feeds",
+        "order": 42,
+        "comment": "Web signals enter fetched list.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "poll_sources",
+        "target": "source_fetch_failed",
+        "relation": "fallback",
+        "order": 43,
+        "comment": "A broken source is skipped with a warning.",
+        "transformation": "",
+        "condition": "source.fetch raises",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "poll_sources",
+        "target": "external_filter",
+        "relation": "filters",
+        "order": 44,
+        "comment": "Fetched signals are keyword/relevance screened.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "external_filter",
+        "target": "dedupe_queue",
+        "relation": "queues",
+        "order": 45,
+        "comment": "Eligible signals sorted by timestamp and capped by max_signals_per_poll.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "dedupe_queue",
+        "target": "pending_queue",
+        "relation": "persists",
+        "order": 46,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "pending_queue",
+        "target": "process_signal",
+        "relation": "dequeues",
+        "order": 47,
+        "comment": "FIFO pop(0) gives one signal to runtime step.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "process_signal",
+        "target": "runtime_step_increment",
+        "relation": "updates",
+        "order": 48,
+        "comment": "Runtime step increments before semantic processing.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "runtime_step_increment",
+        "target": "self_calibration_gate",
+        "relation": "checks",
+        "order": 49,
+        "comment": "Agent-level relevance only after self calibration begins.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "self_calibration_gate",
+        "target": "agent_relevance",
+        "relation": "calls",
+        "order": 50,
+        "comment": "Uses ontology and active hypothesis terms.",
+        "transformation": "",
+        "condition": "self_observation exists",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "agent_relevance",
+        "target": "filtered_out",
+        "relation": "fallback",
+        "order": 51,
+        "comment": "Relevant enough check failed but signal overlaps known ontology/hypotheses.",
+        "transformation": "",
+        "condition": "score < threshold and overlap > 0",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "agent_relevance",
+        "target": "anomaly_candidate",
+        "relation": "fallback",
+        "order": 52,
+        "comment": "No ontology/hypothesis overlap becomes anomaly candidate.",
+        "transformation": "",
+        "condition": "score < threshold and overlap == 0",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "runtime_step_increment",
+        "target": "ingest_signal",
+        "relation": "calls",
+        "order": 53,
+        "comment": "Signals not filtered by agent go to ingestion engine.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "ingest_signal",
+        "target": "duplicate_signal",
+        "relation": "fallback",
+        "order": 54,
+        "comment": "Duplicate within window can produce no trigger.",
+        "transformation": "",
+        "condition": "SignalMemory.is_duplicate",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "ingest_signal",
+        "target": "llm_classifier_fallback",
+        "relation": "fallback",
+        "order": 55,
+        "comment": "Keyword classifier handles missing callable/chat_json classifier.",
+        "transformation": "",
+        "condition": "no classifier",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "duplicate_signal",
+        "target": "watch_mode",
+        "relation": "fallback",
+        "order": 56,
+        "comment": "No trigger creates WATCH trace.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "ingest_signal",
+        "target": "watch_mode",
+        "relation": "fallback",
+        "order": 57,
+        "comment": "Low anomaly/semantic/severity maps to WATCH.",
+        "transformation": "",
+        "condition": "mode WATCH",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "ingest_signal",
+        "target": "budget_decision",
+        "relation": "gates",
+        "order": 58,
+        "comment": "ANALYZE/DEEP_DIVE requests are checked against budget.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "budget_decision",
+        "target": "budget_downgrade",
+        "relation": "fallback",
+        "order": 59,
+        "comment": "Budget pressure downgrades or blocks.",
+        "transformation": "",
+        "condition": "estimate exceeds policy/remaining",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "budget_decision",
+        "target": "budget_ledger",
+        "relation": "records",
+        "order": 60,
+        "comment": "Signal processing budget event is appended after processing.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "budget_decision",
+        "target": "parameter_estimator",
+        "relation": "calls",
+        "order": 61,
+        "comment": "Approved ANALYZE/DEEP_DIVE estimates parameters.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "budget_downgrade",
+        "target": "watch_mode",
+        "relation": "fallback",
+        "order": 62,
+        "comment": "A downgraded WATCH skips world update unless include_watch behavior records trace.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "parameter_estimator",
+        "target": "parameter_vector",
+        "relation": "transforms",
+        "order": 63,
+        "comment": "Signal text and memory context become dynamic parameter layer.",
+        "transformation": "Signal -> ParameterVector",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "parameter_estimator",
+        "target": "estimator_sign_repair",
+        "relation": "fallback",
+        "order": 64,
+        "comment": "Directional inconsistency is repaired or flagged.",
+        "transformation": "",
+        "condition": "sign mismatch",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "parameter_vector",
+        "target": "pipeline_update",
+        "relation": "calls",
+        "order": 65,
+        "comment": "ParameterVector is attached to a cloned current_world.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "pipeline_update",
+        "target": "base_world_retry",
+        "relation": "fallback",
+        "order": 66,
+        "comment": "Primary update retry from base_world_template after exception.",
+        "transformation": "",
+        "condition": "pipeline.update raises",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "base_world_retry",
+        "target": "pipeline_update",
+        "relation": "calls",
+        "order": 67,
+        "comment": "Retry preserves runtime_step/t/seed clocks.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "pipeline_update",
+        "target": "verifier_run",
+        "relation": "verifies",
+        "order": 68,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "verifier_run",
+        "target": "level1_check",
+        "relation": "calls",
+        "order": 69,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "verifier_run",
+        "target": "level2_check",
+        "relation": "calls",
+        "order": 70,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "level2_check",
+        "target": "fixedpoint_correction",
+        "relation": "repairs",
+        "order": 71,
+        "comment": "Sign violations can trigger bounded correction iterations.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "verifier_run",
+        "target": "game_prepare",
+        "relation": "then",
+        "order": 72,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "game_prepare",
+        "target": "game_run",
+        "relation": "calls",
+        "order": 73,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "game_run",
+        "target": "step_world",
+        "relation": "iterates",
+        "order": 74,
+        "comment": "Each rollout step applies transition operators and L0 checks.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "step_world",
+        "target": "evolution_registry",
+        "relation": "transforms",
+        "order": 75,
+        "comment": "Resources update via registered operators and effective edge weights.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "step_world",
+        "target": "hard_level0_stop",
+        "relation": "fallback",
+        "order": 76,
+        "comment": "Hard mathematical invariant stops rollout.",
+        "transformation": "",
+        "condition": "HardStopException",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "game_run",
+        "target": "hard_level2_stop",
+        "relation": "fallback",
+        "order": 77,
+        "comment": "Periodic L2 hard violation can stop rollout.",
+        "transformation": "",
+        "condition": "stop_on_hard_level2",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "game_run",
+        "target": "outcome_scoring",
+        "relation": "scores",
+        "order": 78,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "pipeline_update",
+        "target": "policy_evaluator",
+        "relation": "calls",
+        "order": 79,
+        "comment": "Optional candidate policy ranking.",
+        "transformation": "",
+        "condition": "policy_evaluator provided",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "outcome_scoring",
+        "target": "causal_trace_export",
+        "relation": "transforms",
+        "order": 80,
+        "comment": "Simulation trajectory and parameter deltas become KG causal edges.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "causal_trace_export",
+        "target": "forecast_record",
+        "relation": "then",
+        "order": 81,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "forecast_record",
+        "target": "analysis_node",
+        "relation": "then",
+        "order": 82,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "analysis_node",
+        "target": "epistemic_nodes",
+        "relation": "then",
+        "order": 83,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "epistemic_nodes",
+        "target": "session_log",
+        "relation": "records",
+        "order": 84,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "analysis_node",
+        "target": "session_log",
+        "relation": "records",
+        "order": 85,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "session_log",
+        "target": "reconciler",
+        "relation": "calls",
+        "order": 86,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "reconciler",
+        "target": "vectorstore_sync",
+        "relation": "persists",
+        "order": 87,
+        "comment": "Embedding index sync when vectorstore exists.",
+        "transformation": "",
+        "condition": "vectorstore enabled",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "reconciler",
+        "target": "kg_compaction",
+        "relation": "fallback",
+        "order": 88,
+        "comment": "Conflict/low confidence memory quality fallback.",
+        "transformation": "",
+        "condition": "conflicting or weak claims",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "reconciler",
+        "target": "conscious_refresh",
+        "relation": "updates",
+        "order": 89,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "forecast_record",
+        "target": "verify_forecasts",
+        "relation": "schedules",
+        "order": 90,
+        "comment": "Forecasts become due after created_step + horizon.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "process_signal",
+        "target": "verify_forecasts",
+        "relation": "calls",
+        "order": 91,
+        "comment": "Every signal path, including WATCH/filter/anomaly, can verify due forecasts.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "verify_forecasts",
+        "target": "epistemic_feedback",
+        "relation": "updates",
+        "order": 92,
+        "comment": "Forecast error refreshes epistemic self-model.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "conscious_refresh",
+        "target": "append_trace",
+        "relation": "records",
+        "order": 93,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "append_trace",
+        "target": "persist_context",
+        "relation": "persists",
+        "order": 94,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "persist_context",
+        "target": "kg_snapshot",
+        "relation": "persists",
+        "order": 95,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "process_signal",
+        "target": "runtime_feedback",
+        "relation": "updates",
+        "order": 96,
+        "comment": "Agent relevance stats are written to self-model during calibrated filtering.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "pending_queue",
+        "target": "idle_scheduler",
+        "relation": "fallback",
+        "order": 97,
+        "comment": "When queue is empty, idle deliberation may run.",
+        "transformation": "",
+        "condition": "no pending signals",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "idle_scheduler",
+        "target": "deliberation_acts",
+        "relation": "calls",
+        "order": 98,
+        "comment": "Chooses capability review, attention rebalance, aging, consistency or anomaly review.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "deliberation_acts",
+        "target": "ontology_repair_request",
+        "relation": "fallback",
+        "order": 99,
+        "comment": "Anomaly review can emit ontology repair request.",
+        "transformation": "",
+        "condition": "repair threshold crossed",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "ontology_repair_request",
+        "target": "repair_dispatch",
+        "relation": "queues",
+        "order": 100,
+        "comment": "Runtime handles pending repair traces.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "repair_dispatch",
+        "target": "schema_overlay_repair",
+        "relation": "fallback",
+        "order": 101,
+        "comment": "schema_path and llm_synthesize_fallback use overlay repair.",
+        "transformation": "",
+        "condition": "effective mode schema_path/fallback",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "repair_dispatch",
+        "target": "llm_rebootstrap_repair",
+        "relation": "fallback",
+        "order": 102,
+        "comment": "LLM bootstrap mode uses brief addendum and re-bootstrap.",
+        "transformation": "",
+        "condition": "effective mode llm_synthesize",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "repair_dispatch",
+        "target": "repair_blocked",
+        "relation": "fallback",
+        "order": 103,
+        "comment": "Budget, missing brief/topics or bootstrap errors mark repair failed.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "schema_overlay_repair",
+        "target": "persist_context",
+        "relation": "persists",
+        "order": 104,
+        "comment": "Auto-applied repair updates KG/package/world metadata.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "llm_rebootstrap_repair",
+        "target": "pipeline_init",
+        "relation": "builds",
+        "order": 105,
+        "comment": "Re-bootstrap replaces pipeline/world but preserves previous conscious state and KG if configured.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "repair_blocked",
+        "target": "persist_context",
+        "relation": "persists",
+        "order": 106,
+        "comment": "Failed traits and ledger state are persisted.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "persist_context",
+        "target": "loop_summary",
+        "relation": "then",
+        "order": 107,
+        "comment": "On stop, final state persists and summary prints.",
+        "transformation": "",
+        "condition": "",
+        "critical": true,
+        "fallback": false,
+        "width": 2.5
+      },
+      {
+        "source": "cli_args",
+        "target": "query_mode",
+        "relation": "routes",
+        "order": 108,
+        "comment": "--query bypasses runtime loop.",
+        "transformation": "",
+        "condition": "args.query is not None",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "query_mode",
+        "target": "runtime_artifacts",
+        "relation": "loads",
+        "order": 109,
+        "comment": "Loads persisted KG/world/checkpoint/forecasts.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "runtime_artifacts",
+        "target": "semantic_query",
+        "relation": "builds",
+        "order": 110,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "semantic_query",
+        "target": "answer_engine",
+        "relation": "answers",
+        "order": 111,
+        "comment": "Evidence feeds answer synthesis.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "semantic_query",
+        "target": "answer_no_evidence",
+        "relation": "fallback",
+        "order": 112,
+        "comment": "No matches returns a structured no-evidence answer.",
+        "transformation": "",
+        "condition": "no evidence",
+        "critical": false,
+        "fallback": true,
+        "width": 1.3
+      },
+      {
+        "source": "forecast_registry",
+        "target": "explain_forecast",
+        "relation": "feeds",
+        "order": 113,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "causal_trace_export",
+        "target": "explain_forecast",
+        "relation": "feeds",
+        "order": 114,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "runtime_artifacts",
+        "target": "tool_api",
+        "relation": "feeds",
+        "order": 115,
+        "comment": "Persistent runtime tools reuse query artifacts.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "tool_api",
+        "target": "mcp_server",
+        "relation": "exposes",
+        "order": 116,
+        "comment": "FastMCP wraps FREEMAN_TOOLS.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "knowledge_graph",
+        "target": "kg_export",
+        "relation": "exports",
+        "order": 117,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "kg_snapshot",
+        "target": "kg_evolution",
+        "relation": "exports",
+        "order": 118,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "human_override",
+        "target": "pipeline_update",
+        "relation": "calls",
+        "order": 119,
+        "comment": "Manual patch/rerun can re-enter simulation path.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "human_override",
+        "target": "append_trace",
+        "relation": "records",
+        "order": 120,
+        "comment": "Override API tracks audit/diff.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "cli_interface",
+        "target": "tool_api",
+        "relation": "wraps",
+        "order": 121,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "realworld_manifold",
+        "target": "domain_compile",
+        "relation": "feeds",
+        "order": 122,
+        "comment": "Generated market schemas compile through normal compiler.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "causal_estimator",
+        "target": "realworld_manifold",
+        "relation": "supports",
+        "order": 123,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "faab_benchmark",
+        "target": "ingest_signal",
+        "relation": "drives",
+        "order": 124,
+        "comment": "Benchmark schedules signals into Freeman step.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "faab_benchmark",
+        "target": "semantic_query",
+        "relation": "checks",
+        "order": 125,
+        "comment": "Benchmark evaluates answer/retrieval behavior.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "test_suite",
+        "target": "repair_dispatch",
+        "relation": "verifies",
+        "order": 126,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "test_suite",
+        "target": "mcp_server",
+        "relation": "verifies",
+        "order": 127,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "test_suite",
+        "target": "pipeline_update",
+        "relation": "verifies",
+        "order": 128,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "test_suite",
+        "target": "conscious_refresh",
+        "relation": "verifies",
+        "order": 129,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "knowledge_graph",
+        "target": "semantic_query",
+        "relation": "retrieves",
+        "order": 130,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "knowledge_graph",
+        "target": "reconciler",
+        "relation": "feeds",
+        "order": 131,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "vectorstore",
+        "target": "semantic_query",
+        "relation": "retrieves",
+        "order": 132,
+        "comment": "Vector search is used when configured; lexical fallback otherwise.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "event_log",
+        "target": "storage_init",
+        "relation": "retrieves",
+        "order": 133,
+        "comment": "Event log backfills cursor commits on resume.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "cursor_store",
+        "target": "dedupe_queue",
+        "relation": "filters",
+        "order": 134,
+        "comment": "",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "signal_memory",
+        "target": "ingest_signal",
+        "relation": "filters",
+        "order": 135,
+        "comment": "Novelty and duplicate window affect triggers.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "budget_ledger",
+        "target": "runtime_artifacts",
+        "relation": "feeds",
+        "order": 136,
+        "comment": "Query artifacts include cost governance state.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      },
+      {
+        "source": "kg_snapshot",
+        "target": "runtime_artifacts",
+        "relation": "feeds",
+        "order": 137,
+        "comment": "Snapshot directory powers API/evolution tools.",
+        "transformation": "",
+        "condition": "",
+        "critical": false,
+        "fallback": false,
+        "width": 1.3
+      }
+    ]
+  }
+};
+    const state = {
+      selected: null,
+      criticalOnly: false,
+      search: "",
+      layer: "all",
+      relation: "all",
+      maxStage: 13,
+      showFallback: true,
+      showInterface: true,
+      showTest: true,
+      particles: true,
+    };
+
+    const byId = new Map(payload.graphData.nodes.map((node) => [node.id, node]));
+    const layerColors = Object.fromEntries(Object.entries(payload.layers).map(([key, value]) => [key, value.color]));
+    let Graph = null;
+
+    function textFor(node) {
+      return [node.id, node.label, node.layer, node.stageLabel, node.branchLabel, node.module, node.comment, node.invariant, ...(node.functions || []), ...(node.inputs || []), ...(node.outputs || [])]
+        .join(" ")
+        .toLowerCase();
+    }
+
+    function passesNode(node) {
+      if (node.stage > state.maxStage) return false;
+      if (!state.showFallback && node.fallback) return false;
+      if (!state.showInterface && node.layer === "interface") return false;
+      if (!state.showTest && node.layer === "test") return false;
+      if (state.criticalOnly && !node.critical) return false;
+      if (state.layer !== "all" && node.layer !== state.layer) return false;
+      if (state.search && !textFor(node).includes(state.search)) return false;
+      return true;
+    }
+
+    function relationColor(link) {
+      if (link.fallback) return "#ff7e67";
+      if (link.critical) return "#76e3a4";
+      if (["persists", "retrieves", "records"].includes(link.relation)) return "#b7a3ff";
+      if (["verifies", "scores"].includes(link.relation)) return "#8fb3ff";
+      if (["filters", "queues", "gates"].includes(link.relation)) return "#f2b36d";
+      return "#8a98a8";
+    }
+
+    function linkNodeId(value) {
+      return typeof value === "object" ? value.id : value;
+    }
+
+    function filteredGraph() {
+      const keptNodes = payload.graphData.nodes.filter(passesNode);
+      const keptIds = new Set(keptNodes.map((node) => node.id));
+      const keptLinks = payload.graphData.links.filter((link) => {
+        if (state.relation !== "all" && link.relation !== state.relation) return false;
+        if (state.criticalOnly && !link.critical) return false;
+        if (!state.showFallback && link.fallback) return false;
+        const sourceId = linkNodeId(link.source);
+        const targetId = linkNodeId(link.target);
+        return keptIds.has(sourceId) && keptIds.has(targetId);
+      });
+      return { nodes: keptNodes, links: keptLinks };
+    }
+
+    function htmlList(values) {
+      if (!values || !values.length) return "<p>n/a</p>";
+      return `<ul>${values.map((value) => `<li>${escapeHtml(String(value))}</li>`).join("")}</ul>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char]));
+    }
+
+    function renderNodeDetail(node) {
+      const color = layerColors[node.layer] || "#ffffff";
+      document.getElementById("detail").innerHTML = `
+        <h2 class="detail-title">${escapeHtml(node.label)}</h2>
+        <div class="tag-row">
+          <span class="tag"><span class="swatch" style="background:${color}"></span>${escapeHtml(node.layerLabel)}</span>
+          <span class="tag">stage ${node.stage}: ${escapeHtml(node.stageLabel)}</span>
+          <span class="tag">${escapeHtml(node.branchLabel)}</span>
+          <span class="tag">${escapeHtml(node.kind)}</span>
+          ${node.critical ? '<span class="tag" style="color:var(--critical)">critical</span>' : ''}
+          ${node.fallback ? '<span class="tag" style="color:var(--danger)">fallback</span>' : ''}
+        </div>
+        <div class="detail-block"><h3>Комментарий</h3><p>${escapeHtml(node.comment || "n/a")}</p></div>
+        <div class="detail-block"><h3>Модуль</h3><p>${escapeHtml(node.module || "n/a")}</p></div>
+        <div class="detail-block"><h3>Функции / классы</h3>${htmlList(node.functions)}</div>
+        <div class="detail-block"><h3>Входы</h3>${htmlList(node.inputs)}</div>
+        <div class="detail-block"><h3>Выходы</h3>${htmlList(node.outputs)}</div>
+        <div class="detail-block"><h3>Инвариант</h3><p>${escapeHtml(node.invariant || "n/a")}</p></div>
+      `;
+    }
+
+    function renderLinkDetail(link) {
+      const sourceId = linkNodeId(link.source);
+      const targetId = linkNodeId(link.target);
+      const source = byId.get(sourceId);
+      const target = byId.get(targetId);
+      document.getElementById("detail").innerHTML = `
+        <h2 class="detail-title">${escapeHtml(source?.label || sourceId)} -> ${escapeHtml(target?.label || targetId)}</h2>
+        <div class="tag-row">
+          <span class="tag">${escapeHtml(link.relation)}</span>
+          <span class="tag">order ${link.order}</span>
+          ${link.critical ? '<span class="tag" style="color:var(--critical)">critical</span>' : ''}
+          ${link.fallback ? '<span class="tag" style="color:var(--danger)">fallback</span>' : ''}
+        </div>
+        <div class="detail-block"><h3>Комментарий</h3><p>${escapeHtml(link.comment || "n/a")}</p></div>
+        <div class="detail-block"><h3>Преобразование</h3><p>${escapeHtml(link.transformation || "n/a")}</p></div>
+        <div class="detail-block"><h3>Условие</h3><p>${escapeHtml(link.condition || "always")}</p></div>
+      `;
+    }
+
+    function populateControls() {
+      const layerSelect = document.getElementById("layer-filter");
+      Object.entries(payload.layers).forEach(([key, value]) => {
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = value.label;
+        layerSelect.appendChild(option);
+      });
+      const relationSelect = document.getElementById("relation-filter");
+      payload.relations.forEach((relation) => {
+        const option = document.createElement("option");
+        option.value = relation;
+        option.textContent = relation;
+        relationSelect.appendChild(option);
+      });
+      document.getElementById("legend").innerHTML = Object.entries(payload.layers).map(([key, value]) => `
+        <div class="legend-item"><span class="swatch" style="background:${value.color}"></span><span>${escapeHtml(value.label)}</span></div>
+      `).join("");
+      document.getElementById("stage-list").innerHTML = payload.stages.map((stage) => `
+        <div class="stage-item"><strong>${stage.index}</strong><span>${escapeHtml(stage.label)}</span></div>
+      `).join("");
+    }
+
+    function updateCounts(graphData) {
+      document.getElementById("node-count").textContent = graphData.nodes.length;
+      document.getElementById("edge-count").textContent = graphData.links.length;
+    }
+
+    function refresh() {
+      const data = filteredGraph();
+      if (Graph) {
+        Graph.graphData(data);
+        Graph.linkDirectionalParticles((link) => state.particles ? (link.critical ? 3 : (link.fallback ? 2 : 1)) : 0);
+      }
+      updateCounts(data);
+    }
+
+    function makeLabel(node) {
+      const sprite = new SpriteText(node.label);
+      sprite.material.depthWrite = false;
+      sprite.color = node.critical ? "#ffffff" : "#cfd8df";
+      sprite.textHeight = node.critical ? 8.5 : 6.5;
+      sprite.backgroundColor = node.fallback ? "rgba(255, 107, 87, 0.20)" : "rgba(16, 19, 23, 0.62)";
+      sprite.padding = 2;
+      sprite.borderRadius = 3;
+      return sprite;
+    }
+
+    function initGraph() {
+      if (!window.ForceGraph3D || !window.THREE || !window.SpriteText) {
+        document.getElementById("fail").style.display = "grid";
+        refresh();
+        return;
+      }
+      const graphData = filteredGraph();
+      updateCounts(graphData);
+      const graphEl = document.getElementById("graph");
+      Graph = ForceGraph3D({ controlType: "orbit" })(graphEl)
+        .backgroundColor("rgba(0,0,0,0)")
+        .width(graphEl.clientWidth)
+        .height(graphEl.clientHeight)
+        .graphData(graphData)
+        .nodeThreeObject(makeLabel)
+        .nodeThreeObjectExtend(true)
+        .nodeColor((node) => node.fallback ? "#ff7e67" : (layerColors[node.layer] || "#ffffff"))
+        .nodeVal((node) => node.val || 5)
+        .nodeOpacity(0.94)
+        .linkColor(relationColor)
+        .linkWidth((link) => link.critical ? 2.8 : (link.width || 1.2))
+        .linkOpacity(0.48)
+        .linkDirectionalArrowLength(4)
+        .linkDirectionalArrowRelPos(1)
+        .linkDirectionalParticles((link) => state.particles ? (link.critical ? 3 : (link.fallback ? 2 : 1)) : 0)
+        .linkDirectionalParticleWidth((link) => link.critical ? 2.6 : 1.4)
+        .linkDirectionalParticleSpeed((link) => link.critical ? 0.012 : 0.006)
+        .onNodeClick((node) => {
+          state.selected = node;
+          renderNodeDetail(node);
+          const distance = 360;
+          const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
+          Graph.cameraPosition({ x: (node.x || 0) * distRatio, y: (node.y || 0) * distRatio, z: (node.z || 0) * distRatio }, node, 900);
+        })
+        .onLinkClick((link) => {
+          state.selected = link;
+          renderLinkDetail(link);
+        })
+        .onNodeHover((node) => {
+          document.body.style.cursor = node ? "pointer" : null;
+        })
+        .onLinkHover((link) => {
+          document.body.style.cursor = link ? "pointer" : null;
+        });
+
+      Graph.d3Force("charge").strength(-60);
+      Graph.d3Force("link").distance((link) => link.critical ? 65 : 90);
+      Graph.cameraPosition({ x: -670, y: 220, z: 1050 }, { x: 80, y: -120, z: 0 }, 0);
+    }
+
+    function bindControls() {
+      document.getElementById("search").addEventListener("input", (event) => {
+        state.search = event.target.value.trim().toLowerCase();
+        refresh();
+      });
+      document.getElementById("layer-filter").addEventListener("change", (event) => {
+        state.layer = event.target.value;
+        refresh();
+      });
+      document.getElementById("relation-filter").addEventListener("change", (event) => {
+        state.relation = event.target.value;
+        refresh();
+      });
+      document.getElementById("stage-range").addEventListener("input", (event) => {
+        state.maxStage = Number(event.target.value);
+        document.getElementById("stage-value").textContent = String(state.maxStage);
+        refresh();
+      });
+      document.getElementById("show-fallback").addEventListener("change", (event) => {
+        state.showFallback = event.target.checked;
+        refresh();
+      });
+      document.getElementById("show-interface").addEventListener("change", (event) => {
+        state.showInterface = event.target.checked;
+        refresh();
+      });
+      document.getElementById("show-test").addEventListener("change", (event) => {
+        state.showTest = event.target.checked;
+        refresh();
+      });
+      document.getElementById("particles").addEventListener("change", (event) => {
+        state.particles = event.target.checked;
+        refresh();
+      });
+      document.getElementById("critical-btn").addEventListener("click", () => {
+        state.criticalOnly = !state.criticalOnly;
+        document.getElementById("critical-btn").textContent = state.criticalOnly ? "Показать все" : "Критический путь";
+        refresh();
+      });
+      document.getElementById("reset-btn").addEventListener("click", () => {
+        if (!Graph) return;
+        Graph.cameraPosition({ x: -670, y: 220, z: 1050 }, { x: 80, y: -120, z: 0 }, 900);
+      });
+      window.addEventListener("resize", () => {
+        if (!Graph) return;
+        Graph.width(document.getElementById("graph").clientWidth);
+        Graph.height(document.getElementById("graph").clientHeight);
+      });
+    }
+
+    populateControls();
+    bindControls();
+    initGraph();
+  </script>
+</body>
+</html>
