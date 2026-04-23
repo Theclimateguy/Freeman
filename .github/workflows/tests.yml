@@ -1,9 +1,10 @@
-name: Tests
+name: Freeman Lite Tests
 
 on:
   push:
     branches:
       - main
+      - freeman-lite
   pull_request:
 
 jobs:
@@ -26,16 +27,14 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install Freeman and connectors
+      - name: Install package
         run: |
-          python -m pip install -e ".[dev,semantic,causal,benchmark]"
-          python -m pip install -e ./packages/freeman-connectors
+          python -m pip install -e ".[dev]"
 
       - name: Run test suite
-        run: PYTHONPATH=. pytest -q
+        run: PYTHONPATH=. pytest tests_lite -q
 
       - name: Build release artifacts
         run: |
           python -m pip install build
-          python -m build --sdist --wheel --outdir /tmp/freeman-dist .
-          python -m build --sdist --wheel --outdir /tmp/freeman-connectors-dist packages/freeman-connectors
+          python -m build --sdist --wheel --outdir /tmp/freeman-lite-dist .

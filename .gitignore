@@ -1,43 +1,34 @@
 .DS_Store
-.pytest_cache/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
 
-.venv/
-venv/
-env/
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 dist/
 build/
 
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local runtime state
+data/
+runs/
+artifacts/
+*.log
+
+# Local secrets / overrides
 .env
 .env.*
-DS.txt
-GNEWS.txt
-NEWSAPI.txt
-NEWS_API.txt
-OPENAI*.txt
+config.local.yaml
+config.*.local.yaml
 *SECRET*.txt
 *TOKEN*.txt
 *KEY*.txt
-config.local.yaml
-config.*.local.yaml
-*.log
-
-runs/
-data/*
-presentations/
-TS/
-*_20260[0-9]*/
-scripts/*
-!scripts/__init__.py
-!scripts/seed_climate_kg.py
-!scripts/benchmark_faab/
-!scripts/benchmark_faab/**
-scripts/benchmark_faab/__pycache__/
-freeman/realworld/__pycache__/
-CHANGELOG.md
-
-PROGRESS.md
