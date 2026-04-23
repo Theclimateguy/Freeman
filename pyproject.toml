@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "freeman-lite"
-version = "0.1.0"
+version = "1.0.0"
 description = "Lightweight Freeman runtime for news-to-simulation workflows."
 readme = "README.md"
 requires-python = ">=3.11"

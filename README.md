@@ -1,10 +1,7 @@
 # Freeman Lite
 
-`freeman-lite` is a reduced Freeman branch for one job:
-
-\[
-\text{news / brief} \rightarrow \text{causal model} \rightarrow \text{verify} \rightarrow \text{simulate} \rightarrow \text{memory}
-\]
+`freeman-lite` is a compact version of Freeman focused on one practical workflow:
+compile a causal model from a schema or domain brief, verify and simulate it, then persist updated knowledge and forecasts.
 
 This branch removes proactive layers, consciousness, multi-domain scheduling, REST/MCP/web surfaces, and budget ledgers. The public surface is now:
 
@@ -100,4 +97,4 @@ result = query("water crisis")
 - The lite runtime keeps one world in memory.
 - ChromaDB and vector retrieval are no longer part of the default runtime path.
 - If a limit is exceeded, the runtime stops with an explicit error instead of trying to self-manage compute.
-- Legacy experimental modules may still exist in the repo history, but they are no longer part of the supported surface for this branch.
+- This branch is intentionally minimal and keeps only the code required to run and use `freeman-lite`.
