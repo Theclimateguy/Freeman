@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, List
 
 import numpy as np
-from scipy.linalg import eigvals
 
 from freeman.core.access import resource_vector, state_distance
 from freeman.core.transition import step_world
@@ -42,7 +41,7 @@ def spectral_radius(jacobian: np.ndarray) -> float:
 
     if jacobian.size == 0:
         return 0.0
-    return float(np.max(np.abs(eigvals(jacobian))))
+    return float(np.max(np.abs(np.linalg.eigvals(jacobian))))
 
 
 def check_shock_decay(world: WorldState, resource_id: str, config: Any) -> tuple[bool, float]:

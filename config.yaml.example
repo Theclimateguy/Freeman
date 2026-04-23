@@ -1,101 +1,27 @@
-agent:
-  interest_function: "default"
-  budget_usd_per_day: 0.5
-  source_refresh_seconds: 300
-  sources: []
-  stream_keywords: []
-  stream_filter:
-    min_relevance_score: 0.0
-    min_keyword_matches: 0
-    agent_min_relevance_score: 0.25
-    anomaly_candidate_min_cluster_size: 3
-    anomaly_candidate_max_age_steps: 50
-    anomaly_review_trigger_count: 5
-  bootstrap:
-    mode: "schema_path"
-    schema_path:
-    policies_path:
-    fallback_schema_path:
-    domain_brief_path:
-    domain_brief: ""
-  ontology_repair:
-    gap_threshold: 2
-    preserve_kg: true
-    max_repairs_per_session: 3
+paths:
+  kg_state: ./data/kg_state.json
+  forecasts: ./data/forecasts.json
+  world_state: ./data/world_state.json
+  error_log: ./data/errors.jsonl
 
 llm:
-  provider: ""
-  model: ""
-  base_url: ""
-  timeout_seconds: 90.0
+  provider: ollama
+  model: qwen2.5-coder:14b
+  base_url: http://127.0.0.1:11434
+  timeout_seconds: 90
 
-freeman:
-  default_evolution: "stock_flow"
-  level0_hard_stop: true
-  epsilon: 1.0e-8
-  sign_epsilon: 1.0e-4
+limits:
+  max_llm_calls: 50
+  max_simulation_steps: 5000
 
-sim:
-  max_steps: 50
-  dt: 1.0
-  level2_check_every: 5
-  level2_shock_delta: 0.01
-  stop_on_hard_level2: true
-  convergence_check_steps: 20
-  convergence_epsilon: 1.0e-4
-  fixed_point_max_iter: 20
-  fixed_point_alpha: 0.1
-  seed: 42
-
-memory:
-  backend: "networkx-json"
-  json_path: "./data/kg_state.json"
-  vector_store:
-    enabled: false
-    backend: "chroma"
-    path: "./data/chroma_db"
-    collection: "kg_nodes"
-  embedding_provider: "hashing"
-  hashing_embedding_dimension: 384
-  embedding_model: "text-embedding-3-small"
-  embedding_base_url: "http://127.0.0.1:11434"
-  embedding_timeout_seconds: 120.0
-  embedding_prompt_prefix: ""
-  retrieval_top_k: 15
-  max_context_nodes: 30
-  session_log_path: "./data/sessions/"
-  reconciler:
-    merge_threshold: 0.82
-    compaction_interval: 20
-
-runtime:
-  mode: "follow"
-  poll_interval_seconds: 30
-  checkpoint_every_n_events: 25
-  checkpoint_every_n_seconds: 300
-  runtime_path: "./data/runtime"
-  event_log_path: "./data/runtime/event_log.jsonl"
-  resume_on_start: true
-
-consciousness:
-  idle_scheduler:
-    threshold: 0.60
-    weights:
-      time_since_last_update: 0.25
-      confidence_gap: 0.35
-      hypothesis_age: 0.20
-      attention_deficit: 0.20
-  operators:
-    capability_review:
-      alpha: 2.0
-      beta: 4.0
-    attention_rebalance:
-      w_g: 0.30
-      w_u: 0.30
-      w_e: 0.25
-      w_s: 0.15
-    trait_consolidation:
-      lambda_k: 0.95
-      eta_k: 0.10
-      beta_k: 0.20
-      min_delta: 0.01
+signals:
+  keywords:
+    - climate
+    - drought
+    - inflation
+    - recession
+    - commodity
+  min_keyword_hits: 1
+  conflict_threshold: 0.25
+  query_top_k: 10
+  max_signal_history: 256

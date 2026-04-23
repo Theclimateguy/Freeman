@@ -1,110 +1,64 @@
-"""Shared config-driven builders for Freeman interface layers."""
+"""Shared builders for the Freeman lite interface."""
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Any
 
-from freeman.llm.adapter import DeterministicEmbeddingAdapter, HashingEmbeddingAdapter
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.llm.ollama import OllamaChatClient, OllamaEmbeddingClient
 from freeman.llm.openai import OpenAIChatClient, OpenAIEmbeddingClient
-from freeman.memory.knowledgegraph import KnowledgeGraph
-from freeman.memory.vectorstore import KGVectorStore
 
 
-def resolve_path(base: Path, candidate: str | None, default: str) -> Path:
-    """Resolve a possibly-relative path against ``base``."""
-
-    target = Path(candidate or default).expanduser()
-    return target if target.is_absolute() else (base / target).resolve()
-
-
-def resolve_memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
-    memory_cfg = config.get("memory", {})
-    return resolve_path(config_path.parent, memory_cfg.get("json_path"), "./data/kg_state.json")
+def _section(config: Any, name: str) -> Any:
+    if hasattr(config, name):
+        return getattr(config, name)
+    if isinstance(config, dict):
+        return config.get(name, {})
+    return {}
 
 
-def resolve_runtime_path(config: dict[str, Any], *, config_path: Path) -> Path:
-    runtime_cfg = config.get("runtime", {})
-    return resolve_path(config_path.parent, runtime_cfg.get("runtime_path"), "./data/runtime")
-
-
-def resolve_event_log_path(config: dict[str, Any], *, config_path: Path) -> Path:
-    runtime_cfg = config.get("runtime", {})
-    return resolve_path(config_path.parent, runtime_cfg.get("event_log_path"), "./data/runtime/event_log.jsonl")
-
-
-def resolve_semantic_min_score(config: dict[str, Any]) -> float:
-    """Return the retrieval acceptance floor used by semantic query layers."""
-
-    memory_cfg = config.get("memory", {})
-    if "semantic_min_score" in memory_cfg:
-        return float(memory_cfg.get("semantic_min_score", 0.05))
-    provider = str(memory_cfg.get("embedding_provider", "")).strip().lower()
-    if provider in {"hash", "hashing"}:
-        return 0.12
-    return 0.05
-
-
-def build_vectorstore(config: dict[str, Any], *, config_path: Path) -> KGVectorStore | None:
-    """Build the configured KG vector store, if enabled."""
-
-    memory_cfg = config.get("memory", {})
-    vector_cfg = memory_cfg.get("vector_store", {})
-    if not vector_cfg.get("enabled", False):
-        return None
-    backend = str(vector_cfg.get("backend", "chroma")).lower()
-    if backend != "chroma":
-        raise ValueError(f"Unsupported vector store backend: {backend}")
-    path = resolve_path(config_path.parent, vector_cfg.get("path"), "./data/chroma_db")
-    collection = str(vector_cfg.get("collection", "kg_nodes"))
-    return KGVectorStore(path=path, collection_name=collection)
+def _cfg_get(section: Any, name: str, default: Any) -> Any:
+    if hasattr(section, name):
+        return getattr(section, name)
+    if isinstance(section, dict):
+        return section.get(name, default)
+    return default
 
 
 def build_embedding_adapter(config: dict[str, Any], *, use_stub: bool = False) -> tuple[Any, str]:
-    """Build the configured embedding adapter."""
+    """Build an embedding adapter only when explicitly requested."""
 
-    memory_cfg = config.get("memory", {})
-    provider = str(memory_cfg.get("embedding_provider", "")).strip().lower()
-    model = str(memory_cfg.get("embedding_model", "nomic-embed-text"))
-    timeout_seconds = float(memory_cfg.get("embedding_timeout_seconds", 120.0))
-    prompt_prefix = str(memory_cfg.get("embedding_prompt_prefix", ""))
     if use_stub:
-        return DeterministicEmbeddingAdapter(), "deterministic_stub"
-    if provider in {"deterministic", "stub"}:
-        return DeterministicEmbeddingAdapter(), "deterministic_stub"
-    if provider in {"hash", "hashing"}:
-        dimension = int(memory_cfg.get("hashing_embedding_dimension", 384))
-        return HashingEmbeddingAdapter(dimension=dimension), f"hashing:{dimension}"
+        return OllamaEmbeddingClient(model="nomic-embed-text"), "ollama:nomic-embed-text"
+    llm_cfg = _section(config, "llm")
+    provider = str(_cfg_get(llm_cfg, "provider", "ollama")).strip().lower()
+    model = str(_cfg_get(llm_cfg, "model", "nomic-embed-text")).strip()
+    base_url = str(_cfg_get(llm_cfg, "base_url", "http://127.0.0.1:11434")).strip()
+    timeout_seconds = float(_cfg_get(llm_cfg, "timeout_seconds", 90.0))
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when memory.embedding_provider=openai")
+            raise RuntimeError("OPENAI_API_KEY is required when llm.provider=openai")
         return OpenAIEmbeddingClient(api_key=api_key, model=model), f"openai:{model}"
-    if provider in {"", "ollama"}:
-        base_url = str(memory_cfg.get("embedding_base_url", os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")))
-        return (
-            OllamaEmbeddingClient(
-                model=model,
-                base_url=base_url,
-                timeout_seconds=timeout_seconds,
-                prompt_prefix=prompt_prefix,
-            ),
-            f"ollama:{model}",
-        )
-    raise ValueError(f"Unsupported embedding provider: {provider}")
+    return (
+        OllamaEmbeddingClient(
+            model=model or "nomic-embed-text",
+            base_url=base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+            timeout_seconds=timeout_seconds,
+        ),
+        f"ollama:{model or 'nomic-embed-text'}",
+    )
 
 
 def build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
-    """Build the configured chat client used by answer-generation layers."""
+    """Build the single chat client used by the lite runtime."""
 
-    llm_cfg = config.get("llm", {})
-    provider = str(llm_cfg.get("provider", "")).strip().lower()
-    model = str(llm_cfg.get("model", "")).strip()
-    base_url = str(llm_cfg.get("base_url", "")).strip()
-    timeout_seconds = float(llm_cfg.get("timeout_seconds", 90.0))
+    llm_cfg = _section(config, "llm")
+    provider = str(_cfg_get(llm_cfg, "provider", "")).strip().lower()
+    model = str(_cfg_get(llm_cfg, "model", "")).strip()
+    base_url = str(_cfg_get(llm_cfg, "base_url", "")).strip()
+    timeout_seconds = float(_cfg_get(llm_cfg, "timeout_seconds", 90.0))
     if provider in {"", "none"}:
         return None, "llm provider is not configured"
     if provider == "openai":
@@ -145,34 +99,7 @@ def build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
     return None, f"unsupported llm provider: {provider}"
 
 
-def build_knowledge_graph(
-    config: dict[str, Any],
-    *,
-    config_path: Path,
-    embedding_adapter: Any | None = None,
-    vectorstore: KGVectorStore | None = None,
-    auto_load: bool = True,
-    auto_save: bool = True,
-) -> KnowledgeGraph:
-    """Instantiate a config-backed knowledge graph."""
-
-    return KnowledgeGraph(
-        json_path=resolve_memory_json_path(config, config_path=config_path),
-        auto_load=auto_load,
-        auto_save=auto_save,
-        llm_adapter=embedding_adapter,
-        vectorstore=vectorstore,
-    )
-
-
 __all__ = [
     "build_chat_client",
     "build_embedding_adapter",
-    "build_knowledge_graph",
-    "build_vectorstore",
-    "resolve_event_log_path",
-    "resolve_memory_json_path",
-    "resolve_path",
-    "resolve_runtime_path",
-    "resolve_semantic_min_score",
 ]

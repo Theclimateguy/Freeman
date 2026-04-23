@@ -1,68 +1,17 @@
-"""Agent-level orchestration primitives."""
+"""Agent-level primitives retained in Freeman lite."""
 
 from freeman.agent.analysispipeline import AnalysisPipeline, AnalysisPipelineConfig, AnalysisPipelineResult
-from freeman.agent.attentionscheduler import (
-    AnomalyDebt,
-    AttentionDecision,
-    InterestNormalizer,
-    AttentionScheduler,
-    AttentionTask,
-    ConflictDebt,
-    ForecastDebt,
-    ObligationQueue,
-)
-from freeman.agent.costmodel import BudgetDecision, BudgetPolicy, CostEstimate, CostModel
-from freeman.agent.domainregistry import DomainTemplate, DomainTemplateRegistry, MultiDomainWorld, SharedResourceBus
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.parameterestimator import ParameterEstimator
-from freeman.agent.policyevaluator import PolicyEvalResult, PolicyEvaluator
-from freeman.agent.proactiveemitter import ProactiveEmitter, ProactiveEvent
-from freeman.agent.signalingestion import (
-    ManualSignalSource,
-    RSSSignalSource,
-    ShockClassification,
-    Signal,
-    SignalMemory,
-    SignalRecord,
-    SignalIngestionEngine,
-    SignalTrigger,
-    TavilySignalSource,
-)
+from freeman.agent.signalingestion import SignalDecision, SignalIngestionEngine
 
 __all__ = [
     "AnalysisPipeline",
     "AnalysisPipelineConfig",
     "AnalysisPipelineResult",
-    "AnomalyDebt",
-    "AttentionDecision",
-    "InterestNormalizer",
-    "AttentionScheduler",
-    "AttentionTask",
-    "BudgetDecision",
-    "BudgetPolicy",
-    "CostEstimate",
-    "CostModel",
-    "DomainTemplate",
-    "DomainTemplateRegistry",
-    "ConflictDebt",
-    "ForecastDebt",
     "Forecast",
     "ForecastRegistry",
-    "ManualSignalSource",
-    "MultiDomainWorld",
-    "ObligationQueue",
     "ParameterEstimator",
-    "PolicyEvalResult",
-    "PolicyEvaluator",
-    "ProactiveEmitter",
-    "ProactiveEvent",
-    "RSSSignalSource",
-    "SharedResourceBus",
-    "ShockClassification",
-    "Signal",
-    "SignalMemory",
-    "SignalRecord",
+    "SignalDecision",
     "SignalIngestionEngine",
-    "SignalTrigger",
-    "TavilySignalSource",
 ]

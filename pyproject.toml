@@ -3,36 +3,23 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "freeman"
-version = "3.0.0"
-description = "Domain-agnostic world simulator for LLM agents."
+name = "freeman-lite"
+version = "0.1.0"
+description = "Lightweight Freeman runtime for news-to-simulation workflows."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "networkx>=3.2",
     "numpy>=1.26",
+    "httpx>=0.27",
     "PyYAML>=6.0",
-    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
-semantic = ["chromadb>=0.5"]
-causal = [
-    "causalml>=0.15",
-    "pandas>=2.0",
-    "scikit-learn>=1.3",
-]
-benchmark = [
-    "chromadb>=0.5",
-    "pandas>=2.2",
-    "tqdm>=4.66",
-]
 dev = ["pytest>=8.0"]
-mcp = ["mcp>=1.27"]
 
 [project.scripts]
-freeman = "freeman.interface.cli:main"
-freeman-mcp = "freeman.mcp.server:main"
+freeman-lite = "freeman.interface.cli:main"
 
 [tool.setuptools]
 include-package-data = true
@@ -41,4 +28,4 @@ include-package-data = true
 include = ["freeman*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests_lite"]

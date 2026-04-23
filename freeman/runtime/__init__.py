@@ -1,16 +1,6 @@
-"""Runtime namespace for long-running Freeman agent operation."""
+"""Runtime helpers retained in Freeman lite."""
 
-from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
-from freeman.runtime.event_log import EventLog
-from freeman.runtime.stream import StreamCursorStore
+from freeman.runtime.queryengine import RuntimeQueryEngine, RuntimeQueryResult
 
-
-def stream_runtime_main(argv=None):
-    """Lazily import the stream runtime entrypoint to avoid package cycles."""
-
-    from freeman.runtime.stream_runtime import main
-
-    return main(argv)
-
-__all__ = ["AgentRuntime", "CheckpointManager", "EventLog", "StreamCursorStore", "stream_runtime_main"]
+__all__ = ["CheckpointManager", "RuntimeQueryEngine", "RuntimeQueryResult"]
