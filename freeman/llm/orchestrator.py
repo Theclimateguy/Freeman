@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
@@ -23,6 +24,8 @@ from freeman.utils import stable_json_dumps
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
 
+LOGGER = logging.getLogger(__name__)
+
 SYNTHESIS_SYSTEM_PROMPT = """You are designing compact, valid Freeman simulation packages from natural-language domain briefs.
 
 Return exactly one JSON object with these keys:
@@ -40,6 +43,52 @@ Constraints:
 - Prefer explicit actor_update_rules over hidden metadata.
 - Policies must use actor ids declared in the schema.
 - Keep magnitudes moderate and numerically stable.
+- Return JSON only.
+"""
+
+SKELETON_SYSTEM_PROMPT = """You extract compact Freeman domain skeletons from natural-language briefs.
+
+Return exactly one JSON object with:
+- schema: a partial Freeman schema containing domain_id, name, description, actors, resources, outcomes
+- assumptions: short list of modeling assumptions
+
+Constraints:
+- Do not emit relations, causal_dag, actor_update_rules, policies, or calibrated numeric couplings.
+- Keep the skeleton compact: 3-5 actors, 4-7 resources, 2-4 outcomes.
+- Actor objects must use id, name, state, metadata. State values must be simple numeric indexes.
+- Resource objects must use id, name, value, unit, owner_id, min_value, max_value, evolution_type, evolution_params, conserved.
+- Use evolution_type="linear" and deterministic defaults evolution_params={"a":0.8,"b":0.0,"c":0.0,"coupling_weights":{}} unless the brief clearly requires another supported type.
+- Outcome scoring_weights may reference only emitted resource ids or actor state keys.
+- Return JSON only.
+"""
+
+EDGE_SYSTEM_PROMPT = """You synthesize Freeman causal edges for a fixed, already validated domain skeleton.
+
+Return exactly one JSON object with:
+- causal_dag: list of edges with source, target, expected_sign, strength, optional rationale
+- actor_update_rules: mapping actor_id -> state_key -> rule spec when actor states need explicit updates
+- policies: optional compact baseline Freeman Policy snapshots
+- assumptions: optional extra assumptions
+
+Constraints:
+- Use only node ids from the provided valid_value_keys.
+- Do not create, rename, or delete actors, resources, or outcomes.
+- Every edge must have expected_sign "+" or "-".
+- Keep 3-8 causal edges.
+- Prefer resource-to-resource edges when the target is a resource; actor_update_rules only for actor state targets.
+- Return JSON only.
+"""
+
+SIGN_REPAIR_SYSTEM_PROMPT = """You repair only Freeman causal edge signs.
+
+Return exactly one JSON object with:
+- causal_dag: the corrected full edge list
+
+Constraints:
+- Preserve source and target ids unless a listed failing edge is impossible.
+- Repair only edges implicated by the provided level2 sign violations.
+- expected_sign must match the observed effective direction or the provided expected sign after correction.
+- Use only ids from valid_value_keys.
 - Return JSON only.
 """
 
@@ -116,6 +165,63 @@ class FreemanOrchestrator:
             },
         ]
 
+    def _skeleton_messages(self, domain_description: str) -> List[Dict[str, str]]:
+        """Build the phase-1 prompt sequence for domain skeleton extraction."""
+
+        return [
+            {"role": "system", "content": SKELETON_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Extract only the Freeman domain skeleton for this brief.\n\n"
+                    f"{domain_description}\n\n"
+                    "Return JSON only."
+                ),
+            },
+        ]
+
+    def _edge_messages(self, domain_description: str, skeleton_package: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Build the phase-2 prompt sequence grounded on a validated skeleton."""
+
+        schema = skeleton_package["schema"]
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        actor_state_keys = self._actor_state_keys(schema.get("actors", []))
+        valid_value_keys = sorted(set(resource_ids) | actor_state_keys)
+        prompt_payload = {
+            "domain_description": domain_description,
+            "skeleton_schema": schema,
+            "valid_value_keys": valid_value_keys,
+            "resource_ids": sorted(resource_ids),
+            "actor_ids": sorted(actor["id"] for actor in schema.get("actors", [])),
+        }
+        return [
+            {"role": "system", "content": EDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+        ]
+
+    def _sign_repair_messages(
+        self,
+        package: Dict[str, Any],
+        violations: List[Dict[str, Any]],
+        *,
+        domain_description: str,
+    ) -> List[Dict[str, str]]:
+        """Build the surgical level-2 sign repair prompt."""
+
+        schema = package["schema"]
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        actor_state_keys = self._actor_state_keys(schema.get("actors", []))
+        prompt_payload = {
+            "domain_description": domain_description,
+            "causal_dag": schema.get("causal_dag", []),
+            "violations": violations,
+            "valid_value_keys": sorted(set(resource_ids) | actor_state_keys),
+        }
+        return [
+            {"role": "system", "content": SIGN_REPAIR_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+        ]
+
     def _normalize_package(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure a package carries the standard top-level Freeman synthesis keys."""
 
@@ -135,6 +241,7 @@ class FreemanOrchestrator:
         normalized.setdefault("assumptions", [])
         schema = normalized.get("schema", {})
         if self._package_normalization_enabled() and isinstance(schema, dict):
+            LOGGER.warning("Normalizing LLM schema payload before verification.")
             normalized["schema"] = self._normalize_schema_payload(schema)
             return normalized
         relations = schema.get("relations", [])
@@ -155,6 +262,145 @@ class FreemanOrchestrator:
                 normalized_relations.append(mapped)
             schema["relations"] = normalized_relations
         return normalized
+
+    def _normalize_skeleton_package(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize phase-1 skeleton output without accepting causal structure."""
+
+        raw = payload if isinstance(payload, dict) else {}
+        schema = raw.get("schema", raw)
+        schema = schema if isinstance(schema, dict) else {}
+        normalized = {
+            "schema": {
+                "domain_id": self._safe_id(
+                    schema.get("domain_id") or schema.get("name") or "llm_domain",
+                    fallback="llm_domain",
+                ),
+                "name": str(schema.get("name") or schema.get("domain_id") or "LLM Domain"),
+                "description": str(schema.get("description") or ""),
+                "actors": self._normalize_actors(schema.get("actors", [])),
+                "resources": [],
+                "relations": [],
+                "outcomes": [],
+                "causal_dag": [],
+                "actor_update_rules": {},
+            },
+            "policies": [],
+            "assumptions": raw.get("assumptions", []) if isinstance(raw.get("assumptions", []), list) else [],
+        }
+        actor_ids = {actor["id"] for actor in normalized["schema"]["actors"]}
+        normalized["schema"]["resources"] = self._normalize_resources(schema.get("resources", []), actor_ids=actor_ids)
+        resource_ids = {resource["id"] for resource in normalized["schema"]["resources"]}
+        normalized["schema"]["outcomes"] = self._normalize_outcomes(schema.get("outcomes", []), resource_ids)
+        self._validate_skeleton(normalized)
+        return normalized
+
+    def _validate_skeleton(self, package: Dict[str, Any]) -> None:
+        """Run a narrow phase-1 validation before edge synthesis."""
+
+        schema = package.get("schema", {})
+        for key in ("domain_id", "actors", "resources", "outcomes"):
+            if key not in schema:
+                raise SchemaRepairFailed(f"LLM skeleton is missing required key: {key}")
+        if not schema.get("actors") or not schema.get("resources") or not schema.get("outcomes"):
+            raise SchemaRepairFailed("LLM skeleton must include at least one actor, resource, and outcome.")
+        self._ensure_unique_phase_ids(schema.get("actors", []), "actor")
+        self._ensure_unique_phase_ids(schema.get("resources", []), "resource")
+        self._ensure_unique_phase_ids(schema.get("outcomes", []), "outcome")
+
+    def _ensure_unique_phase_ids(self, values: List[Dict[str, Any]], label: str) -> None:
+        seen: set[str] = set()
+        for value in values:
+            item_id = str(value.get("id", ""))
+            if not item_id:
+                raise SchemaRepairFailed(f"LLM skeleton contains a {label} without id.")
+            if item_id in seen:
+                raise SchemaRepairFailed(f"LLM skeleton contains duplicate {label} id: {item_id}")
+            seen.add(item_id)
+
+    def _normalize_edge_payload(self, payload: Dict[str, Any], skeleton_package: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge phase-2 edge output into the validated skeleton package."""
+
+        raw = payload if isinstance(payload, dict) else {}
+        source = raw.get("schema", raw)
+        source = source if isinstance(source, dict) else {}
+        package = json.loads(json.dumps(skeleton_package, ensure_ascii=False))
+        schema = package["schema"]
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        valid_value_keys = resource_ids | self._actor_state_keys(schema.get("actors", []))
+        schema["causal_dag"] = self._normalize_causal_dag(source.get("causal_dag", []), valid_value_keys=valid_value_keys)
+        actor_ids = {actor["id"] for actor in schema.get("actors", [])}
+        schema["actor_update_rules"] = self._normalize_actor_update_rules(
+            source.get("actor_update_rules", {}),
+            actor_ids=actor_ids,
+            valid_value_keys=valid_value_keys,
+        )
+        package["policies"] = raw.get("policies", []) if isinstance(raw.get("policies", []), list) else []
+        package["assumptions"] = [
+            *package.get("assumptions", []),
+            *(raw.get("assumptions", []) if isinstance(raw.get("assumptions", []), list) else []),
+        ]
+        self._materialize_edge_couplings(schema)
+        return self._normalize_package(package)
+
+    def _materialize_edge_couplings(self, schema: Dict[str, Any]) -> None:
+        """Write deterministic resource couplings for synthesized causal edges."""
+
+        resources = {resource["id"]: resource for resource in schema.get("resources", [])}
+        for edge in schema.get("causal_dag", []):
+            target = resources.get(edge.get("target"))
+            if target is None:
+                continue
+            params = target.setdefault("evolution_params", {})
+            if not isinstance(params, dict):
+                params = self._legacy_resource_params(target)
+                target["evolution_params"] = params
+            if target.get("evolution_type") == "stock_flow" and "phi_params" in params:
+                couplings = params.setdefault("phi_params", {}).setdefault("coupling_weights", {})
+            else:
+                couplings = params.setdefault("coupling_weights", {})
+            if not isinstance(couplings, dict):
+                couplings = {}
+                if target.get("evolution_type") == "stock_flow" and "phi_params" in params:
+                    params.setdefault("phi_params", {})["coupling_weights"] = couplings
+                else:
+                    params["coupling_weights"] = couplings
+            sign = -1.0 if str(edge.get("expected_sign", "+")).startswith("-") else 1.0
+            weight = edge.get("weight")
+            magnitude = abs(float(weight)) if self._is_number(weight) and float(weight) != 0.0 else 0.05
+            couplings[str(edge["source"])] = sign * min(magnitude, 0.1)
+            edge["weight"] = couplings[str(edge["source"])]
+            edge["weight_source"] = "etl_deterministic"
+
+    def _synthesize_etl_package(self, domain_description: str) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Run phase 1 and phase 2 LLM calls and return a full package."""
+
+        attempts: List[Dict[str, Any]] = []
+        skeleton = self._normalize_skeleton_package(
+            self.client.chat_json(self._skeleton_messages(domain_description), temperature=0.1, max_tokens=2500)
+        )
+        attempts.append(
+            {
+                "attempt": 1,
+                "phase": "skeleton",
+                "etl_phase": "skeleton",
+                "verifier_error": "",
+                "feedback": [],
+            }
+        )
+        package = self._normalize_edge_payload(
+            self.client.chat_json(self._edge_messages(domain_description, skeleton), temperature=0.1, max_tokens=3000),
+            skeleton,
+        )
+        attempts.append(
+            {
+                "attempt": 1,
+                "phase": "edges",
+                "etl_phase": "edges",
+                "verifier_error": "",
+                "feedback": [],
+            }
+        )
+        return package, attempts
 
     def _package_normalization_enabled(self) -> bool:
         """Return whether local LLM output should be normalized before verification."""
@@ -585,6 +831,30 @@ class FreemanOrchestrator:
             violations.extend(step_violations)
         return violations
 
+    def repair_sign_edges(
+        self,
+        package: Dict[str, Any],
+        violations: List[Dict[str, Any]],
+        *,
+        domain_description: str = "",
+    ) -> Dict[str, Any]:
+        """Repair level-2 sign failures by asking only for corrected causal edges."""
+
+        repaired = json.loads(json.dumps(package, ensure_ascii=False))
+        schema = repaired["schema"]
+        payload = self.client.chat_json(
+            self._sign_repair_messages(repaired, violations, domain_description=domain_description),
+            temperature=0.1,
+            max_tokens=1800,
+        )
+        source = payload.get("schema", payload) if isinstance(payload, dict) else {}
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        valid_value_keys = resource_ids | self._actor_state_keys(schema.get("actors", []))
+        edge_payload = source.get("causal_dag", []) if isinstance(source, dict) else []
+        schema["causal_dag"] = self._normalize_causal_dag(edge_payload, valid_value_keys=valid_value_keys)
+        self._materialize_edge_couplings(schema)
+        return self._normalize_package(repaired)
+
     def compile_and_repair(
         self,
         domain_description: str,
@@ -592,15 +862,20 @@ class FreemanOrchestrator:
         max_retries: int = 5,
         trial_steps: int = 3,
         config: Optional[SimConfig] = None,
+        etl_bootstrap: bool = True,
     ) -> tuple[Dict[str, Any], str, int, List[Dict[str, Any]]]:
-        """Synthesize, verify, and iteratively repair a Freeman package until it compiles cleanly."""
+        """Synthesize via ETL, verify, and repair a Freeman package until it compiles cleanly."""
 
         sim_config = config or SimConfig(convergence_check_steps=250, convergence_epsilon=3.0e-2)
-        package = self._normalize_package(
-            self.client.chat_json(self._synthesis_messages(domain_description), temperature=0.2, max_tokens=4000)
-        )
-        repair_history: List[Dict[str, Any]] = []
-        self.last_bootstrap_attempts = []
+        if etl_bootstrap:
+            package, repair_history = self._synthesize_etl_package(domain_description)
+        else:
+            package = self._normalize_package(
+                self.client.chat_json(self._synthesis_messages(domain_description), temperature=0.2, max_tokens=4000)
+            )
+            repair_history = []
+        self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
+        sign_repair_attempts = 0
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -610,6 +885,7 @@ class FreemanOrchestrator:
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "compile",
+                    "etl_phase": "edges",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
                     "repair_stage": self._repair_stage(attempt + 1),
@@ -634,6 +910,7 @@ class FreemanOrchestrator:
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "level1",
+                    "etl_phase": "edges",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
                     "repair_stage": self._repair_stage(attempt + 1),
@@ -658,6 +935,7 @@ class FreemanOrchestrator:
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "level0_trial",
+                    "etl_phase": "edges",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
                     "repair_stage": self._repair_stage(attempt + 1),
@@ -684,25 +962,34 @@ class FreemanOrchestrator:
             )
             if l2_violations:
                 feedback = self._violation_feedback("level2", l2_violations)
+                sign_repair_attempts += 1
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "level2",
+                    "etl_phase": "sign_repair",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
-                    "repair_stage": self._repair_stage(attempt + 1),
+                    "repair_stage": "surgical_sign_repair",
                 }
                 repair_history.append(attempt_record)
                 self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
-                package = self._normalize_package(
-                    self.client.repair_schema(
+                if sign_repair_attempts <= 2:
+                    package = self.repair_sign_edges(
                         package,
                         feedback,
                         domain_description=domain_description,
-                        error_history=repair_history,
-                        verifier_schema_spec=self._verifier_schema_spec(),
-                        repair_stage=self._repair_stage(attempt + 1),
                     )
-                )
+                else:
+                    package = self._normalize_package(
+                        self.client.repair_schema(
+                            package,
+                            feedback,
+                            domain_description=domain_description,
+                            error_history=repair_history,
+                            verifier_schema_spec=self._verifier_schema_spec(),
+                            repair_stage=self._repair_stage(attempt + 1),
+                        )
+                    )
                 continue
 
             compile_result = freeman_compile_domain(package["schema"])
@@ -715,7 +1002,11 @@ class FreemanOrchestrator:
     def synthesize_package(self, domain_description: str, max_attempts: int = 3) -> tuple[Dict[str, Any], str, int]:
         """Use an LLM client to produce a verified Freeman schema and baseline policies."""
 
-        package, world_id, attempts, _ = self.compile_and_repair(domain_description, max_retries=max_attempts)
+        package, world_id, attempts, _ = self.compile_and_repair(
+            domain_description,
+            max_retries=max_attempts,
+            etl_bootstrap=False,
+        )
         return package, world_id, attempts
 
     def interpret_run(
@@ -758,6 +1049,7 @@ class FreemanOrchestrator:
             max_retries=5,
             trial_steps=3,
             config=SimConfig(seed=seed, convergence_check_steps=250, convergence_epsilon=3.0e-2),
+            etl_bootstrap=False,
         )
         simulation = json.loads(
             freeman_run_simulation(

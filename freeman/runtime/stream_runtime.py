@@ -1013,7 +1013,7 @@ def _repair_budget_decision(ctx: RuntimeContext, *, gap_topics: list[str]) -> tu
         idle_mode = normalized_mode == "WATCH"
         return ctx.cost_model.estimate(
             task_id=f"ontology_repair:{ctx.current_world.runtime_step}:{topic_count}:{normalized_mode.lower()}",
-            llm_calls=0 if normalized_mode == "WATCH" else (1 if ctx.bootstrap_mode == "llm_synthesize" else 0),
+            llm_calls=0 if normalized_mode == "WATCH" else (2 if ctx.bootstrap_mode == "llm_synthesize" else 0),
             sim_steps=0 if normalized_mode == "WATCH" else max(1, min(topic_count * 2, 8)),
             actors=0 if idle_mode else actors,
             resources=0 if idle_mode else resources,
@@ -1237,6 +1237,7 @@ def _bootstrap(
                 max_retries=int(bootstrap_cfg.get("max_retries", 10)),
                 trial_steps=int(bootstrap_cfg.get("trial_steps", 3)),
                 config=_build_sim_config(config),
+                etl_bootstrap=True,
             )
             synthesized_package = {
                 **package,
