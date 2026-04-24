@@ -227,11 +227,13 @@ class KnowledgeGraph:
         auto_save: bool = True,
         llm_adapter: Any | None = None,
         vectorstore: KGVectorStore | None = None,
+        sync_vectorstore_on_load: bool = True,
     ) -> None:
         self.json_path = Path(json_path).resolve() if json_path is not None else _default_json_path(config_path)
         self.auto_save = auto_save
         self.llm_adapter = llm_adapter
         self.vectorstore = vectorstore
+        self.sync_vectorstore_on_load = bool(sync_vectorstore_on_load)
         self.graph = nx.MultiDiGraph()
         if auto_load and self.json_path.exists():
             self.load()
@@ -405,6 +407,7 @@ class KnowledgeGraph:
         top_k: int = 15,
         *,
         min_score: float = 0.05,
+        query_embedding: list[float] | None = None,
     ) -> KGSemanticSearchResult:
         """Return a structured semantic retrieval result plus 1-hop neighbors."""
 
@@ -438,8 +441,7 @@ class KnowledgeGraph:
                 query_embedding_used=False,
             )
 
-        query_embedding: list[float] | None = None
-        if self.llm_adapter is not None:
+        if query_embedding is None and self.llm_adapter is not None:
             query_embedding = [float(value) for value in self.llm_adapter.embed(query_text)]
 
         direct_hits = self._semantic_ranked_hits(
@@ -459,7 +461,7 @@ class KnowledgeGraph:
             for neighbor_id in [*self.graph.predecessors(node_id), *self.graph.successors(node_id)]:
                 if neighbor_id in seen:
                     continue
-                neighbor = self.get_node(neighbor_id)
+                neighbor = self.get_node(neighbor_id, lazy_embed=False)
                 if neighbor is None or neighbor.status == "archived":
                     continue
                 ordered_hits.append(
@@ -496,7 +498,7 @@ class KnowledgeGraph:
     ) -> List[KGSemanticHit]:
         """Rank active nodes by embedding similarity or lexical-semantic fallback."""
 
-        active_nodes = [node for node in self.nodes(lazy_embed=bool(self.llm_adapter is not None)) if node.status != "archived"]
+        active_nodes = [node for node in self.nodes(lazy_embed=False) if node.status != "archived"]
         if not active_nodes:
             return []
 
@@ -512,7 +514,7 @@ class KnowledgeGraph:
                 if node_id in self.graph
             ]
         candidate_pool = (
-            [self.get_node(node_id, lazy_embed=True) for node_id in vector_ranked_ids]
+            [self.get_node(node_id, lazy_embed=False) for node_id in vector_ranked_ids]
             if vector_ranked_ids
             else active_nodes
         )
@@ -667,7 +669,7 @@ class KnowledgeGraph:
             return None
         candidate = node
         if not candidate.embedding and candidate.id in self.graph:
-            stored = self.get_node(candidate.id, lazy_embed=True)
+            stored = self.get_node(candidate.id, lazy_embed=False)
             if stored is not None:
                 candidate = stored
         if not candidate.embedding or len(candidate.embedding) != len(query_embedding):
@@ -852,7 +854,7 @@ class KnowledgeGraph:
         for edge_payload in payload.get("edges", []):
             edge = KGEdge.from_snapshot(edge_payload)
             self.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
-        if self.vectorstore is not None:
+        if self.vectorstore is not None and self.sync_vectorstore_on_load:
             self.vectorstore.sync_from_kg(self)
 
     def export_json(self, path: str | Path | None = None) -> Path:

@@ -304,9 +304,11 @@ class SelfModelGraph:
                 self.knowledge_graph.graph.remove_node(node_id)
 
         for node_payload in data.get("nodes", []):
-            self.write(SelfModelNode.from_dict(node_payload), caller_token=_ENGINE_CALLER_TOKEN)
+            node = SelfModelNode.from_dict(node_payload).to_kg_node()
+            self.knowledge_graph.graph.add_node(node.id, **node.snapshot())
         for edge_payload in data.get("edges", []):
-            self.write(SelfModelEdge.from_dict(edge_payload), caller_token=_ENGINE_CALLER_TOKEN)
+            edge = SelfModelEdge.from_dict(edge_payload).to_kg_edge()
+            self.knowledge_graph.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
 
         if self.knowledge_graph.auto_save:
             self.knowledge_graph.save()

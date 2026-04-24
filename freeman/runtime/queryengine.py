@@ -189,6 +189,7 @@ def load_runtime_artifacts(config_path: str | Path | None = None) -> RuntimeArti
         vectorstore=vectorstore,
         auto_load=kg_path.exists(),
         auto_save=False,
+        sync_vectorstore_on_load=False,
     )
     forecasts_path = runtime_path / "forecasts.json"
     forecast_registry = ForecastRegistry(
@@ -295,6 +296,7 @@ class RuntimeQueryEngine:
             query,
             top_k=limit,
             min_score=self.artifacts.semantic_min_score,
+            query_embedding=query_embedding,
         )
         matches = [self._node_payload(hit.node) for hit in kg_result.hits[:limit]]
         matched_node_ids = {hit["id"] for hit in matches}
@@ -355,9 +357,12 @@ class RuntimeQueryEngine:
         *,
         query_embedding: list[float] | None,
         boost: float = 0.0,
+        use_embeddings: bool = True,
     ) -> float:
         lexical = _lexical_score(query_text, document)
-        embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
+        embedding_similarity = (
+            self._document_similarity(document, query_embedding=query_embedding) if use_embeddings else None
+        )
         if embedding_similarity is not None:
             embedding_weight, lexical_weight = self._score_weights()
             score = (embedding_weight * embedding_similarity) + (lexical_weight * lexical)
@@ -439,8 +444,14 @@ class RuntimeQueryEngine:
                 sort_keys=True,
             )
             lexical = _lexical_score(query_text, document)
-            embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
-            score = self._score_text(query_text, document, query_embedding=query_embedding, boost=boost)
+            embedding_similarity = None
+            score = self._score_text(
+                query_text,
+                document,
+                query_embedding=query_embedding,
+                boost=boost,
+                use_embeddings=False,
+            )
             if not self._passes_text_acceptance(
                 lexical=lexical,
                 embedding_similarity=embedding_similarity,
@@ -492,8 +503,14 @@ class RuntimeQueryEngine:
                 sort_keys=True,
             )
             lexical = _lexical_score(query_text, document)
-            embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
-            score = self._score_text(query_text, document, query_embedding=query_embedding, boost=boost)
+            embedding_similarity = None
+            score = self._score_text(
+                query_text,
+                document,
+                query_embedding=query_embedding,
+                boost=boost,
+                use_embeddings=False,
+            )
             if not self._passes_text_acceptance(
                 lexical=lexical,
                 embedding_similarity=embedding_similarity,
@@ -534,8 +551,13 @@ class RuntimeQueryEngine:
         }
         document = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         lexical = _lexical_score(query_text, document)
-        embedding_similarity = self._document_similarity(document, query_embedding=query_embedding)
-        score = self._score_text(query_text, document, query_embedding=query_embedding)
+        embedding_similarity = None
+        score = self._score_text(
+            query_text,
+            document,
+            query_embedding=query_embedding,
+            use_embeddings=False,
+        )
         if not self._passes_text_acceptance(
             lexical=lexical,
             embedding_similarity=embedding_similarity,
