@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from freeman.api.tool_api import (
@@ -94,8 +95,9 @@ class LLMDrivenSimulationRun:
 class FreemanOrchestrator:
     """Generate Freeman domain packages with an LLM client and execute them locally."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, package_normalization: str | bool = "auto") -> None:
         self.client = client
+        self.package_normalization = package_normalization
         self.last_bootstrap_attempts: List[Dict[str, Any]] = []
 
     def _synthesis_messages(self, domain_description: str) -> List[Dict[str, str]]:
@@ -117,11 +119,24 @@ class FreemanOrchestrator:
     def _normalize_package(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure a package carries the standard top-level Freeman synthesis keys."""
 
+        if not isinstance(package, dict):
+            package = {}
         normalized = json.loads(json.dumps(package, ensure_ascii=False))
+        if "schema" not in normalized and any(key in normalized for key in self._verifier_schema_spec()["required_top_level_keys"]):
+            normalized = {
+                "schema": normalized,
+                "policies": [],
+                "assumptions": [
+                    "Input looked like a raw Freeman schema and was wrapped as a package.",
+                ],
+            }
         normalized.setdefault("schema", {})
         normalized.setdefault("policies", [])
         normalized.setdefault("assumptions", [])
         schema = normalized.get("schema", {})
+        if self._package_normalization_enabled() and isinstance(schema, dict):
+            normalized["schema"] = self._normalize_schema_payload(schema)
+            return normalized
         relations = schema.get("relations", [])
         if isinstance(relations, list):
             normalized_relations: list[Dict[str, Any]] = []
@@ -140,6 +155,339 @@ class FreemanOrchestrator:
                 normalized_relations.append(mapped)
             schema["relations"] = normalized_relations
         return normalized
+
+    def _package_normalization_enabled(self) -> bool:
+        """Return whether local LLM output should be normalized before verification."""
+
+        mode = self.package_normalization
+        if isinstance(mode, bool):
+            return mode
+        normalized = str(mode or "auto").strip().lower()
+        if normalized in {"0", "false", "no", "off", "never", "none", "disabled"}:
+            return False
+        if normalized in {"1", "true", "yes", "on", "always", "force", "enabled"}:
+            return True
+        model = str(getattr(self.client, "model", "") or "").lower()
+        if not model:
+            return False
+        if any(marker in model for marker in ("ollama", "qwen", "llama", "mistral", "coder")):
+            return True
+        match = re.search(r"(\d+(?:\.\d+)?)\s*b", model)
+        return bool(match and float(match.group(1)) <= 14.0)
+
+    def _normalize_schema_payload(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce common LLM schema mistakes into Freeman's compiler contract."""
+
+        normalized = dict(schema)
+        normalized["actors"] = self._normalize_actors(normalized.get("actors", []))
+        actor_ids = {actor["id"] for actor in normalized["actors"]}
+
+        normalized["resources"] = self._normalize_resources(normalized.get("resources", []), actor_ids=actor_ids)
+        resource_ids = {resource["id"] for resource in normalized["resources"]}
+
+        normalized["outcomes"] = self._normalize_outcomes(normalized.get("outcomes", []), resource_ids)
+        actor_state_keys = self._actor_state_keys(normalized["actors"])
+        valid_value_keys = set(resource_ids) | actor_state_keys
+
+        relations, inferred_edges = self._normalize_relations(
+            normalized.get("relations", []),
+            actor_ids=actor_ids,
+            valid_value_keys=valid_value_keys,
+        )
+        normalized["relations"] = relations
+        normalized["causal_dag"] = self._normalize_causal_dag(
+            [*self._as_list(normalized.get("causal_dag", [])), *inferred_edges],
+            valid_value_keys=valid_value_keys,
+        )
+        normalized["actor_update_rules"] = self._normalize_actor_update_rules(
+            normalized.get("actor_update_rules", {}),
+            actor_ids=actor_ids,
+            valid_value_keys=valid_value_keys,
+        )
+        return normalized
+
+    def _normalize_actors(self, actors: Any) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for index, actor in enumerate(self._as_list(actors), start=1):
+            if isinstance(actor, str):
+                actor = {"id": self._safe_id(actor, fallback=f"actor_{index}"), "name": actor, "state": {}}
+            if not isinstance(actor, dict):
+                continue
+            actor_id = self._safe_id(actor.get("id") or actor.get("name"), fallback=f"actor_{index}")
+            state = actor.get("state", {})
+            if not isinstance(state, dict):
+                state = {}
+            values.append(
+                {
+                    "id": actor_id,
+                    "name": str(actor.get("name") or actor_id.replace("_", " ").title()),
+                    "state": {
+                        self._safe_id(key, fallback=f"state_{idx}"): float(value)
+                        for idx, (key, value) in enumerate(state.items(), start=1)
+                        if self._is_number(value)
+                    },
+                    "metadata": actor.get("metadata", {}) if isinstance(actor.get("metadata", {}), dict) else {},
+                }
+            )
+        return self._dedupe_by_id(values)
+
+    def _normalize_resources(self, resources: Any, *, actor_ids: set[str]) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for index, resource in enumerate(self._as_list(resources), start=1):
+            if isinstance(resource, str):
+                resource = {"id": self._safe_id(resource, fallback=f"resource_{index}"), "name": resource}
+            if not isinstance(resource, dict):
+                continue
+            resource_id = self._safe_id(resource.get("id") or resource.get("name"), fallback=f"resource_{index}")
+            params = resource.get("evolution_params", {})
+            if not isinstance(params, dict):
+                params = {}
+            if not params:
+                params = self._legacy_resource_params(resource)
+            owner_id = resource.get("owner_id")
+            evolution_type = str(resource.get("evolution_type") or "linear")
+            if evolution_type not in {"linear", "stock_flow", "logistic", "threshold", "coupled"}:
+                evolution_type = "linear"
+            values.append(
+                {
+                    "id": resource_id,
+                    "name": str(resource.get("name") or resource_id.replace("_", " ").title()),
+                    "value": float(resource.get("value", resource.get("initial_value", 1.0)) or 0.0),
+                    "unit": str(resource.get("unit") or resource.get("units") or "index"),
+                    "owner_id": owner_id if owner_id in actor_ids else None,
+                    "min_value": float(resource.get("min_value", 0.0) or 0.0),
+                    "max_value": self._float_or_inf(resource.get("max_value", resource.get("capacity", float("inf")))),
+                    "evolution_type": evolution_type,
+                    "evolution_params": params,
+                    "conserved": bool(resource.get("conserved", False)),
+                }
+            )
+        return self._dedupe_by_id(values)
+
+    def _normalize_outcomes(self, outcomes: Any, resource_ids: set[str]) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for index, outcome in enumerate(self._as_list(outcomes), start=1):
+            if isinstance(outcome, str):
+                outcome = {"id": self._safe_id(outcome, fallback=f"outcome_{index}"), "label": outcome}
+            if not isinstance(outcome, dict):
+                continue
+            outcome_id = self._safe_id(
+                outcome.get("id") or outcome.get("label") or outcome.get("name"),
+                fallback=f"outcome_{index}",
+            )
+            weights = outcome.get("scoring_weights", {})
+            if not isinstance(weights, dict):
+                weights = {}
+            weights = {
+                str(key): float(value)
+                for key, value in weights.items()
+                if key in resource_ids and self._is_number(value)
+            }
+            if not weights and resource_ids:
+                weights = {sorted(resource_ids)[0]: 1.0}
+            values.append(
+                {
+                    "id": outcome_id,
+                    "label": str(
+                        outcome.get("label")
+                        or outcome.get("name")
+                        or outcome_id.replace("_", " ").title()
+                    ),
+                    "scoring_weights": weights,
+                    "description": str(outcome.get("description") or ""),
+                    "regime_shifts": (
+                        outcome.get("regime_shifts", [])
+                        if isinstance(outcome.get("regime_shifts", []), list)
+                        else []
+                    ),
+                }
+            )
+        return self._dedupe_by_id(values)
+
+    def _normalize_relations(
+        self,
+        relations: Any,
+        *,
+        actor_ids: set[str],
+        valid_value_keys: set[str],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        normalized_relations: List[Dict[str, Any]] = []
+        inferred_edges: List[Dict[str, Any]] = []
+        for relation in self._as_list(relations):
+            if not isinstance(relation, dict):
+                continue
+            mapped = dict(relation)
+            source = str(mapped.pop("source", mapped.get("source_id", "")))
+            target = str(mapped.pop("target", mapped.get("target_id", "")))
+            relation_type = str(mapped.pop("type", mapped.pop("label", mapped.get("relation_type", "association"))))
+            weights = mapped.get("weights", {})
+            weights = weights if isinstance(weights, dict) else {}
+            if source in actor_ids and target in actor_ids:
+                normalized_relations.append(
+                    {
+                        "source_id": source,
+                        "target_id": target,
+                        "relation_type": relation_type,
+                        "weights": {str(key): float(value) for key, value in weights.items() if self._is_number(value)},
+                    }
+                )
+                continue
+            inferred_edges.extend(self._relations_to_causal_edges(source, target, weights, valid_value_keys))
+        return normalized_relations, self._dedupe_causal_edges(inferred_edges)
+
+    def _normalize_causal_dag(self, edges: Any, *, valid_value_keys: set[str]) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for edge in self._as_list(edges):
+            if not isinstance(edge, dict):
+                continue
+            source = str(edge.get("source", edge.get("source_id", "")))
+            target = str(edge.get("target", edge.get("target_id", "")))
+            if source not in valid_value_keys or target not in valid_value_keys or source == target:
+                continue
+            expected_sign = str(edge.get("expected_sign") or edge.get("sign") or "+")
+            expected_sign = "-" if expected_sign.strip().startswith("-") else "+"
+            values.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "expected_sign": expected_sign,
+                    "strength": str(edge.get("strength") or "strong"),
+                    "weight": None if edge.get("weight") is None else float(edge.get("weight")),
+                    "weight_source": str(edge.get("weight_source") or "llm_normalized"),
+                    "metadata": edge.get("metadata", {}) if isinstance(edge.get("metadata", {}), dict) else {},
+                }
+            )
+        return self._dedupe_causal_edges(values)
+
+    def _normalize_actor_update_rules(
+        self,
+        rules: Any,
+        *,
+        actor_ids: set[str],
+        valid_value_keys: set[str],
+    ) -> Dict[str, Any]:
+        if not isinstance(rules, dict):
+            return {}
+        normalized: Dict[str, Any] = {}
+        for actor_id, state_rules in rules.items():
+            if actor_id not in actor_ids or not isinstance(state_rules, dict):
+                continue
+            cleaned_rules: Dict[str, Any] = {}
+            for state_key, spec in state_rules.items():
+                if not isinstance(spec, dict):
+                    continue
+                weights = spec.get("weights", {})
+                if isinstance(weights, dict):
+                    spec = dict(spec)
+                    spec["weights"] = {
+                        str(key): float(value)
+                        for key, value in weights.items()
+                        if key in valid_value_keys and self._is_number(value)
+                    }
+                cleaned_rules[str(state_key)] = spec
+            if cleaned_rules:
+                normalized[str(actor_id)] = cleaned_rules
+        return normalized
+
+    def _relations_to_causal_edges(
+        self,
+        source: str,
+        target: str,
+        weights: Dict[str, Any],
+        valid_value_keys: set[str],
+    ) -> List[Dict[str, Any]]:
+        edges: List[Dict[str, Any]] = []
+        if source in valid_value_keys and target in valid_value_keys and source != target:
+            edges.append(self._causal_edge_from_weight(source, target, weights.get(target, 1.0)))
+        if target in valid_value_keys:
+            for key, value in weights.items():
+                if key in valid_value_keys and key != target:
+                    edges.append(self._causal_edge_from_weight(str(key), target, value))
+        if source in valid_value_keys:
+            for key, value in weights.items():
+                if key in valid_value_keys and key != source:
+                    edges.append(self._causal_edge_from_weight(source, str(key), value))
+        return edges
+
+    def _causal_edge_from_weight(self, source: str, target: str, weight: Any) -> Dict[str, Any]:
+        value = float(weight) if self._is_number(weight) else 1.0
+        return {
+            "source": source,
+            "target": target,
+            "expected_sign": "-" if value < 0.0 else "+",
+            "strength": "strong",
+            "weight": value,
+            "weight_source": "normalized_relation",
+            "metadata": {"normalized_from": "relation"},
+        }
+
+    def _legacy_resource_params(self, resource: Dict[str, Any]) -> Dict[str, Any]:
+        if any(key in resource for key in ("inflow", "outflow", "growth_rate", "decay_rate")):
+            growth = float(resource.get("growth_rate", 0.0) or 0.0)
+            decay = float(resource.get("decay_rate", 0.0) or 0.0)
+            inflow = float(resource.get("inflow", 0.0) or 0.0)
+            outflow = float(resource.get("outflow", 0.0) or 0.0)
+            return {
+                "a": max(0.0, min(0.95, 1.0 + growth - decay)),
+                "b": 0.0,
+                "c": inflow - outflow,
+                "coupling_weights": {},
+            }
+        return {"a": 0.8, "b": 0.0, "c": 0.0, "coupling_weights": {}}
+
+    def _actor_state_keys(self, actors: List[Dict[str, Any]]) -> set[str]:
+        keys: set[str] = set()
+        for actor in actors:
+            actor_id = actor["id"]
+            for state_key in actor.get("state", {}):
+                keys.add(str(state_key))
+                keys.add(f"{actor_id}.{state_key}")
+        return keys
+
+    def _as_list(self, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _safe_id(self, value: Any, *, fallback: str) -> str:
+        text = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+        return text or fallback
+
+    def _dedupe_by_id(self, values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: set[str] = set()
+        result: List[Dict[str, Any]] = []
+        for value in values:
+            item_id = str(value.get("id", ""))
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            result.append(value)
+        return result
+
+    def _dedupe_causal_edges(self, values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: set[tuple[str, str]] = set()
+        result: List[Dict[str, Any]] = []
+        for value in values:
+            key = (str(value.get("source", "")), str(value.get("target", "")))
+            if not key[0] or not key[1] or key in seen:
+                continue
+            seen.add(key)
+            result.append(value)
+        return result
+
+    def _is_number(self, value: Any) -> bool:
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return False
+        return True
+
+    def _float_or_inf(self, value: Any) -> float:
+        if value in {None, "inf", "infinity"}:
+            return float("inf")
+        return float(value)
 
     def _verifier_schema_spec(self) -> Dict[str, Any]:
         """Return the structural contract a package must satisfy to be verifier-clean."""

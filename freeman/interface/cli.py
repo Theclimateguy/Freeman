@@ -52,6 +52,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "fallback_schema_path": "./freeman/domain/profiles/gim15.json",
             "domain_brief_path": "./examples/domain_brief_climate_news.md",
             "domain_brief": "",
+            "package_normalization": "auto",
         },
     },
     "llm": {

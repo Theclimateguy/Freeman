@@ -18,6 +18,7 @@ agent:
     fallback_schema_path: "./freeman/domain/profiles/gim15.json"
     domain_brief_path: "./examples/domain_brief_climate_news.md"
     domain_brief: ""
+    package_normalization: "auto"
   ontology_repair:
     gap_threshold: 2
     preserve_kg: true

@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 from freeman.core.transition import step_world
 from freeman.domain.compiler import DomainCompiler
-from freeman.exceptions import HardStopException
+from freeman.exceptions import HardStopException, SchemaRepairFailed
 from freeman.game.runner import SimConfig
 from freeman.llm.orchestrator import FreemanOrchestrator
 from freeman.verifier.level1 import level1_check
@@ -217,6 +217,114 @@ def test_repair_stage_escalates_with_attempt_history(water_market_schema: Dict[s
     assert client.feedback_log[0][0]["repair_stage"] == "standard"
     assert client.feedback_log[2][0]["repair_stage"] == "accumulated"
     assert client.feedback_log[2][0]["history_len"] == 3
+
+
+def test_package_normalization_moves_resource_relations_to_causal_dag() -> None:
+    """Local-model normalization should repair the common actor/resource relation mixup."""
+
+    malformed_package = {
+        "schema": {
+            "domain_id": "gas_demo",
+            "actors": [
+                {"id": "supplier", "name": "Supplier", "state": {"reliability": 0.8}},
+                {"id": "consumer", "name": "Consumer", "state": {"stress": 0.2}},
+            ],
+            "resources": [
+                {
+                    "id": "gas_flow_bcm",
+                    "name": "Gas Flow",
+                    "value": 1.0,
+                    "unit": "bcm_per_day",
+                    "min_value": 0.0,
+                    "max_value": 2.0,
+                    "evolution_type": "linear",
+                    "evolution_params": {"a": 0.0, "b": 0.0, "c": 1.0, "coupling_weights": {}},
+                },
+                {
+                    "id": "storage_fill_pct",
+                    "name": "Storage Fill",
+                    "value": 60.0,
+                    "unit": "pct",
+                    "min_value": 0.0,
+                    "max_value": 100.0,
+                    "evolution_type": "linear",
+                    "evolution_params": {
+                        "a": 0.0,
+                        "b": 0.0,
+                        "c": 60.0,
+                        "coupling_weights": {"gas_flow_bcm": 0.1},
+                    },
+                },
+            ],
+            "relations": [
+                {
+                    "source_id": "gas_flow_bcm",
+                    "target_id": "storage_fill_pct",
+                    "relation_type": "drives",
+                    "weights": {"storage_fill_pct": 0.1},
+                }
+            ],
+            "outcomes": [
+                {
+                    "id": "storage_security",
+                    "label": "Storage Security",
+                    "scoring_weights": {"storage_fill_pct": 1.0},
+                }
+            ],
+            "causal_dag": [],
+        },
+        "policies": [],
+        "assumptions": [],
+    }
+    client = RepairingStubClient(malformed_package)
+    orchestrator = FreemanOrchestrator(client, package_normalization="always")
+
+    package, _world_id, attempts, repair_history = orchestrator.compile_and_repair(
+        "Compact gas flow demo.",
+        max_retries=1,
+        trial_steps=1,
+    )
+
+    assert attempts == 1
+    assert repair_history == []
+    assert package["schema"]["relations"] == []
+    assert package["schema"]["causal_dag"][0]["source"] == "gas_flow_bcm"
+    assert package["schema"]["causal_dag"][0]["target"] == "storage_fill_pct"
+    DomainCompiler().compile(package["schema"])
+
+
+def test_package_normalization_can_be_disabled() -> None:
+    """The sanitizer remains opt-in/auto and can be disabled for strict model evaluation."""
+
+    malformed_package = {
+        "schema": {
+            "domain_id": "gas_demo",
+            "actors": [{"id": "supplier", "name": "Supplier", "state": {}}],
+            "resources": [
+                {
+                    "id": "gas_flow_bcm",
+                    "name": "Gas Flow",
+                    "value": 1.0,
+                    "unit": "bcm_per_day",
+                    "evolution_type": "linear",
+                    "evolution_params": {"a": 0.0, "b": 0.0, "c": 1.0, "coupling_weights": {}},
+                }
+            ],
+            "relations": [{"source_id": "supplier", "target_id": "gas_flow_bcm", "relation_type": "controls"}],
+            "outcomes": [{"id": "flow", "label": "Flow", "scoring_weights": {"gas_flow_bcm": 1.0}}],
+            "causal_dag": [],
+        },
+        "policies": [],
+        "assumptions": [],
+    }
+    client = RepairingStubClient(malformed_package)
+    orchestrator = FreemanOrchestrator(client, package_normalization="never")
+
+    try:
+        orchestrator.compile_and_repair("Strict gas demo.", max_retries=1, trial_steps=1)
+    except SchemaRepairFailed:
+        return
+    raise AssertionError("normalization=never should preserve the invalid relation and fail")
 
 
 def test_repair_stage_thresholds() -> None:

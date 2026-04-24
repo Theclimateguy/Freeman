@@ -18,6 +18,7 @@ agent:
     fallback_schema_path:
     domain_brief_path:
     domain_brief: ""
+    package_normalization: "auto"
   ontology_repair:
     gap_threshold: 2
     preserve_kg: true

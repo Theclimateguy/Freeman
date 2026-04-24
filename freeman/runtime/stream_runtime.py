@@ -1227,7 +1227,10 @@ def _bootstrap(
                 "use a local or remote chat client that implements repair_schema()."
             )
         LOGGER.info("Synthesizing bootstrap schema from domain brief.")
-        orchestrator = FreemanOrchestrator(llm_client)
+        orchestrator = FreemanOrchestrator(
+            llm_client,
+            package_normalization=bootstrap_cfg.get("package_normalization", "auto"),
+        )
         try:
             package, world_id, attempts, repair_history = orchestrator.compile_and_repair(
                 domain_brief,
