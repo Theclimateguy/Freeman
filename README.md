@@ -253,10 +253,10 @@ Repository CI now runs `pytest -q` plus release builds on every push to `main` a
 
 It supports two bootstrap modes:
 
-- `llm_synthesize`: the primary path; use the built-in Freeman orchestrator to synthesize and repair a domain schema from a natural-language brief before the stream loop starts
+- `llm_synthesize`: the primary path; use the built-in Freeman orchestrator to build the initial state vector from a natural-language brief through a two-phase ETL bootstrap before the stream loop starts
 - `schema_path`: the secondary path; start from an explicit schema such as `freeman/domain/profiles/gim15.json`
 
-`llm_synthesize` now runs a verifier-guided repair loop. `bootstrap_package.json` persists `bootstrap_attempts` with per-attempt verifier errors, and the default clean config is local-model-first (`ollama` + `qwen2.5-coder:14b`) with `fallback_schema_path` only as a secondary recovery path.
+`llm_synthesize` now runs `skeleton -> edges -> verifier` instead of one monolithic synthesis call. `bootstrap_package.json` persists `bootstrap_attempts` with `etl_phase` markers (`skeleton`, `edges`, `sign_repair`) plus verifier errors; level2 sign failures use targeted edge repair, while compile/level1/level0 failures still use full-package repair. The default clean config is local-model-first (`ollama` + `qwen2.5-coder:14b`) with `fallback_schema_path` only as a secondary recovery path.
 
 The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
 

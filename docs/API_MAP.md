@@ -352,7 +352,7 @@ Runtime command:
 - `python -m freeman.runtime.stream_runtime --config-path config.climate.yaml --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
   - the same daemon runtime with a climate-oriented example config only; this is not a separate runtime implementation
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --bootstrap-mode llm_synthesize --domain-brief-path <brief.md> --hours 8 --poll-seconds 600 --analysis-interval-seconds 1.0 --resume --model auto`
-  - synthesize a verifier-repaired Freeman schema from a natural-language brief, persist the bootstrap package and `bootstrap_attempts`, then run the same daemon loop
+  - build the initial Freeman state vector from a natural-language brief via the two-phase ETL bootstrap (`skeleton`, `edges`, optional `sign_repair`), persist the bootstrap package and `bootstrap_attempts`, then run the same daemon loop
 - `python -m freeman.interface.cli export-kg-evolution data/runtime/kg_snapshots runs/kg_evolution.html`
   - render a timeline / evolution viewer from runtime KG snapshots when `runtime.kg_snapshots.enabled` is on
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query forecasts [--status <pending|verified|expired>]`

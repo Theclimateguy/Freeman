@@ -212,16 +212,16 @@ flowchart TD
     T --> U["persist initial runtime state"]
 ```
 
-Порядок verifier-guided LLM repair внутри `FreemanOrchestrator.compile_and_repair`:
+Порядок ETL bootstrap внутри `FreemanOrchestrator.compile_and_repair`:
 
-1. `chat_json` создаёт пакет `{schema, policies, assumptions}`.
-2. `_normalize_package` чинит поверхностные поля (`source` -> `source_id`, `type` -> `relation_type`, default `weights`).
-3. `DomainCompiler.compile` ловит schema/reference ошибки.
-4. `level1_check` ловит структурную нестабильность.
-5. `_trial_level0_violations` ловит hard-инварианты на коротком rollout.
+1. `SKELETON_SYSTEM_PROMPT` извлекает только `{actors, resources, outcomes}` и минимальный schema envelope.
+2. `_validate_skeleton` проверяет обязательные ключи и уникальность ids до генерации рёбер.
+3. `EDGE_SYSTEM_PROMPT` получает фиксированный skeleton и `valid_value_keys`, затем возвращает только `causal_dag`, `actor_update_rules`, optional policies и assumptions.
+4. `_materialize_edge_couplings` детерминированно пишет bounded coupling weights для resource-target edges (`weight_source="etl_deterministic"`), чтобы state vector был исполнимым без LLM-калибровки.
+5. `DomainCompiler.compile`, `level1_check` и `_trial_level0_violations` ловят schema/reference, stability и hard-invariant ошибки; эти классы ошибок чинятся полным `repair_schema`.
 6. `level2_check` ловит sign-consistency DAG.
-7. На каждой ошибке `repair_schema` получает structured feedback, error history и schema spec.
-8. После `max_retries` выбрасывается `SchemaRepairFailed`; runtime может перейти к `fallback_schema_path`.
+7. Level2 sign failures сначала проходят через `repair_sign_edges`: LLM видит только текущий edge list, `valid_value_keys` и failing edges; full-package repair используется только после двух неудачных surgical попыток.
+8. `bootstrap_attempts` хранит `etl_phase`: `skeleton`, `edges`, `sign_repair`; после `max_retries` выбрасывается `SchemaRepairFailed`, и runtime может перейти к `fallback_schema_path`.
 
 ## 4. Signal state machine
 

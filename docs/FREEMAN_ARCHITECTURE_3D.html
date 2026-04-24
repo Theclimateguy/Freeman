@@ -1369,7 +1369,7 @@
       },
       {
         "id": "llm_synthesis",
-        "label": "LLM synthesize package",
+        "label": "LLM ETL bootstrap",
         "layer": "bootstrap",
         "layerLabel": "Bootstrap",
         "stage": 2,
@@ -1380,17 +1380,21 @@
         "module": "freeman.llm.orchestrator",
         "functions": [
           "FreemanOrchestrator.compile_and_repair",
-          "_normalize_package"
+          "_skeleton_messages",
+          "_edge_messages",
+          "_materialize_edge_couplings"
         ],
         "inputs": [
           "domain brief"
         ],
         "outputs": [
+          "state vector schema",
           "schema",
           "policies",
-          "assumptions"
+          "assumptions",
+          "bootstrap_attempts.etl_phase"
         ],
-        "comment": "LLM генерирует пакет и проходит repair loop до verifier-clean.",
+        "comment": "Двухфазный ETL: skeleton извлекает actors/resources/outcomes, edges добавляет causal_dag и actor_update_rules; coupling weights материализуются детерминированно.",
         "invariant": "",
         "critical": true,
         "fallback": false,
@@ -1439,7 +1443,7 @@
       },
       {
         "id": "repair_loop_verifier",
-        "label": "verifier repair loop",
+        "label": "verifier / sign repair loop",
         "layer": "repair",
         "layerLabel": "Repair",
         "stage": 2,
@@ -1452,6 +1456,7 @@
           "level1_check",
           "_trial_level0_violations",
           "level2_check",
+          "repair_sign_edges",
           "repair_schema"
         ],
         "inputs": [
@@ -1460,7 +1465,7 @@
         "outputs": [
           "corrected package"
         ],
-        "comment": "Нарушения L1/L0 trial/L2 приводят к следующей попытке схемы.",
+        "comment": "L1/L0 trial используют full-package repair_schema; L2 sign violations сначала чинятся edge-only repair_sign_edges.",
         "invariant": "",
         "critical": false,
         "fallback": true,
@@ -4602,8 +4607,8 @@
         "target": "llm_synthesis",
         "relation": "reads",
         "order": 18,
-        "comment": "Domain brief drives LLM synthesis.",
-        "transformation": "text -> schema/policies/assumptions",
+        "comment": "Domain brief drives phase-1 skeleton extraction and phase-2 edge synthesis.",
+        "transformation": "text -> skeleton -> edges -> state vector schema",
         "condition": "",
         "critical": false,
         "fallback": false,
@@ -4650,7 +4655,7 @@
         "target": "repair_loop_verifier",
         "relation": "fallback",
         "order": 22,
-        "comment": "L1/L0/L2 violations become repair feedback.",
+        "comment": "L1/L0 violations become full-package feedback; L2 sign failures become edge-only feedback first.",
         "transformation": "",
         "condition": "violations found",
         "critical": false,
@@ -4674,8 +4679,8 @@
         "target": "llm_synthesis",
         "relation": "repairs",
         "order": 24,
-        "comment": "Verifier feedback is accumulated across attempts.",
-        "transformation": "violations -> repaired package",
+        "comment": "Verifier feedback is accumulated across attempts; sign_repair keeps the prompt scoped to failing edges.",
+        "transformation": "violations -> repaired package or corrected edges",
         "condition": "",
         "critical": false,
         "fallback": true,
@@ -4710,7 +4715,7 @@
         "target": "domain_compile",
         "relation": "transforms",
         "order": 27,
-        "comment": "Verified synthesized schema compiles into WorldState.",
+        "comment": "Verified ETL schema compiles into the primary WorldState/state vector.",
         "transformation": "package.schema -> WorldState",
         "condition": "",
         "critical": true,
