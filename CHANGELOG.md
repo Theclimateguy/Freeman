@@ -8,6 +8,31 @@
 
 - No unreleased changes.
 
+## v3.1.0 - 2026-04-25
+
+Minor release focused on replacing monolithic LLM bootstrap with the new two-phase ETL path and formalizing repository licensing.
+
+### Added
+
+- Two-phase ETL bootstrap in `FreemanOrchestrator`:
+  - `skeleton` phase extracts only actors, resources, and outcomes
+  - `edges` phase adds `causal_dag`, `actor_update_rules`, policies, and assumptions against a validated node set
+- Surgical level-2 sign repair via `repair_sign_edges()`, reducing full-package churn when only a few causal signs fail.
+- `bootstrap_attempts[].etl_phase` persisted in runtime bootstrap artifacts for `skeleton`, `edges`, and `sign_repair` diagnostics.
+- Repository license files under Apache License 2.0 for both the root package and `freeman-connectors`.
+
+### Changed
+
+- `llm_synthesize` is now the primary ETL bootstrap path for runtime state-vector assembly; interactive single-call synthesis remains available for backward compatibility.
+- Resource-target causal edges now receive deterministic bounded coupling materialization during ETL (`weight_source=\"etl_deterministic\"`), leaving numeric estimation to runtime calibration.
+- Runtime cost estimation for bootstrap/repair now accounts for the two-call ETL path rather than a single monolithic synthesis call.
+- Architecture docs, API map, README, and the 3D architecture visualization now describe the ETL bootstrap instead of the old single-shot synthesis flow.
+- Core package version bumped to `3.1.0`; `freeman-connectors` now targets `freeman>=3.1.0,<4.0.0`.
+
+### Validation
+
+- `pytest -q` -> `234 passed`
+
 ## v2.0.2 - 2026-04-13
 
 Patch release focused on release hygiene, CI, and explicit connector coverage.

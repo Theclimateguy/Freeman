@@ -4,15 +4,18 @@ Freeman is an analytical agent for situations that change over time. You describ
 
 The point of Freeman is not "chatting about a topic". The point is to keep a structured world model, run repeatable scenario analysis, remember past cases, and give you an audit trail of what changed and why.
 
-Current release: `3.0.0`
+Current release: `3.1.0`
 
-Freeman `3.0` closes the operational local-agent loop:
+Freeman `3.1` keeps the operational local-agent loop closed and replaces monolithic bootstrap with a structured ETL path:
 
 - continuous ingestion into a persistent world model
 - universal semantic retrieval over persisted runtime artifacts
+- two-phase ETL bootstrap (`skeleton -> edges -> verifier`) for state-vector construction from domain briefs
 - autonomous ontology repair for schema-backed runtimes
 - budget/cost governance with persisted runtime ledger
 - evidence-grounded `ask` / `query` against the saved daemon state
+
+License: Apache License 2.0. See [LICENSE](/Users/theclimateguy/Documents/science/Freeman/LICENSE).
 
 ## Why Use It
 

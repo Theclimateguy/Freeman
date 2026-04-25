@@ -675,7 +675,7 @@ It can:
 - downgrade `DEEP_DIVE -> ANALYZE -> WATCH`
 - stop when hard limits are exceeded
 
-Operational implementation in `3.0`:
+Operational implementation in `3.1`:
 
 - `BudgetLedger` persists one append-only JSONL record per governed task
 - runtime loads the ledger on resume and keeps cumulative `spent_usd`
