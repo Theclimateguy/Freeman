@@ -1,6 +1,8 @@
 # Freeman 3.1
 
-`3.1.0` promotes the new ETL bootstrap to the primary runtime path for building a Freeman state vector from a natural-language domain brief.
+`3.1.0` promoted the new ETL bootstrap to the primary runtime path for building a Freeman state vector from a natural-language domain brief.
+
+`3.1.1` hardens that release by making ontology-ingestion provenance explicit, fixing ETL resource normalization, and adding a transparent live-news benchmark harness.
 
 ## What Changed
 
@@ -22,3 +24,30 @@
 ## Validation
 
 - `pytest -q` -> `234 passed`
+
+## 3.1.1 Follow-up
+
+### What Changed
+
+- Runtime bootstrap artifacts now persist `bootstrap_contract`, which makes the ontology-ingestion strategy explicit:
+  - `seed_schema`
+  - `brief_local_etl`
+  - `brief_local_etl_with_fallback_seed`
+  - `brief_remote_etl`
+  - `brief_remote_etl_with_fallback_seed`
+- `bootstrap_contract.actual_bootstrap_path` now records whether the graph actually came from:
+  - `schema_seed`
+  - `etl_from_brief`
+  - `fallback_schema_seed`
+- Resource normalization in ETL now coerces `evolution_params` to the operator contract so `logistic` resources cannot leak incompatible linear parameters into compiled worlds.
+- A transparent benchmark runner for random live RSS samples is now tracked in the repository:
+  - [scripts/run_random_news_etl_benchmark.py](/Users/theclimateguy/Documents/science/Freeman/scripts/run_random_news_etl_benchmark.py)
+
+### Why It Matters
+
+- Freeman should now be understood as an ontology-construction runtime with multiple explicit ingestion strategies, not as a single "news to graph" path.
+- Fallback-backed runs remain operationally useful, but the saved runtime package now makes it obvious when the final graph reflects a fallback seed rather than a successful ETL synthesis.
+
+### Validation
+
+- `pytest -q` -> `238 passed`

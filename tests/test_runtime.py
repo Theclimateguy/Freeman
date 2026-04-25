@@ -283,6 +283,8 @@ def test_stream_runtime_llm_bootstrap_falls_back_to_schema(tmp_path, monkeypatch
     assert exit_code == 0
     assert payload["bootstrap_mode"] == "llm_synthesize_fallback"
     assert payload["bootstrap_attempts"] == attempt_log
+    assert payload["bootstrap_contract"]["strategy_id"] == "brief_local_etl_with_fallback_seed"
+    assert payload["bootstrap_contract"]["actual_bootstrap_path"] == "fallback_schema_seed"
 
 
 def test_stream_runtime_prefers_domain_brief_bootstrap_when_mode_omitted(
@@ -366,6 +368,8 @@ def test_stream_runtime_prefers_domain_brief_bootstrap_when_mode_omitted(
     assert exit_code == 0
     assert payload["bootstrap_mode"] == "llm_synthesize"
     assert payload["schema"]["domain_id"] == water_market_schema["domain_id"]
+    assert payload["bootstrap_contract"]["strategy_id"] == "brief_local_etl"
+    assert payload["bootstrap_contract"]["actual_bootstrap_path"] == "etl_from_brief"
 
 
 def test_stream_runtime_runtime_step_verifies_forecasts_across_fallback(tmp_path, monkeypatch, water_market_schema) -> None:

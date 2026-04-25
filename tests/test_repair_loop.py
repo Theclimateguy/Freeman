@@ -389,6 +389,36 @@ def test_package_normalization_can_be_disabled() -> None:
     ]
 
 
+def test_normalize_resources_coerces_logistic_params_to_operator_contract() -> None:
+    client = RepairingStubClient({"schema": {}, "policies": [], "assumptions": []})
+    orchestrator = FreemanOrchestrator(client)
+
+    resources = orchestrator._normalize_resources(
+        [
+            {
+                "id": "warming_risk",
+                "name": "Warming Risk",
+                "value": 0.4,
+                "max_value": 1.0,
+                "evolution_type": "logistic",
+                "evolution_params": {
+                    "a": 0.8,
+                    "b": 0.1,
+                    "c": 0.05,
+                    "coupling_weights": {"emissions": 0.2},
+                },
+            }
+        ],
+        actor_ids=set(),
+    )
+
+    params = resources[0]["evolution_params"]
+    assert set(params) == {"r", "K", "external", "policy_scale", "coupling_weights"}
+    assert "a" not in params
+    assert params["K"] == 1.0
+    assert params["coupling_weights"]["emissions"] == 0.2
+
+
 def test_repair_stage_thresholds() -> None:
     orchestrator = FreemanOrchestrator(RepairingStubClient({"schema": {}, "policies": [], "assumptions": []}))
 

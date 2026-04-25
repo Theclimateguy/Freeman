@@ -8,6 +8,37 @@
 
 - No unreleased changes.
 
+## v3.1.1 - 2026-04-25
+
+Patch release focused on release hygiene, explicit ontology-ingestion provenance, and ETL hardening.
+
+### Added
+
+- `bootstrap_contract` persisted in `bootstrap_package.json` so every runtime bootstrap records:
+  - strategy id
+  - actual materialization path (`schema_seed`, `etl_from_brief`, `fallback_schema_seed`)
+  - input requirements
+  - recommended use cases
+  - explicit limitations
+- New ontology-ingestion reference document: `docs/ONTOLOGY_INGESTION.md`.
+- Transparent live-news benchmark harness: `scripts/run_random_news_etl_benchmark.py`.
+- Dedicated bootstrap-contract test coverage in `tests/test_bootstrap_contracts.py`.
+
+### Changed
+
+- Freeman now treats ontology creation as a catalog of explicit ingestion strategies rather than a single ETL path with implicit fallbacks.
+- `.gitignore` now keeps runtime artifacts and generated data ignored, while allowing the tracked benchmark runner and release changelog to remain versioned.
+- Core package version bumped to `3.1.1`; `freeman-connectors` now targets `freeman>=3.1.1,<4.0.0`.
+
+### Fixed
+
+- ETL resource normalization now coerces `evolution_params` to the active operator contract, preventing invalid `logistic` resources from carrying linear-only parameters into compiled worlds.
+- Runtime bootstrap tests now assert ontology-ingestion provenance for both successful ETL and fallback-backed paths.
+
+### Validation
+
+- `pytest -q` -> `238 passed`
+
 ## v3.1.0 - 2026-04-25
 
 Minor release focused on replacing monolithic LLM bootstrap with the new two-phase ETL path and formalizing repository licensing.

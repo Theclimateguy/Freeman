@@ -52,6 +52,7 @@ from freeman.llm import DeepSeekChatClient, FreemanOrchestrator, OllamaChatClien
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.core.world import WorldState
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.bootstrap_contracts import build_bootstrap_contract
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.kgsnapshot import KGSnapshotManager, snapshot_manager_from_config
 from freeman.runtime.queryengine import RuntimeAnswerEngine, RuntimeQueryEngine, load_runtime_artifacts as _load_runtime_query_artifacts
@@ -1203,6 +1204,8 @@ def _bootstrap(
         bootstrap_mode = "llm_synthesize"
     synthesized_package = None if force_rebuild else (json.loads(package_path.read_text(encoding="utf-8")) if package_path.exists() else None)
 
+    fallback_candidate = bootstrap_cfg.get("fallback_schema_path")
+
     if synthesized_package is None and bootstrap_mode == "schema_path":
         schema_path = paths.schema_path
         if schema_path is None:
@@ -1216,6 +1219,18 @@ def _bootstrap(
             "policies": [],
             "assumptions": [],
             "bootstrap_mode": "schema_path",
+            "bootstrap_contract": build_bootstrap_contract(
+                bootstrap_mode="schema_path",
+                llm_provider=provider,
+                model_name=model_name,
+                has_fallback_schema=bool(fallback_candidate),
+                actual_bootstrap_path="schema_seed",
+                schema_path=str(schema_path),
+                fallback_schema_path=str(_resolve_path(paths.config_base, fallback_candidate, fallback_candidate))
+                if fallback_candidate
+                else None,
+                domain_brief_supplied=bool(domain_brief_inline or domain_brief_path is not None),
+            ),
         }
     elif synthesized_package is None and bootstrap_mode == "llm_synthesize":
         domain_brief = str(domain_brief_override or domain_brief_inline or _read_optional_text(domain_brief_path)).strip()
@@ -1249,11 +1264,22 @@ def _bootstrap(
                 ),
                 "repair_history": repair_history,
                 "domain_brief": domain_brief,
+                "bootstrap_contract": build_bootstrap_contract(
+                    bootstrap_mode="llm_synthesize",
+                    llm_provider=provider,
+                    model_name=model_name,
+                    has_fallback_schema=bool(fallback_candidate),
+                    actual_bootstrap_path="etl_from_brief",
+                    schema_path=None,
+                    fallback_schema_path=str(_resolve_path(paths.config_base, fallback_candidate, fallback_candidate))
+                    if fallback_candidate
+                    else None,
+                    domain_brief_supplied=bool(domain_brief),
+                ),
             }
             _atomic_write_json(package_path, synthesized_package)
             LOGGER.info("Synthesized bootstrap package attempts=%d saved=%s", attempts, package_path)
         except Exception as exc:  # noqa: BLE001
-            fallback_candidate = bootstrap_cfg.get("fallback_schema_path")
             if not fallback_candidate:
                 raise
             LOGGER.warning("LLM bootstrap failed: %s. Falling back to schema_path=%s", exc, fallback_candidate)
@@ -1269,10 +1295,50 @@ def _bootstrap(
                     json.dumps(getattr(orchestrator, "last_bootstrap_attempts", []), ensure_ascii=False)
                 ),
                 "fallback_schema_path": str(schema_path),
+                "bootstrap_contract": build_bootstrap_contract(
+                    bootstrap_mode="llm_synthesize",
+                    llm_provider=provider,
+                    model_name=model_name,
+                    has_fallback_schema=True,
+                    actual_bootstrap_path="fallback_schema_seed",
+                    schema_path=None,
+                    fallback_schema_path=str(schema_path),
+                    domain_brief_supplied=bool(domain_brief),
+                ),
             }
             _atomic_write_json(package_path, synthesized_package)
     elif synthesized_package is None:
         raise ValueError(f"Unsupported bootstrap mode: {bootstrap_mode}")
+
+    if "bootstrap_contract" not in synthesized_package:
+        effective_mode = str(synthesized_package.get("bootstrap_mode") or bootstrap_mode or "").strip().lower()
+        actual_bootstrap_path = "etl_from_brief"
+        schema_path_for_contract: str | None = None
+        if effective_mode == "schema_path":
+            actual_bootstrap_path = "schema_seed"
+            schema_candidate = paths.schema_path or bootstrap_cfg.get("schema_path")
+            if schema_candidate:
+                schema_path_for_contract = str(_resolve_path(paths.config_base, schema_candidate, schema_candidate))
+        elif effective_mode == "llm_synthesize_fallback":
+            actual_bootstrap_path = "fallback_schema_seed"
+        synthesized_package["bootstrap_contract"] = build_bootstrap_contract(
+            bootstrap_mode="schema_path" if effective_mode == "schema_path" else "llm_synthesize",
+            llm_provider=provider,
+            model_name=model_name,
+            has_fallback_schema=bool(fallback_candidate or synthesized_package.get("fallback_schema_path")),
+            actual_bootstrap_path=actual_bootstrap_path,
+            schema_path=schema_path_for_contract,
+            fallback_schema_path=str(synthesized_package.get("fallback_schema_path") or "")
+            or (
+                str(_resolve_path(paths.config_base, fallback_candidate, fallback_candidate))
+                if fallback_candidate
+                else None
+            ),
+            domain_brief_supplied=bool(
+                synthesized_package.get("domain_brief") or domain_brief_inline or domain_brief_path is not None
+            ),
+        )
+        _atomic_write_json(package_path, synthesized_package)
 
     schema_payload = dict(synthesized_package["schema"])
     base_world_template = pipeline.compiler.compile(schema_payload)

@@ -4,6 +4,8 @@
 
 This document describes the implemented USIM-AGENT architecture in the current repository, with emphasis on data flow, execution stages, verification, memory, and human override paths.
 
+Ontology bootstrap is intentionally broader than "random stream -> graph". The runtime supports both seed-graph-first and brief-to-ontology paths, and persists the chosen ingestion contract in `bootstrap_package.json` so downstream users can see which method built the graph and what its operational limits were.
+
 ## System Overview
 
 Freeman is organized into seven layers:
@@ -226,6 +228,31 @@ rho(J_Phi) < 1
 ```
 
 The aggregate API lives in `freeman.verifier.verifier.Verifier`.
+
+## Ontology Bootstrap Contracts
+
+Freeman distinguishes the runtime entrypoint from the actual ontology-ingestion strategy.
+
+- Entry points:
+  - `schema_path`
+  - `llm_synthesize`
+- Persisted strategies:
+  - `seed_schema`
+  - `brief_local_etl`
+  - `brief_local_etl_with_fallback_seed`
+  - `brief_remote_etl`
+  - `brief_remote_etl_with_fallback_seed`
+
+Each saved `bootstrap_package.json` now includes `bootstrap_contract` with:
+
+- `strategy_id`: chosen ingestion strategy
+- `actual_bootstrap_path`: `schema_seed`, `etl_from_brief`, or `fallback_schema_seed`
+- `input_requirements`
+- `recommended_for`
+- `limitations`
+- provider/model metadata and any configured fallback schema path
+
+This matters because two graphs can both be valid Freeman packages while having very different provenance. A graph created from a hand-authored seed ontology is reproducible but conservative; a graph created from a remote LLM and a rich brief can be broader but is less deterministic; a fallback-backed run guarantees a graph but may materially reflect the fallback seed instead of the intended brief.
 
 ## Memory and Reconciliation
 

@@ -488,12 +488,15 @@ class FreemanOrchestrator:
             params = resource.get("evolution_params", {})
             if not isinstance(params, dict):
                 params = {}
-            if not params:
-                params = self._legacy_resource_params(resource)
             owner_id = resource.get("owner_id")
             evolution_type = str(resource.get("evolution_type") or "linear")
             if evolution_type not in {"linear", "stock_flow", "logistic", "threshold", "coupled"}:
                 evolution_type = "linear"
+            params = self._coerce_resource_params(
+                resource,
+                evolution_type=evolution_type,
+                params=params or self._legacy_resource_params(resource),
+            )
             values.append(
                 {
                     "id": resource_id,
@@ -509,6 +512,132 @@ class FreemanOrchestrator:
                 }
             )
         return self._dedupe_by_id(values)
+
+    def _coerce_resource_params(
+        self,
+        resource: Dict[str, Any],
+        *,
+        evolution_type: str,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Normalize evolution params to the shape expected by the declared operator."""
+
+        candidate = dict(params or {})
+        fallback = self._legacy_resource_params(resource)
+        coupling_weights = candidate.get("coupling_weights", fallback.get("coupling_weights", {}))
+        coupling_weights = coupling_weights if isinstance(coupling_weights, dict) else {}
+
+        if evolution_type == "linear":
+            return {
+                "a": float(candidate.get("a", fallback.get("a", 0.8)) or 0.8),
+                "b": float(candidate.get("b", fallback.get("b", 0.0)) or 0.0),
+                "c": float(candidate.get("c", fallback.get("c", 0.0)) or 0.0),
+                "coupling_weights": {
+                    str(key): float(value) for key, value in coupling_weights.items() if self._is_number(value)
+                },
+            }
+
+        if evolution_type == "stock_flow":
+            phi_params = candidate.get("phi_params", {})
+            phi_params = phi_params if isinstance(phi_params, dict) else {}
+            phi_couplings = phi_params.get("coupling_weights", coupling_weights)
+            phi_couplings = phi_couplings if isinstance(phi_couplings, dict) else {}
+            return {
+                "delta": float(candidate.get("delta", max(0.0, 1.0 - float(fallback.get("a", 0.8)))) or 0.0),
+                "phi_params": {
+                    "base_inflow": float(phi_params.get("base_inflow", candidate.get("c", 0.0)) or 0.0),
+                    "policy_scale": float(phi_params.get("policy_scale", 0.0) or 0.0),
+                    "coupling_weights": {
+                        str(key): float(value) for key, value in phi_couplings.items() if self._is_number(value)
+                    },
+                },
+            }
+
+        if evolution_type == "logistic":
+            max_value = resource.get("max_value", resource.get("capacity"))
+            carrying_capacity = float(max_value) if self._is_number(max_value) and float(max_value) > 0.0 else None
+            base_value = float(resource.get("value", resource.get("initial_value", 1.0)) or 1.0)
+            if carrying_capacity is None:
+                carrying_capacity = max(base_value * 1.5, 1.0)
+            raw_a = candidate.get("a")
+            inferred_r = abs(float(raw_a) - 1.0) if self._is_number(raw_a) else 0.1
+            return {
+                "r": max(float(candidate.get("r", inferred_r) or inferred_r), 1.0e-6),
+                "K": max(float(candidate.get("K", carrying_capacity) or carrying_capacity), 1.0),
+                "external": float(candidate.get("external", candidate.get("c", 0.0)) or 0.0),
+                "policy_scale": float(candidate.get("policy_scale", candidate.get("b", 0.0)) or 0.0),
+                "coupling_weights": {
+                    str(key): float(value) for key, value in coupling_weights.items() if self._is_number(value)
+                },
+            }
+
+        if evolution_type == "threshold":
+            low_params = candidate.get("low_params", {})
+            high_params = candidate.get("high_params", {})
+            low_params = low_params if isinstance(low_params, dict) else {}
+            high_params = high_params if isinstance(high_params, dict) else {}
+            linear_defaults = self._coerce_resource_params(resource, evolution_type="linear", params=candidate)
+            threshold = candidate.get("theta", resource.get("value", resource.get("initial_value", 1.0)))
+            return {
+                "theta": float(threshold if self._is_number(threshold) else 1.0),
+                "low_params": {
+                    "mode": str(low_params.get("mode", "linear") or "linear"),
+                    "a": float(low_params.get("a", linear_defaults["a"]) or linear_defaults["a"]),
+                    "b": float(low_params.get("b", linear_defaults["b"]) or linear_defaults["b"]),
+                    "c": float(low_params.get("c", linear_defaults["c"]) or linear_defaults["c"]),
+                    "coupling_weights": {
+                        str(key): float(value)
+                        for key, value in (low_params.get("coupling_weights", linear_defaults["coupling_weights"]) or {}).items()
+                        if self._is_number(value)
+                    },
+                },
+                "high_params": {
+                    "mode": str(high_params.get("mode", "linear") or "linear"),
+                    "a": float(high_params.get("a", linear_defaults["a"]) or linear_defaults["a"]),
+                    "b": float(high_params.get("b", linear_defaults["b"]) or linear_defaults["b"]),
+                    "c": float(high_params.get("c", linear_defaults["c"]) or linear_defaults["c"]),
+                    "coupling_weights": {
+                        str(key): float(value)
+                        for key, value in (high_params.get("coupling_weights", linear_defaults["coupling_weights"]) or {}).items()
+                        if self._is_number(value)
+                    },
+                },
+            }
+
+        components = candidate.get("components", [])
+        if not isinstance(components, list) or not components:
+            return {
+                "components": [
+                    {
+                        "evolution_type": "linear",
+                        "weight": 1.0,
+                        "evolution_params": self._coerce_resource_params(
+                            resource,
+                            evolution_type="linear",
+                            params=candidate,
+                        ),
+                    }
+                ]
+            }
+        normalized_components: list[Dict[str, Any]] = []
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            component_type = str(component.get("evolution_type") or "linear")
+            if component_type not in {"linear", "stock_flow", "logistic", "threshold", "coupled"}:
+                component_type = "linear"
+            normalized_components.append(
+                {
+                    "evolution_type": component_type,
+                    "weight": float(component.get("weight", 1.0) or 1.0),
+                    "evolution_params": self._coerce_resource_params(
+                        resource,
+                        evolution_type=component_type,
+                        params=component.get("evolution_params", {}),
+                    ),
+                }
+            )
+        return {"components": normalized_components or [{"evolution_type": "linear", "weight": 1.0, "evolution_params": self._coerce_resource_params(resource, evolution_type="linear", params=candidate)}]}
 
     def _normalize_outcomes(self, outcomes: Any, resource_ids: set[str]) -> List[Dict[str, Any]]:
         values: List[Dict[str, Any]] = []

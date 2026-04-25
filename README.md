@@ -4,7 +4,7 @@ Freeman is an analytical agent for situations that change over time. You describ
 
 The point of Freeman is not "chatting about a topic". The point is to keep a structured world model, run repeatable scenario analysis, remember past cases, and give you an audit trail of what changed and why.
 
-Current release: `3.1.0`
+Current release: `3.1.1`
 
 Freeman `3.1` keeps the operational local-agent loop closed and replaces monolithic bootstrap with a structured ETL path:
 
@@ -254,12 +254,27 @@ python -m freeman.interface.cli export-kg-evolution data/runtime_climate/kg_snap
 
 Repository CI now runs `pytest -q` plus release builds on every push to `main` and on pull requests through `.github/workflows/tests.yml`.
 
-It supports two bootstrap modes:
+It supports two runtime bootstrap entrypoints:
 
 - `llm_synthesize`: the primary path; use the built-in Freeman orchestrator to build the initial state vector from a natural-language brief through a two-phase ETL bootstrap before the stream loop starts
 - `schema_path`: the secondary path; start from an explicit schema such as `freeman/domain/profiles/gim15.json`
 
 `llm_synthesize` now runs `skeleton -> edges -> verifier` instead of one monolithic synthesis call. `bootstrap_package.json` persists `bootstrap_attempts` with `etl_phase` markers (`skeleton`, `edges`, `sign_repair`) plus verifier errors; level2 sign failures use targeted edge repair, while compile/level1/level0 failures still use full-package repair. The default clean config is local-model-first (`ollama` + `qwen2.5-coder:14b`) with `fallback_schema_path` only as a secondary recovery path.
+
+For ontology creation, treat those entrypoints as a small catalog of explicit ingestion strategies:
+
+- `seed_schema`: deterministic seed graph or hand-authored ontology through `schema_path`
+- `brief_local_etl`: brief-to-ontology ETL on a local model
+- `brief_local_etl_with_fallback_seed`: local brief ETL with an explicit seed-schema safety net
+- `brief_remote_etl`: brief-to-ontology ETL on a remote API model
+- `brief_remote_etl_with_fallback_seed`: remote brief ETL with an explicit seed-schema safety net
+
+The runtime now writes a machine-readable `bootstrap_contract` into `bootstrap_package.json` for every strategy. That contract records the chosen strategy, the actual materialization path (`schema_seed`, `etl_from_brief`, or `fallback_schema_seed`), input requirements, recommended use cases, and hard limitations. In practice:
+
+- use `seed_schema` when reproducibility matters more than ontology discovery
+- use `brief_local_etl` when locality and privacy matter, but keep the brief compact and structured
+- use `brief_remote_etl` when the goal is ontology induction quality and API use is acceptable
+- use any `*_with_fallback_seed` variant when a graph must always be produced, while accepting that failures may collapse back to the seed ontology
 
 The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
 
