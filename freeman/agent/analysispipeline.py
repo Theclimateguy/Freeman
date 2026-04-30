@@ -1023,11 +1023,7 @@ class AnalysisPipeline:
                     outcome_id=str(forecast.outcome_id),
                     predicted_prob=float(forecast.predicted_prob),
                     due_at_step=int(forecast.deadline_step),
-                    created_at_step=int(
-                        forecast.created_runtime_step
-                        if forecast.created_runtime_step is not None
-                        else forecast.created_step
-                    ),
+                    created_at_step=int(forecast.created_step),
                     status=str(forecast.status),
                     actual_prob=(float(forecast.actual_prob) if forecast.actual_prob is not None else None),
                     error=(float(forecast.error) if forecast.error is not None else None),
@@ -1093,11 +1089,7 @@ class AnalysisPipeline:
             outcome_id=str(forecast.outcome_id),
             predicted_prob=float(forecast.predicted_prob),
             due_at_step=int(forecast.deadline_step),
-            created_at_step=int(
-                forecast.created_runtime_step
-                if forecast.created_runtime_step is not None
-                else forecast.created_step
-            ),
+            created_at_step=int(forecast.created_step),
             status=explanation_status,
             causal_chain=causal_chain,
             actual_prob=(float(forecast.actual_prob) if forecast.actual_prob is not None else None),

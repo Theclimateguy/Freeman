@@ -276,7 +276,7 @@ The runtime now writes a machine-readable `bootstrap_contract` into `bootstrap_p
 - use `brief_remote_etl` when the goal is ontology induction quality and API use is acceptable
 - use any `*_with_fallback_seed` variant when a graph must always be produced, while accepting that failures may collapse back to the seed ontology
 
-The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast deadlines and verification use `runtime_step`, so fallback updates do not starve ex-post verification.
+The runtime also carries a monotonic `runtime_step`, separate from simulator `world.t`. Forecast horizons are domain-time horizons: `Forecast.deadline_step = created_step + horizon_steps`, and ex-post verification checks due forecasts against the current `world.t`. `runtime_step` remains the agent-level event clock for queues, snapshots, fallback continuity, and audit metadata.
 
 Fallback updates now also preserve monotonic simulator time: runtime may retry an update from a safe schema/base world, but it preserves the live `world.t` / `runtime_step` clocks and rejects any fallback result that would rewind `world.t`.
 
@@ -286,6 +286,8 @@ Longitudinal self-verification now happens on two levels:
 
 - scalar outcome verification against the realized posterior at the verification horizon
 - causal-path verification against KG trajectory edges exported from the simulation
+
+Forecast query fields follow the same convention: `created_at_step` and `due_at_step` are simulator/domain steps (`world.t`), while `created_runtime_step` is retained in persisted forecast records only as agent-level provenance.
 
 The current causal path uses three edge relations:
 

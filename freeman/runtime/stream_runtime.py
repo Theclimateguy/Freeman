@@ -524,11 +524,11 @@ def _verify_due_forecasts(
     current_probs: dict[str, float],
     current_signal_id: str | None = None,
 ) -> int:
-    """Verify all due forecasts against the current posterior using monotonic runtime_step."""
+    """Verify all domain-step due forecasts against the current posterior."""
 
     if pipeline.forecast_registry is None:
         return 0
-    due = pipeline.forecast_registry.due(current_world.runtime_step)
+    due = pipeline.forecast_registry.due(current_world.t)
     if not due:
         return 0
 

@@ -10,7 +10,7 @@ import pytest
 
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.costmodel import BudgetLedger, CostModel, build_budget_policy
-from freeman.agent.forecastregistry import ForecastRegistry
+from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.signalingestion import SignalIngestionEngine
 from freeman.agent.signalingestion import ShockClassification, Signal, SignalTrigger
 from freeman.game.runner import SimConfig
@@ -499,6 +499,60 @@ def test_stream_runtime_runtime_step_verifies_forecasts_across_fallback(tmp_path
     assert world_state["runtime_step"] >= 1
     assert any(forecast["status"] == "verified" for forecast in forecasts.snapshot())
     assert self_observations
+
+
+def test_stream_runtime_verifies_due_forecasts_by_world_step(tmp_path) -> None:
+    registry = ForecastRegistry(auto_load=False, auto_save=False)
+    forecast = Forecast(
+        forecast_id="water:2:crisis",
+        domain_id="water",
+        outcome_id="crisis",
+        predicted_prob=0.4,
+        session_id="session-1",
+        horizon_steps=3,
+        created_at=stream_runtime._utc_now(),
+        created_step=2,
+        created_runtime_step=100,
+    )
+    registry.record(forecast)
+    conscious_state = _state(tmp_path)
+    pipeline = SimpleNamespace(
+        forecast_registry=registry,
+        verify_forecast=lambda forecast_id, **kwargs: registry.verify(
+            forecast_id,
+            actual_prob=kwargs["actual_prob"],
+            verified_at=kwargs["verified_at"],
+        ),
+        conscious_state=conscious_state,
+        consciousness_config=None,
+    )
+    event_log = EventLog(tmp_path / "events.jsonl")
+    world = SimpleNamespace(domain_id="water", t=4, runtime_step=200)
+
+    verified = stream_runtime._verify_due_forecasts(
+        pipeline=pipeline,
+        state=conscious_state,
+        event_log=event_log,
+        logged_event_ids=set(),
+        current_world=world,
+        current_probs={"crisis": 0.5},
+    )
+
+    assert verified == 0
+    assert registry.get("water:2:crisis").status == "pending"
+
+    world.t = 5
+    verified = stream_runtime._verify_due_forecasts(
+        pipeline=pipeline,
+        state=conscious_state,
+        event_log=event_log,
+        logged_event_ids=set(),
+        current_world=world,
+        current_probs={"crisis": 0.5},
+    )
+
+    assert verified == 1
+    assert registry.get("water:2:crisis").status == "verified"
 
 
 def test_stream_runtime_fallback_preserves_monotonic_world_step(tmp_path, monkeypatch, water_market_schema) -> None:

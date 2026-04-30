@@ -136,8 +136,10 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `ParameterEstimator`
 - Forecasts:
   - `Forecast`
+  - `Forecast.deadline_step`: domain-step deadline, `created_step + horizon_steps`
   - `Forecast.causal_path`
   - `ForecastRegistry`
+  - `ForecastRegistry.due(current_step)`: expects the current simulator step (`world.t`)
 - Signals:
   - `Signal`
   - `SignalRecord`

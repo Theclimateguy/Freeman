@@ -17,7 +17,7 @@ $$
 - `W_k` - `WorldState`/`WorldGraph`: акторы, ресурсы, связи, outcomes, causal DAG, `ParameterVector`, `t`, `runtime_step`.
 - `K_k` - `KnowledgeGraph`: persistent `networkx.MultiDiGraph` + optional embeddings/vectorstore.
 - `C_k` - `ConsciousState`: self-model, goal state, attention state, trace events, runtime metadata.
-- `F_k` - `ForecastRegistry`: pending/verified forecasts and causal paths.
+- `F_k` - `ForecastRegistry`: pending/verified forecasts and causal paths. Forecast horizons are evaluated on the domain-time axis: `deadline_step = created_step + horizon_steps`, where `created_step` is `world.t`; `created_runtime_step` is retained only as agent-clock provenance.
 - `Q_k` - pending signal queue + stream cursors + signal memory.
 - `U_k` - unresolved obligations: forecast debt, conflict debt, anomaly debt.
 - `B_k` - budget ledger and cost policy.
@@ -613,7 +613,7 @@ Default paths from `config.yaml`:
 | WATCH-only signal | stream loop | signal classified routine or budget-downgraded -> no update | Trace + forecast verification only |
 | ANALYZE/DEEP_DIVE | stream loop | estimator -> parameter vector -> pipeline update | New world, causal trace, forecasts |
 | Anomaly/ontology gap | low agent relevance | anomaly candidate -> cluster -> ontology gap trait | Later repair request |
-| Forecast verification | every processed signal | due forecasts vs current posterior | epistemic log + self-observation |
+| Forecast verification | every processed signal | forecasts due at current `world.t` vs current posterior | epistemic log + self-observation |
 | Idle deliberation | empty queue and high idle score | aging/consistency/anomaly review | internal TraceEvents |
 | Ontology repair | repair request | schema overlay or LLM rebuild | updated package/world/KG proposal |
 | Runtime query | `freeman query --text` / tool API | load artifacts -> semantic query | evidence payload |
@@ -808,7 +808,7 @@ The following index is generated from source files. It uses each symbol's docstr
 - `_parse_dt(value)`: Parse dt.
 - `class Forecast`: One probabilistic forecast awaiting later verification.
   - `Forecast.__post_init__(self)`: Post init.
-  - `Forecast.deadline_step(self)`: Deadline step.
+  - `Forecast.deadline_step(self)`: Domain-step deadline, computed as `created_step + horizon_steps`.
   - `Forecast.snapshot(self)`: Snapshot.
   - `Forecast.from_snapshot(cls, data)`: From snapshot.
 - `class ForecastRegistry`: In-memory forecast registry with optional JSON persistence.
@@ -817,7 +817,7 @@ The following index is generated from source files. It uses each symbol's docstr
   - `ForecastRegistry.pending(self)`: Pending.
   - `ForecastRegistry.all(self)`: All.
   - `ForecastRegistry.get(self, forecast_id)`: Get.
-  - `ForecastRegistry.due(self, current_step)`: Due.
+  - `ForecastRegistry.due(self, current_step)`: Due forecasts for the supplied domain step (`world.t`).
   - `ForecastRegistry.verify(self, forecast_id, actual_prob, verified_at)`: Verify.
   - `ForecastRegistry.snapshot(self)`: Snapshot.
   - `ForecastRegistry.save(self, path=...)`: Save.
@@ -1866,7 +1866,7 @@ The following index is generated from source files. It uses each symbol's docstr
 - `_persist_runtime_state(*, pipeline, world_state, runtime_path, checkpoint_manager, cursor_store, signal_memory, pending_signals)`: Persist runtime state.
 - `_runtime_trace_for_signal(*, state, signal_payload, trigger_mode, llm_used, updated_world, update_error=..., extra_diff=...)`: Runtime trace for signal.
 - `_runtime_trace_for_verification(*, state, verified_count, verified_ids, mean_abs_error)`: Runtime trace for verification.
-- `_verify_due_forecasts(*, pipeline, state, event_log, logged_event_ids, current_world, current_probs, current_signal_id=...)`: Verify all due forecasts against the current posterior using monotonic runtime_step.
+- `_verify_due_forecasts(*, pipeline, state, event_log, logged_event_ids, current_world, current_probs, current_signal_id=...)`: Verify forecasts due at `current_world.t` against the current posterior.
 - `class RuntimePaths`: RuntimePaths.
 - `class RuntimeStorage`: RuntimeStorage.
 - `class BootstrapResult`: BootstrapResult.

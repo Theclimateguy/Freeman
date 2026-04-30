@@ -62,8 +62,7 @@ class Forecast:
 
     @property
     def deadline_step(self) -> int:
-        base_step = self.created_runtime_step if self.created_runtime_step is not None else self.created_step
-        return int(base_step) + self.horizon_steps
+        return self.created_step + self.horizon_steps
 
     def snapshot(self) -> dict:
         return {
@@ -165,6 +164,8 @@ class ForecastRegistry:
         return Forecast.from_snapshot(forecast.snapshot())
 
     def due(self, current_step: int) -> List[Forecast]:
+        """Return forecasts due at the given domain step (``world.t``)."""
+
         deadline = int(current_step)
         return [forecast for forecast in self.pending() if forecast.deadline_step <= deadline]
 
