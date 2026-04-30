@@ -4,7 +4,7 @@ Freeman is an analytical agent for situations that change over time. You describ
 
 The point of Freeman is not "chatting about a topic". The point is to keep a structured world model, run repeatable scenario analysis, remember past cases, and give you an audit trail of what changed and why.
 
-Current release: `3.1.1`
+Current release: `3.1.2`
 
 Freeman `3.1` keeps the operational local-agent loop closed and replaces monolithic bootstrap with a structured ETL path:
 
