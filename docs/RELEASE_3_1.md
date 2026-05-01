@@ -4,6 +4,8 @@
 
 `3.1.1` hardens that release by making ontology-ingestion provenance explicit, fixing ETL resource normalization, and adding a transparent live-news benchmark harness.
 
+`3.1.2` fixes forecast-verification clock semantics so forecast horizons are evaluated on simulator/domain time (`world.t`) rather than the agent runtime clock.
+
 ## What Changed
 
 - `llm_synthesize` in runtime now uses a two-phase ETL flow instead of one monolithic synthesis prompt:
@@ -51,3 +53,21 @@
 ### Validation
 
 - `pytest -q` -> `238 passed`
+
+## 3.1.2 Follow-up
+
+### What Changed
+
+- Forecast deadlines now use `created_step + horizon_steps`, where `created_step` is the simulator/domain step (`world.t`).
+- Runtime ex-post verification now checks `ForecastRegistry.due(current_world.t)`.
+- `runtime_step` remains the monotonic agent event clock for queues, snapshots, fallback continuity, and audit metadata.
+- Forecast summaries and explanations now report `created_at_step` and `due_at_step` on the same domain-time axis.
+
+### Why It Matters
+
+- Forecast horizons now mean "N SSM steps from forecast creation", independent of how many agent events or fallback paths happen between world updates.
+- Domains loaded at non-zero `world.t` and domains with different runtime cadences no longer verify forecasts too early because the agent clock is ahead.
+
+### Validation
+
+- `pytest -q` -> `239 passed`

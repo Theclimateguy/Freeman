@@ -8,6 +8,26 @@
 
 - No unreleased changes.
 
+## v3.1.2 - 2026-05-01
+
+Patch release focused on forecast-verification clock semantics.
+
+### Changed
+
+- Forecast horizons now use the simulator/domain clock: `Forecast.deadline_step = created_step + horizon_steps`, where `created_step` is `world.t`.
+- Runtime forecast verification now checks due forecasts against `current_world.t`; `runtime_step` remains the agent-level event/audit clock for queues, snapshots, fallback continuity, and provenance.
+- Forecast query/explanation fields now report `created_at_step` and `due_at_step` on the same domain-step axis.
+- README, API map, and full architecture documentation now describe the domain-step forecast horizon contract.
+- Core package version bumped to `3.1.2`; `freeman-connectors` now targets `freeman>=3.1.2,<4.0.0`.
+
+### Fixed
+
+- Forecasts no longer expire early when the agent runtime advances faster than the simulated domain, when one agent tick includes multiple runtime events, or when a domain is loaded with non-zero `world.t`.
+
+### Validation
+
+- `pytest -q` -> `239 passed`
+
 ## v3.1.1 - 2026-04-25
 
 Patch release focused on release hygiene, explicit ontology-ingestion provenance, and ETL hardening.
