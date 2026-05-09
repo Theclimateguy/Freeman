@@ -9,11 +9,20 @@ import re
 from typing import Any
 from uuid import uuid4
 
+from freeman.core.types import AgentRole
+from freeman.exceptions import RolePermissionError
 from freeman.memory.knowledgegraph import KnowledgeGraph
 from freeman.memory.selfmodel import SelfModelGraph, SelfModelNode, _ENGINE_CALLER_TOKEN
 from freeman.utils import deep_copy_jsonable
 
 ENGINE_TOKEN: str = _ENGINE_CALLER_TOKEN
+ROLE_PERMISSIONS: dict[AgentRole, set[str]] = {
+    "ingestor": {"candidate_node"},
+    "repairer": {"candidate_node", "repair_request", "shadow_graph"},
+    "planner": {"candidate_node", "shadow_graph"},
+    "narrator": {"shadow_graph"},
+    "verifier": {"shadow_graph", "hypothesis_status"},
+}
 
 DEFAULT_CONSCIOUSNESS_CONFIG: dict[str, Any] = {
     "idle_scheduler": {
@@ -137,15 +146,22 @@ class ConsciousState:
 
     world_ref: str
     self_model_ref: SelfModelGraph
+    agent_role: AgentRole = "planner"
     goal_state: list[str] = field(default_factory=list)
     attention_state: dict[str, float] = field(default_factory=dict)
     trace_state: list[TraceEvent] = field(default_factory=list)
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.agent_role = str(self.agent_role)
+        if self.agent_role not in ROLE_PERMISSIONS:
+            raise ValueError(f"Unsupported agent_role: {self.agent_role}")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "world_ref": self.world_ref,
             "self_model": self.self_model_ref.snapshot(),
+            "agent_role": self.agent_role,
             "goal_state": list(self.goal_state),
             "attention_state": {str(key): float(value) for key, value in self.attention_state.items()},
             "trace_state": [event.to_dict() for event in self.trace_state],
@@ -159,6 +175,7 @@ class ConsciousState:
         return cls(
             world_ref=str(data["world_ref"]),
             self_model_ref=self_model,
+            agent_role=str(data.get("agent_role", "planner")),
             goal_state=[str(value) for value in data.get("goal_state", [])],
             attention_state={str(key): float(value) for key, value in data.get("attention_state", {}).items()},
             trace_state=[TraceEvent.from_dict(item) for item in data.get("trace_state", [])],
@@ -968,6 +985,8 @@ class ConsciousnessEngine:
         return diff
 
     def _apply_diff(self, diff: dict[str, Any]) -> None:
+        if diff.get("remove_node_ids") or diff.get("nodes") or diff.get("edges"):
+            self._require_permission("shadow_graph", detail="self-model diff application")
         for node_id in diff.get("remove_node_ids", []):
             if node_id in self.state.self_model_ref.knowledge_graph.graph:
                 self.state.self_model_ref.knowledge_graph.graph.remove_node(node_id)
@@ -1152,6 +1171,7 @@ class ConsciousnessEngine:
         current_runtime_step: int,
         cluster_signature: str | None = None,
     ) -> None:
+        self._require_permission("candidate_node", detail=f"review anomaly candidate {candidate.id}")
         updated = candidate
         updated.metadata = deep_copy_jsonable(candidate.metadata)
         updated.metadata["reviewed"] = True
@@ -1188,6 +1208,7 @@ class ConsciousnessEngine:
     def _emit_ontology_repair_request(self) -> dict[str, Any]:
         if not self._should_trigger_ontology_repair():
             return {"rationale": "no change"}
+        self._require_permission("repair_request", detail="emit ontology repair request")
         pending_traits = self._pending_ontology_gap_traits()
         updated_nodes: list[dict[str, Any]] = []
         gap_topics: list[str] = []
@@ -1224,6 +1245,14 @@ class ConsciousnessEngine:
             "handled": False,
             "rationale": "requested ontology repair from accumulated ontology_gap traits",
         }
+
+    def _require_permission(self, permission: str, *, detail: str) -> None:
+        allowed = ROLE_PERMISSIONS.get(self.state.agent_role, set())
+        if permission in allowed:
+            return
+        raise RolePermissionError(
+            f"Agent role '{self.state.agent_role}' may not perform '{permission}' writes ({detail})."
+        )
 
     def _merge_config(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = deep_copy_jsonable(base)

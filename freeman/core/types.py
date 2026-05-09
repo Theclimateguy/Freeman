@@ -41,6 +41,14 @@ TrailType = Literal[
     "verified",
 ]
 
+AgentRole = Literal[
+    "ingestor",
+    "repairer",
+    "planner",
+    "narrator",
+    "verifier",
+]
+
 
 @dataclass
 class Actor:
@@ -405,6 +413,7 @@ class Violation:
 __all__ = [
     "Actor",
     "CausalEdge",
+    "AgentRole",
     "Outcome",
     "ParameterVector",
     "Policy",

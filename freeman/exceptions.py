@@ -20,5 +20,9 @@ class ValidationError(ValueError):
     """Raised when a domain schema is invalid."""
 
 
+class RolePermissionError(PermissionError):
+    """Raised when an agent role attempts a forbidden graph mutation."""
+
+
 class SchemaRepairFailed(RuntimeError):
     """Raised when the automated LLM repair loop cannot produce a valid schema."""
