@@ -7,6 +7,7 @@ import math
 import pytest
 
 from freeman.agent.attentionscheduler import AttentionScheduler, AttentionTask
+from freeman.core.types import TrailType
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import SessionLog
@@ -42,6 +43,46 @@ def test_knowledge_graph_deposit_trail_updates_causal_edges_only(tmp_path) -> No
     assert edge1.trail_weight == pytest.approx(0.4)
     assert edge2 is not None
     assert edge2.trail_weight == pytest.approx(0.0)
+
+
+def test_knowledge_graph_update_node_decays_node_trail_metadata(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    trail_type: TrailType = "ingest"
+    kg.add_node(
+        KGNode(
+            id="n1",
+            label="Node 1",
+            confidence=0.8,
+            metadata={"trail_type": trail_type, "trail_intensity": 1.0},
+        )
+    )
+
+    kg.update_node(KGNode(id="n1", label="Node 1", confidence=0.85, metadata={"owner": "agent-a"}))
+    updated = kg.get_node("n1")
+
+    assert updated is not None
+    assert updated.metadata["owner"] == "agent-a"
+    assert updated.metadata["trail_type"] == "ingest"
+    assert updated.metadata["trail_intensity"] == pytest.approx(0.9)
+
+
+def test_knowledge_graph_update_node_evaporates_weak_node_trail_metadata(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(
+        KGNode(
+            id="n1",
+            label="Node 1",
+            confidence=0.8,
+            metadata={"trail_type": "repair", "trail_intensity": 0.051},
+        )
+    )
+
+    kg.update_node(KGNode(id="n1", label="Node 1", confidence=0.81))
+    updated = kg.get_node("n1")
+
+    assert updated is not None
+    assert "trail_type" not in updated.metadata
+    assert "trail_intensity" not in updated.metadata
 
 
 def test_attention_scheduler_prefers_higher_trail_weight() -> None:

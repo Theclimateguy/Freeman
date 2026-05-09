@@ -33,6 +33,15 @@ def _encode_float(value: Any) -> Any:
     return json_ready(value)
 
 
+TrailType = Literal[
+    "ingest",
+    "repair",
+    "read_plan",
+    "llm_propose",
+    "verified",
+]
+
+
 @dataclass
 class Actor:
     """Domain actor with arbitrary numeric state and metadata."""
@@ -401,5 +410,6 @@ __all__ = [
     "Policy",
     "Relation",
     "Resource",
+    "TrailType",
     "Violation",
 ]

@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 ACTIVE_THRESHOLD = 0.60
 UNCERTAIN_THRESHOLD = 0.30
 REVIEW_THRESHOLD = 0.15
+TRAIL_DECAY_FACTOR = 0.9
+TRAIL_EVICTION_THRESHOLD = 0.05
+_TRAIL_TYPES = {"ingest", "repair", "read_plan", "llm_propose", "verified"}
 
 
 def _now_iso() -> str:
@@ -59,6 +62,33 @@ def _default_json_path(config_path: str | Path | None = None) -> Path:
     return (_repo_root() / "runs" / "memory" / "knowledge_graph.json").resolve()
 
 
+def _normalize_trail_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep trail metadata consistent and JSON-safe."""
+
+    normalized = deep_copy_jsonable(metadata)
+    trail_type = normalized.get("trail_type")
+    if trail_type is not None:
+        trail_type = str(trail_type).strip()
+        if trail_type not in _TRAIL_TYPES:
+            raise ValueError(f"Unsupported trail_type: {trail_type}")
+        normalized["trail_type"] = trail_type
+    trail_intensity = normalized.get("trail_intensity")
+    if trail_intensity is not None:
+        normalized["trail_intensity"] = max(float(trail_intensity), 0.0)
+    if trail_type is None and trail_intensity is None:
+        return normalized
+    if trail_type is None:
+        normalized.pop("trail_intensity", None)
+        return normalized
+    if trail_intensity is None:
+        normalized["trail_intensity"] = 1.0
+        return normalized
+    if float(normalized["trail_intensity"]) < TRAIL_EVICTION_THRESHOLD:
+        normalized.pop("trail_type", None)
+        normalized.pop("trail_intensity", None)
+    return normalized
+
+
 @dataclass
 class KGNode:
     """Knowledge graph node."""
@@ -85,7 +115,7 @@ class KGNode:
             self.status = _status_for_confidence(self.confidence)
         self.evidence = list(self.evidence)
         self.sources = list(self.sources)
-        self.metadata = deep_copy_jsonable(self.metadata)
+        self.metadata = _normalize_trail_metadata(self.metadata)
         self.embedding = [float(value) for value in self.embedding]
 
     def snapshot(self) -> Dict[str, Any]:
@@ -1054,10 +1084,23 @@ class KnowledgeGraph:
         prepared = KGNode.from_snapshot(node.snapshot())
         force_reembed = bool(prepared.metadata.pop("_force_reembed", False))
         content_changed = previous is not None and previous.content != prepared.content
+        explicit_trail = "trail_type" in prepared.metadata or "trail_intensity" in prepared.metadata
+        if previous is not None and not explicit_trail:
+            previous_trail_type = previous.metadata.get("trail_type")
+            previous_trail_intensity = previous.metadata.get("trail_intensity")
+            if previous_trail_type is not None and previous_trail_intensity is not None:
+                decayed_intensity = max(float(previous_trail_intensity) * TRAIL_DECAY_FACTOR, 0.0)
+                if decayed_intensity >= TRAIL_EVICTION_THRESHOLD:
+                    prepared.metadata["trail_type"] = str(previous_trail_type)
+                    prepared.metadata["trail_intensity"] = decayed_intensity
+                else:
+                    prepared.metadata.pop("trail_type", None)
+                    prepared.metadata.pop("trail_intensity", None)
         if previous is not None and not force_reembed and not content_changed and not prepared.embedding and previous.embedding:
             prepared.embedding = list(previous.embedding)
         if prepared.content and self.llm_adapter is not None and (force_reembed or not prepared.embedding or content_changed):
             prepared.embedding = [float(value) for value in self.llm_adapter.embed(prepared.content)]
+        prepared.metadata = _normalize_trail_metadata(prepared.metadata)
         prepared.updated_at = _now_iso()
         if previous is not None:
             prepared.created_at = previous.created_at
