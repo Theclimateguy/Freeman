@@ -34,10 +34,18 @@ TS/
 scripts/*
 !scripts/__init__.py
 !scripts/seed_climate_kg.py
-!scripts/run_random_news_etl_benchmark.py
 !scripts/benchmark_faab/
 !scripts/benchmark_faab/**
 scripts/benchmark_faab/__pycache__/
 freeman/realworld/__pycache__/
 
 PROGRESS.md
+CHANGELOG.md
+tests/README.md
+docs/API_MAP.md
+docs/FAAB.md
+docs/FREEMAN_ARCHITECTURE_3D.html
+docs/FREEMAN_FULL_ARCHITECTURE.md
+docs/REAL_LLM_E2E.md
+docs/RELEASE_3_0.md
+docs/RELEASE_3_1.md

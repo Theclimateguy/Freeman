@@ -46,7 +46,7 @@ Best for:
 
 Limitations:
 - if ETL fails, the returned graph may be dominated by the fallback ontology rather than the brief
-- benchmarking must record whether the final graph came from `etl_from_brief` or `fallback_schema_seed`
+- operations must record whether the final graph came from `etl_from_brief` or `fallback_schema_seed`
 
 ### 4. `brief_remote_etl`
 

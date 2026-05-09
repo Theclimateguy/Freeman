@@ -1,6 +1,6 @@
 # Consciousness Architecture for Freeman
 
-> Actual note: this is the living design document for the deterministic consciousness layer. The core modules described here are implemented in the current repository: `SelfModelGraph`, `ConsciousState`, `ConsciousnessEngine`, `IdleScheduler`, `IdentityNarrator`, `ExplanationRenderer`, checkpoint/event-log persistence, and synchronous daemon integration. Where this document discusses future extensions, `README.md`, `docs/ARCHITECTURE.md`, and `docs/API_MAP.md` describe the currently operational surface.
+This document describes the deterministic consciousness layer used on `hive_mind`: `SelfModelGraph`, `ConsciousState`, `ConsciousnessEngine`, `IdleScheduler`, `IdentityNarrator`, `ExplanationRenderer`, and their persistence hooks.
 
 This document defines the next development stage for Freeman: a deterministic consciousness layer built on top of the existing world model, knowledge graph, and reconciliation machinery.
 
