@@ -153,6 +153,7 @@ def build_knowledge_graph(
     vectorstore: KGVectorStore | None = None,
     auto_load: bool = True,
     auto_save: bool = True,
+    sync_vectorstore_on_load: bool = True,
 ) -> KnowledgeGraph:
     """Instantiate a config-backed knowledge graph."""
 
@@ -162,6 +163,7 @@ def build_knowledge_graph(
         auto_save=auto_save,
         llm_adapter=embedding_adapter,
         vectorstore=vectorstore,
+        sync_vectorstore_on_load=sync_vectorstore_on_load,
     )
 
 

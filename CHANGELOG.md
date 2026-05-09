@@ -8,6 +8,82 @@
 
 - No unreleased changes.
 
+## v3.1.2 - 2026-05-01
+
+Patch release focused on forecast-verification clock semantics.
+
+### Changed
+
+- Forecast horizons now use the simulator/domain clock: `Forecast.deadline_step = created_step + horizon_steps`, where `created_step` is `world.t`.
+- Runtime forecast verification now checks due forecasts against `current_world.t`; `runtime_step` remains the agent-level event/audit clock for queues, snapshots, fallback continuity, and provenance.
+- Forecast query/explanation fields now report `created_at_step` and `due_at_step` on the same domain-step axis.
+- README, API map, and full architecture documentation now describe the domain-step forecast horizon contract.
+- Core package version bumped to `3.1.2`; `freeman-connectors` now targets `freeman>=3.1.2,<4.0.0`.
+
+### Fixed
+
+- Forecasts no longer expire early when the agent runtime advances faster than the simulated domain, when one agent tick includes multiple runtime events, or when a domain is loaded with non-zero `world.t`.
+
+### Validation
+
+- `pytest -q` -> `239 passed`
+
+## v3.1.1 - 2026-04-25
+
+Patch release focused on release hygiene, explicit ontology-ingestion provenance, and ETL hardening.
+
+### Added
+
+- `bootstrap_contract` persisted in `bootstrap_package.json` so every runtime bootstrap records:
+  - strategy id
+  - actual materialization path (`schema_seed`, `etl_from_brief`, `fallback_schema_seed`)
+  - input requirements
+  - recommended use cases
+  - explicit limitations
+- New ontology-ingestion reference document: `docs/ONTOLOGY_INGESTION.md`.
+- Transparent live-news benchmark harness: `scripts/run_random_news_etl_benchmark.py`.
+- Dedicated bootstrap-contract test coverage in `tests/test_bootstrap_contracts.py`.
+
+### Changed
+
+- Freeman now treats ontology creation as a catalog of explicit ingestion strategies rather than a single ETL path with implicit fallbacks.
+- `.gitignore` now keeps runtime artifacts and generated data ignored, while allowing the tracked benchmark runner and release changelog to remain versioned.
+- Core package version bumped to `3.1.1`; `freeman-connectors` now targets `freeman>=3.1.1,<4.0.0`.
+
+### Fixed
+
+- ETL resource normalization now coerces `evolution_params` to the active operator contract, preventing invalid `logistic` resources from carrying linear-only parameters into compiled worlds.
+- Runtime bootstrap tests now assert ontology-ingestion provenance for both successful ETL and fallback-backed paths.
+
+### Validation
+
+- `pytest -q` -> `238 passed`
+
+## v3.1.0 - 2026-04-25
+
+Minor release focused on replacing monolithic LLM bootstrap with the new two-phase ETL path and formalizing repository licensing.
+
+### Added
+
+- Two-phase ETL bootstrap in `FreemanOrchestrator`:
+  - `skeleton` phase extracts only actors, resources, and outcomes
+  - `edges` phase adds `causal_dag`, `actor_update_rules`, policies, and assumptions against a validated node set
+- Surgical level-2 sign repair via `repair_sign_edges()`, reducing full-package churn when only a few causal signs fail.
+- `bootstrap_attempts[].etl_phase` persisted in runtime bootstrap artifacts for `skeleton`, `edges`, and `sign_repair` diagnostics.
+- Repository license files under Apache License 2.0 for both the root package and `freeman-connectors`.
+
+### Changed
+
+- `llm_synthesize` is now the primary ETL bootstrap path for runtime state-vector assembly; interactive single-call synthesis remains available for backward compatibility.
+- Resource-target causal edges now receive deterministic bounded coupling materialization during ETL (`weight_source=\"etl_deterministic\"`), leaving numeric estimation to runtime calibration.
+- Runtime cost estimation for bootstrap/repair now accounts for the two-call ETL path rather than a single monolithic synthesis call.
+- Architecture docs, API map, README, and the 3D architecture visualization now describe the ETL bootstrap instead of the old single-shot synthesis flow.
+- Core package version bumped to `3.1.0`; `freeman-connectors` now targets `freeman>=3.1.0,<4.0.0`.
+
+### Validation
+
+- `pytest -q` -> `234 passed`
+
 ## v2.0.2 - 2026-04-13
 
 Patch release focused on release hygiene, CI, and explicit connector coverage.

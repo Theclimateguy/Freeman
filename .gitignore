@@ -34,10 +34,10 @@ TS/
 scripts/*
 !scripts/__init__.py
 !scripts/seed_climate_kg.py
+!scripts/run_random_news_etl_benchmark.py
 !scripts/benchmark_faab/
 !scripts/benchmark_faab/**
 scripts/benchmark_faab/__pycache__/
 freeman/realworld/__pycache__/
-CHANGELOG.md
 
 PROGRESS.md

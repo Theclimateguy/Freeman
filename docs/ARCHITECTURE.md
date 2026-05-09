@@ -4,6 +4,8 @@
 
 This document describes the implemented USIM-AGENT architecture in the current repository, with emphasis on data flow, execution stages, verification, memory, and human override paths.
 
+Ontology bootstrap is intentionally broader than "random stream -> graph". The runtime supports both seed-graph-first and brief-to-ontology paths, and persists the chosen ingestion contract in `bootstrap_package.json` so downstream users can see which method built the graph and what its operational limits were.
+
 ## System Overview
 
 Freeman is organized into seven layers:
@@ -227,6 +229,31 @@ rho(J_Phi) < 1
 
 The aggregate API lives in `freeman.verifier.verifier.Verifier`.
 
+## Ontology Bootstrap Contracts
+
+Freeman distinguishes the runtime entrypoint from the actual ontology-ingestion strategy.
+
+- Entry points:
+  - `schema_path`
+  - `llm_synthesize`
+- Persisted strategies:
+  - `seed_schema`
+  - `brief_local_etl`
+  - `brief_local_etl_with_fallback_seed`
+  - `brief_remote_etl`
+  - `brief_remote_etl_with_fallback_seed`
+
+Each saved `bootstrap_package.json` now includes `bootstrap_contract` with:
+
+- `strategy_id`: chosen ingestion strategy
+- `actual_bootstrap_path`: `schema_seed`, `etl_from_brief`, or `fallback_schema_seed`
+- `input_requirements`
+- `recommended_for`
+- `limitations`
+- provider/model metadata and any configured fallback schema path
+
+This matters because two graphs can both be valid Freeman packages while having very different provenance. A graph created from a hand-authored seed ontology is reproducible but conservative; a graph created from a remote LLM and a rich brief can be broader but is less deterministic; a fallback-backed run guarantees a graph but may materially reflect the fallback seed instead of the intended brief.
+
 ## Memory and Reconciliation
 
 ```mermaid
@@ -438,15 +465,17 @@ Both operate only on structured self-model state and emit trace entries for repl
 
 Bootstrap modes:
 
-- `llm_synthesize`: the primary path; run the generic Freeman orchestrator (`FreemanOrchestrator`) on a natural-language `domain_brief`, then persist `bootstrap_package.json` together with `bootstrap_attempts`
+- `llm_synthesize`: the primary path; run the generic Freeman orchestrator (`FreemanOrchestrator`) on a natural-language `domain_brief` through the two-phase ETL bootstrap, then persist `bootstrap_package.json` together with `bootstrap_attempts`
 - `schema_path`: the secondary path; compile a caller-supplied Freeman schema directly
 
-The `llm_synthesize` path now uses a verifier-guided repair loop:
+The `llm_synthesize` path now builds the initial simulator state vector through structured ETL:
 
-- every failed attempt records the verifier error
-- attempts `1–3` use the standard synthesis prompt
-- attempts `4–8` include accumulated error history
-- attempts `9+` also include the verifier schema contract explicitly
+- phase `skeleton`: a narrow LLM call extracts only actors, resources, and outcomes; Freeman immediately validates ids and required keys
+- phase `edges`: a second LLM call receives the verified skeleton and emits only `causal_dag`, `actor_update_rules`, optional policies, and assumptions
+- deterministic calibration materializes each resource-target edge into bounded `coupling_weights` (`weight_source="etl_deterministic"`) while leaving numeric tuning to runtime estimation
+- compile, level1, and level0 failures still use full-package `repair_schema` with structured feedback and staged context
+- level2 sign violations use surgical `repair_sign_edges`, with at most two edge-only repair calls before falling back to full-package repair
+- `bootstrap_attempts` records `etl_phase` values: `skeleton`, `edges`, or `sign_repair`
 
 If a configured fallback schema is still required, the failure artifact preserves the recorded `bootstrap_attempts` instead of discarding them.
 
@@ -699,7 +728,7 @@ It can:
 - downgrade `DEEP_DIVE -> ANALYZE -> WATCH`
 - stop when hard limits are exceeded
 
-Operational implementation in `3.0`:
+Operational implementation in `3.1`:
 
 - `BudgetLedger` persists one append-only JSONL record per governed task
 - runtime loads the ledger on resume and keeps cumulative `spent_usd`

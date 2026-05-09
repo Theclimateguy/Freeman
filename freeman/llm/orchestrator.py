@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from freeman.api.tool_api import (
@@ -21,6 +23,8 @@ from freeman.game.runner import SimConfig
 from freeman.utils import stable_json_dumps
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
+
+LOGGER = logging.getLogger(__name__)
 
 SYNTHESIS_SYSTEM_PROMPT = """You are designing compact, valid Freeman simulation packages from natural-language domain briefs.
 
@@ -39,6 +43,52 @@ Constraints:
 - Prefer explicit actor_update_rules over hidden metadata.
 - Policies must use actor ids declared in the schema.
 - Keep magnitudes moderate and numerically stable.
+- Return JSON only.
+"""
+
+SKELETON_SYSTEM_PROMPT = """You extract compact Freeman domain skeletons from natural-language briefs.
+
+Return exactly one JSON object with:
+- schema: a partial Freeman schema containing domain_id, name, description, actors, resources, outcomes
+- assumptions: short list of modeling assumptions
+
+Constraints:
+- Do not emit relations, causal_dag, actor_update_rules, policies, or calibrated numeric couplings.
+- Keep the skeleton compact: 3-5 actors, 4-7 resources, 2-4 outcomes.
+- Actor objects must use id, name, state, metadata. State values must be simple numeric indexes.
+- Resource objects must use id, name, value, unit, owner_id, min_value, max_value, evolution_type, evolution_params, conserved.
+- Use evolution_type="linear" and deterministic defaults evolution_params={"a":0.8,"b":0.0,"c":0.0,"coupling_weights":{}} unless the brief clearly requires another supported type.
+- Outcome scoring_weights may reference only emitted resource ids or actor state keys.
+- Return JSON only.
+"""
+
+EDGE_SYSTEM_PROMPT = """You synthesize Freeman causal edges for a fixed, already validated domain skeleton.
+
+Return exactly one JSON object with:
+- causal_dag: list of edges with source, target, expected_sign, strength, optional rationale
+- actor_update_rules: mapping actor_id -> state_key -> rule spec when actor states need explicit updates
+- policies: optional compact baseline Freeman Policy snapshots
+- assumptions: optional extra assumptions
+
+Constraints:
+- Use only node ids from the provided valid_value_keys.
+- Do not create, rename, or delete actors, resources, or outcomes.
+- Every edge must have expected_sign "+" or "-".
+- Keep 3-8 causal edges.
+- Prefer resource-to-resource edges when the target is a resource; actor_update_rules only for actor state targets.
+- Return JSON only.
+"""
+
+SIGN_REPAIR_SYSTEM_PROMPT = """You repair only Freeman causal edge signs.
+
+Return exactly one JSON object with:
+- causal_dag: the corrected full edge list
+
+Constraints:
+- Preserve source and target ids unless a listed failing edge is impossible.
+- Repair only edges implicated by the provided level2 sign violations.
+- expected_sign must match the observed effective direction or the provided expected sign after correction.
+- Use only ids from valid_value_keys.
 - Return JSON only.
 """
 
@@ -94,8 +144,9 @@ class LLMDrivenSimulationRun:
 class FreemanOrchestrator:
     """Generate Freeman domain packages with an LLM client and execute them locally."""
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, *, package_normalization: str | bool = "auto") -> None:
         self.client = client
+        self.package_normalization = package_normalization
         self.last_bootstrap_attempts: List[Dict[str, Any]] = []
 
     def _synthesis_messages(self, domain_description: str) -> List[Dict[str, str]]:
@@ -114,14 +165,85 @@ class FreemanOrchestrator:
             },
         ]
 
+    def _skeleton_messages(self, domain_description: str) -> List[Dict[str, str]]:
+        """Build the phase-1 prompt sequence for domain skeleton extraction."""
+
+        return [
+            {"role": "system", "content": SKELETON_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "Extract only the Freeman domain skeleton for this brief.\n\n"
+                    f"{domain_description}\n\n"
+                    "Return JSON only."
+                ),
+            },
+        ]
+
+    def _edge_messages(self, domain_description: str, skeleton_package: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Build the phase-2 prompt sequence grounded on a validated skeleton."""
+
+        schema = skeleton_package["schema"]
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        actor_state_keys = self._actor_state_keys(schema.get("actors", []))
+        valid_value_keys = sorted(set(resource_ids) | actor_state_keys)
+        prompt_payload = {
+            "domain_description": domain_description,
+            "skeleton_schema": schema,
+            "valid_value_keys": valid_value_keys,
+            "resource_ids": sorted(resource_ids),
+            "actor_ids": sorted(actor["id"] for actor in schema.get("actors", [])),
+        }
+        return [
+            {"role": "system", "content": EDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+        ]
+
+    def _sign_repair_messages(
+        self,
+        package: Dict[str, Any],
+        violations: List[Dict[str, Any]],
+        *,
+        domain_description: str,
+    ) -> List[Dict[str, str]]:
+        """Build the surgical level-2 sign repair prompt."""
+
+        schema = package["schema"]
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        actor_state_keys = self._actor_state_keys(schema.get("actors", []))
+        prompt_payload = {
+            "domain_description": domain_description,
+            "causal_dag": schema.get("causal_dag", []),
+            "violations": violations,
+            "valid_value_keys": sorted(set(resource_ids) | actor_state_keys),
+        }
+        return [
+            {"role": "system", "content": SIGN_REPAIR_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(prompt_payload, ensure_ascii=False)},
+        ]
+
     def _normalize_package(self, package: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure a package carries the standard top-level Freeman synthesis keys."""
 
+        if not isinstance(package, dict):
+            package = {}
         normalized = json.loads(json.dumps(package, ensure_ascii=False))
+        if "schema" not in normalized and any(key in normalized for key in self._verifier_schema_spec()["required_top_level_keys"]):
+            normalized = {
+                "schema": normalized,
+                "policies": [],
+                "assumptions": [
+                    "Input looked like a raw Freeman schema and was wrapped as a package.",
+                ],
+            }
         normalized.setdefault("schema", {})
         normalized.setdefault("policies", [])
         normalized.setdefault("assumptions", [])
         schema = normalized.get("schema", {})
+        if self._package_normalization_enabled() and isinstance(schema, dict):
+            LOGGER.warning("Normalizing LLM schema payload before verification.")
+            normalized["schema"] = self._normalize_schema_payload(schema)
+            return normalized
         relations = schema.get("relations", [])
         if isinstance(relations, list):
             normalized_relations: list[Dict[str, Any]] = []
@@ -140,6 +262,607 @@ class FreemanOrchestrator:
                 normalized_relations.append(mapped)
             schema["relations"] = normalized_relations
         return normalized
+
+    def _normalize_skeleton_package(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize phase-1 skeleton output without accepting causal structure."""
+
+        raw = payload if isinstance(payload, dict) else {}
+        schema = raw.get("schema", raw)
+        schema = schema if isinstance(schema, dict) else {}
+        normalized = {
+            "schema": {
+                "domain_id": self._safe_id(
+                    schema.get("domain_id") or schema.get("name") or "llm_domain",
+                    fallback="llm_domain",
+                ),
+                "name": str(schema.get("name") or schema.get("domain_id") or "LLM Domain"),
+                "description": str(schema.get("description") or ""),
+                "actors": self._normalize_actors(schema.get("actors", [])),
+                "resources": [],
+                "relations": [],
+                "outcomes": [],
+                "causal_dag": [],
+                "actor_update_rules": {},
+            },
+            "policies": [],
+            "assumptions": raw.get("assumptions", []) if isinstance(raw.get("assumptions", []), list) else [],
+        }
+        actor_ids = {actor["id"] for actor in normalized["schema"]["actors"]}
+        normalized["schema"]["resources"] = self._normalize_resources(schema.get("resources", []), actor_ids=actor_ids)
+        resource_ids = {resource["id"] for resource in normalized["schema"]["resources"]}
+        normalized["schema"]["outcomes"] = self._normalize_outcomes(schema.get("outcomes", []), resource_ids)
+        self._validate_skeleton(normalized)
+        return normalized
+
+    def _validate_skeleton(self, package: Dict[str, Any]) -> None:
+        """Run a narrow phase-1 validation before edge synthesis."""
+
+        schema = package.get("schema", {})
+        for key in ("domain_id", "actors", "resources", "outcomes"):
+            if key not in schema:
+                raise SchemaRepairFailed(f"LLM skeleton is missing required key: {key}")
+        if not schema.get("actors") or not schema.get("resources") or not schema.get("outcomes"):
+            raise SchemaRepairFailed("LLM skeleton must include at least one actor, resource, and outcome.")
+        self._ensure_unique_phase_ids(schema.get("actors", []), "actor")
+        self._ensure_unique_phase_ids(schema.get("resources", []), "resource")
+        self._ensure_unique_phase_ids(schema.get("outcomes", []), "outcome")
+
+    def _ensure_unique_phase_ids(self, values: List[Dict[str, Any]], label: str) -> None:
+        seen: set[str] = set()
+        for value in values:
+            item_id = str(value.get("id", ""))
+            if not item_id:
+                raise SchemaRepairFailed(f"LLM skeleton contains a {label} without id.")
+            if item_id in seen:
+                raise SchemaRepairFailed(f"LLM skeleton contains duplicate {label} id: {item_id}")
+            seen.add(item_id)
+
+    def _normalize_edge_payload(self, payload: Dict[str, Any], skeleton_package: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge phase-2 edge output into the validated skeleton package."""
+
+        raw = payload if isinstance(payload, dict) else {}
+        source = raw.get("schema", raw)
+        source = source if isinstance(source, dict) else {}
+        package = json.loads(json.dumps(skeleton_package, ensure_ascii=False))
+        schema = package["schema"]
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        valid_value_keys = resource_ids | self._actor_state_keys(schema.get("actors", []))
+        schema["causal_dag"] = self._normalize_causal_dag(source.get("causal_dag", []), valid_value_keys=valid_value_keys)
+        actor_ids = {actor["id"] for actor in schema.get("actors", [])}
+        schema["actor_update_rules"] = self._normalize_actor_update_rules(
+            source.get("actor_update_rules", {}),
+            actor_ids=actor_ids,
+            valid_value_keys=valid_value_keys,
+        )
+        package["policies"] = raw.get("policies", []) if isinstance(raw.get("policies", []), list) else []
+        package["assumptions"] = [
+            *package.get("assumptions", []),
+            *(raw.get("assumptions", []) if isinstance(raw.get("assumptions", []), list) else []),
+        ]
+        self._materialize_edge_couplings(schema)
+        return self._normalize_package(package)
+
+    def _materialize_edge_couplings(self, schema: Dict[str, Any]) -> None:
+        """Write deterministic resource couplings for synthesized causal edges."""
+
+        resources = {resource["id"]: resource for resource in schema.get("resources", [])}
+        for edge in schema.get("causal_dag", []):
+            target = resources.get(edge.get("target"))
+            if target is None:
+                continue
+            params = target.setdefault("evolution_params", {})
+            if not isinstance(params, dict):
+                params = self._legacy_resource_params(target)
+                target["evolution_params"] = params
+            if target.get("evolution_type") == "stock_flow" and "phi_params" in params:
+                couplings = params.setdefault("phi_params", {}).setdefault("coupling_weights", {})
+            else:
+                couplings = params.setdefault("coupling_weights", {})
+            if not isinstance(couplings, dict):
+                couplings = {}
+                if target.get("evolution_type") == "stock_flow" and "phi_params" in params:
+                    params.setdefault("phi_params", {})["coupling_weights"] = couplings
+                else:
+                    params["coupling_weights"] = couplings
+            sign = -1.0 if str(edge.get("expected_sign", "+")).startswith("-") else 1.0
+            weight = edge.get("weight")
+            magnitude = abs(float(weight)) if self._is_number(weight) and float(weight) != 0.0 else 0.05
+            couplings[str(edge["source"])] = sign * min(magnitude, 0.1)
+            edge["weight"] = couplings[str(edge["source"])]
+            edge["weight_source"] = "etl_deterministic"
+
+    def _synthesize_etl_package(self, domain_description: str) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Run phase 1 and phase 2 LLM calls and return a full package."""
+
+        attempts: List[Dict[str, Any]] = []
+        skeleton = self._normalize_skeleton_package(
+            self.client.chat_json(self._skeleton_messages(domain_description), temperature=0.1, max_tokens=2500)
+        )
+        attempts.append(
+            {
+                "attempt": 1,
+                "phase": "skeleton",
+                "etl_phase": "skeleton",
+                "verifier_error": "",
+                "feedback": [],
+            }
+        )
+        package = self._normalize_edge_payload(
+            self.client.chat_json(self._edge_messages(domain_description, skeleton), temperature=0.1, max_tokens=3000),
+            skeleton,
+        )
+        attempts.append(
+            {
+                "attempt": 1,
+                "phase": "edges",
+                "etl_phase": "edges",
+                "verifier_error": "",
+                "feedback": [],
+            }
+        )
+        return package, attempts
+
+    def _package_normalization_enabled(self) -> bool:
+        """Return whether local LLM output should be normalized before verification."""
+
+        mode = self.package_normalization
+        if isinstance(mode, bool):
+            return mode
+        normalized = str(mode or "auto").strip().lower()
+        if normalized in {"0", "false", "no", "off", "never", "none", "disabled"}:
+            return False
+        if normalized in {"1", "true", "yes", "on", "always", "force", "enabled"}:
+            return True
+        model = str(getattr(self.client, "model", "") or "").lower()
+        if not model:
+            return False
+        if any(marker in model for marker in ("ollama", "qwen", "llama", "mistral", "coder")):
+            return True
+        match = re.search(r"(\d+(?:\.\d+)?)\s*b", model)
+        return bool(match and float(match.group(1)) <= 14.0)
+
+    def _normalize_schema_payload(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce common LLM schema mistakes into Freeman's compiler contract."""
+
+        normalized = dict(schema)
+        normalized["actors"] = self._normalize_actors(normalized.get("actors", []))
+        actor_ids = {actor["id"] for actor in normalized["actors"]}
+
+        normalized["resources"] = self._normalize_resources(normalized.get("resources", []), actor_ids=actor_ids)
+        resource_ids = {resource["id"] for resource in normalized["resources"]}
+
+        normalized["outcomes"] = self._normalize_outcomes(normalized.get("outcomes", []), resource_ids)
+        actor_state_keys = self._actor_state_keys(normalized["actors"])
+        valid_value_keys = set(resource_ids) | actor_state_keys
+
+        relations, inferred_edges = self._normalize_relations(
+            normalized.get("relations", []),
+            actor_ids=actor_ids,
+            valid_value_keys=valid_value_keys,
+        )
+        normalized["relations"] = relations
+        normalized["causal_dag"] = self._normalize_causal_dag(
+            [*self._as_list(normalized.get("causal_dag", [])), *inferred_edges],
+            valid_value_keys=valid_value_keys,
+        )
+        normalized["actor_update_rules"] = self._normalize_actor_update_rules(
+            normalized.get("actor_update_rules", {}),
+            actor_ids=actor_ids,
+            valid_value_keys=valid_value_keys,
+        )
+        return normalized
+
+    def _normalize_actors(self, actors: Any) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for index, actor in enumerate(self._as_list(actors), start=1):
+            if isinstance(actor, str):
+                actor = {"id": self._safe_id(actor, fallback=f"actor_{index}"), "name": actor, "state": {}}
+            if not isinstance(actor, dict):
+                continue
+            actor_id = self._safe_id(actor.get("id") or actor.get("name"), fallback=f"actor_{index}")
+            state = actor.get("state", {})
+            if not isinstance(state, dict):
+                state = {}
+            values.append(
+                {
+                    "id": actor_id,
+                    "name": str(actor.get("name") or actor_id.replace("_", " ").title()),
+                    "state": {
+                        self._safe_id(key, fallback=f"state_{idx}"): float(value)
+                        for idx, (key, value) in enumerate(state.items(), start=1)
+                        if self._is_number(value)
+                    },
+                    "metadata": actor.get("metadata", {}) if isinstance(actor.get("metadata", {}), dict) else {},
+                }
+            )
+        return self._dedupe_by_id(values)
+
+    def _normalize_resources(self, resources: Any, *, actor_ids: set[str]) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for index, resource in enumerate(self._as_list(resources), start=1):
+            if isinstance(resource, str):
+                resource = {"id": self._safe_id(resource, fallback=f"resource_{index}"), "name": resource}
+            if not isinstance(resource, dict):
+                continue
+            resource_id = self._safe_id(resource.get("id") or resource.get("name"), fallback=f"resource_{index}")
+            params = resource.get("evolution_params", {})
+            if not isinstance(params, dict):
+                params = {}
+            owner_id = resource.get("owner_id")
+            evolution_type = str(resource.get("evolution_type") or "linear")
+            if evolution_type not in {"linear", "stock_flow", "logistic", "threshold", "coupled"}:
+                evolution_type = "linear"
+            params = self._coerce_resource_params(
+                resource,
+                evolution_type=evolution_type,
+                params=params or self._legacy_resource_params(resource),
+            )
+            values.append(
+                {
+                    "id": resource_id,
+                    "name": str(resource.get("name") or resource_id.replace("_", " ").title()),
+                    "value": float(resource.get("value", resource.get("initial_value", 1.0)) or 0.0),
+                    "unit": str(resource.get("unit") or resource.get("units") or "index"),
+                    "owner_id": owner_id if owner_id in actor_ids else None,
+                    "min_value": float(resource.get("min_value", 0.0) or 0.0),
+                    "max_value": self._float_or_inf(resource.get("max_value", resource.get("capacity", float("inf")))),
+                    "evolution_type": evolution_type,
+                    "evolution_params": params,
+                    "conserved": bool(resource.get("conserved", False)),
+                }
+            )
+        return self._dedupe_by_id(values)
+
+    def _coerce_resource_params(
+        self,
+        resource: Dict[str, Any],
+        *,
+        evolution_type: str,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Normalize evolution params to the shape expected by the declared operator."""
+
+        candidate = dict(params or {})
+        fallback = self._legacy_resource_params(resource)
+        coupling_weights = candidate.get("coupling_weights", fallback.get("coupling_weights", {}))
+        coupling_weights = coupling_weights if isinstance(coupling_weights, dict) else {}
+
+        if evolution_type == "linear":
+            return {
+                "a": float(candidate.get("a", fallback.get("a", 0.8)) or 0.8),
+                "b": float(candidate.get("b", fallback.get("b", 0.0)) or 0.0),
+                "c": float(candidate.get("c", fallback.get("c", 0.0)) or 0.0),
+                "coupling_weights": {
+                    str(key): float(value) for key, value in coupling_weights.items() if self._is_number(value)
+                },
+            }
+
+        if evolution_type == "stock_flow":
+            phi_params = candidate.get("phi_params", {})
+            phi_params = phi_params if isinstance(phi_params, dict) else {}
+            phi_couplings = phi_params.get("coupling_weights", coupling_weights)
+            phi_couplings = phi_couplings if isinstance(phi_couplings, dict) else {}
+            return {
+                "delta": float(candidate.get("delta", max(0.0, 1.0 - float(fallback.get("a", 0.8)))) or 0.0),
+                "phi_params": {
+                    "base_inflow": float(phi_params.get("base_inflow", candidate.get("c", 0.0)) or 0.0),
+                    "policy_scale": float(phi_params.get("policy_scale", 0.0) or 0.0),
+                    "coupling_weights": {
+                        str(key): float(value) for key, value in phi_couplings.items() if self._is_number(value)
+                    },
+                },
+            }
+
+        if evolution_type == "logistic":
+            max_value = resource.get("max_value", resource.get("capacity"))
+            carrying_capacity = float(max_value) if self._is_number(max_value) and float(max_value) > 0.0 else None
+            base_value = float(resource.get("value", resource.get("initial_value", 1.0)) or 1.0)
+            if carrying_capacity is None:
+                carrying_capacity = max(base_value * 1.5, 1.0)
+            raw_a = candidate.get("a")
+            inferred_r = abs(float(raw_a) - 1.0) if self._is_number(raw_a) else 0.1
+            return {
+                "r": max(float(candidate.get("r", inferred_r) or inferred_r), 1.0e-6),
+                "K": max(float(candidate.get("K", carrying_capacity) or carrying_capacity), 1.0),
+                "external": float(candidate.get("external", candidate.get("c", 0.0)) or 0.0),
+                "policy_scale": float(candidate.get("policy_scale", candidate.get("b", 0.0)) or 0.0),
+                "coupling_weights": {
+                    str(key): float(value) for key, value in coupling_weights.items() if self._is_number(value)
+                },
+            }
+
+        if evolution_type == "threshold":
+            low_params = candidate.get("low_params", {})
+            high_params = candidate.get("high_params", {})
+            low_params = low_params if isinstance(low_params, dict) else {}
+            high_params = high_params if isinstance(high_params, dict) else {}
+            linear_defaults = self._coerce_resource_params(resource, evolution_type="linear", params=candidate)
+            threshold = candidate.get("theta", resource.get("value", resource.get("initial_value", 1.0)))
+            return {
+                "theta": float(threshold if self._is_number(threshold) else 1.0),
+                "low_params": {
+                    "mode": str(low_params.get("mode", "linear") or "linear"),
+                    "a": float(low_params.get("a", linear_defaults["a"]) or linear_defaults["a"]),
+                    "b": float(low_params.get("b", linear_defaults["b"]) or linear_defaults["b"]),
+                    "c": float(low_params.get("c", linear_defaults["c"]) or linear_defaults["c"]),
+                    "coupling_weights": {
+                        str(key): float(value)
+                        for key, value in (low_params.get("coupling_weights", linear_defaults["coupling_weights"]) or {}).items()
+                        if self._is_number(value)
+                    },
+                },
+                "high_params": {
+                    "mode": str(high_params.get("mode", "linear") or "linear"),
+                    "a": float(high_params.get("a", linear_defaults["a"]) or linear_defaults["a"]),
+                    "b": float(high_params.get("b", linear_defaults["b"]) or linear_defaults["b"]),
+                    "c": float(high_params.get("c", linear_defaults["c"]) or linear_defaults["c"]),
+                    "coupling_weights": {
+                        str(key): float(value)
+                        for key, value in (high_params.get("coupling_weights", linear_defaults["coupling_weights"]) or {}).items()
+                        if self._is_number(value)
+                    },
+                },
+            }
+
+        components = candidate.get("components", [])
+        if not isinstance(components, list) or not components:
+            return {
+                "components": [
+                    {
+                        "evolution_type": "linear",
+                        "weight": 1.0,
+                        "evolution_params": self._coerce_resource_params(
+                            resource,
+                            evolution_type="linear",
+                            params=candidate,
+                        ),
+                    }
+                ]
+            }
+        normalized_components: list[Dict[str, Any]] = []
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            component_type = str(component.get("evolution_type") or "linear")
+            if component_type not in {"linear", "stock_flow", "logistic", "threshold", "coupled"}:
+                component_type = "linear"
+            normalized_components.append(
+                {
+                    "evolution_type": component_type,
+                    "weight": float(component.get("weight", 1.0) or 1.0),
+                    "evolution_params": self._coerce_resource_params(
+                        resource,
+                        evolution_type=component_type,
+                        params=component.get("evolution_params", {}),
+                    ),
+                }
+            )
+        return {"components": normalized_components or [{"evolution_type": "linear", "weight": 1.0, "evolution_params": self._coerce_resource_params(resource, evolution_type="linear", params=candidate)}]}
+
+    def _normalize_outcomes(self, outcomes: Any, resource_ids: set[str]) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for index, outcome in enumerate(self._as_list(outcomes), start=1):
+            if isinstance(outcome, str):
+                outcome = {"id": self._safe_id(outcome, fallback=f"outcome_{index}"), "label": outcome}
+            if not isinstance(outcome, dict):
+                continue
+            outcome_id = self._safe_id(
+                outcome.get("id") or outcome.get("label") or outcome.get("name"),
+                fallback=f"outcome_{index}",
+            )
+            weights = outcome.get("scoring_weights", {})
+            if not isinstance(weights, dict):
+                weights = {}
+            weights = {
+                str(key): float(value)
+                for key, value in weights.items()
+                if key in resource_ids and self._is_number(value)
+            }
+            if not weights and resource_ids:
+                weights = {sorted(resource_ids)[0]: 1.0}
+            values.append(
+                {
+                    "id": outcome_id,
+                    "label": str(
+                        outcome.get("label")
+                        or outcome.get("name")
+                        or outcome_id.replace("_", " ").title()
+                    ),
+                    "scoring_weights": weights,
+                    "description": str(outcome.get("description") or ""),
+                    "regime_shifts": (
+                        outcome.get("regime_shifts", [])
+                        if isinstance(outcome.get("regime_shifts", []), list)
+                        else []
+                    ),
+                }
+            )
+        return self._dedupe_by_id(values)
+
+    def _normalize_relations(
+        self,
+        relations: Any,
+        *,
+        actor_ids: set[str],
+        valid_value_keys: set[str],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        normalized_relations: List[Dict[str, Any]] = []
+        inferred_edges: List[Dict[str, Any]] = []
+        for relation in self._as_list(relations):
+            if not isinstance(relation, dict):
+                continue
+            mapped = dict(relation)
+            source = str(mapped.pop("source", mapped.get("source_id", "")))
+            target = str(mapped.pop("target", mapped.get("target_id", "")))
+            relation_type = str(mapped.pop("type", mapped.pop("label", mapped.get("relation_type", "association"))))
+            weights = mapped.get("weights", {})
+            weights = weights if isinstance(weights, dict) else {}
+            if source in actor_ids and target in actor_ids:
+                normalized_relations.append(
+                    {
+                        "source_id": source,
+                        "target_id": target,
+                        "relation_type": relation_type,
+                        "weights": {str(key): float(value) for key, value in weights.items() if self._is_number(value)},
+                    }
+                )
+                continue
+            inferred_edges.extend(self._relations_to_causal_edges(source, target, weights, valid_value_keys))
+        return normalized_relations, self._dedupe_causal_edges(inferred_edges)
+
+    def _normalize_causal_dag(self, edges: Any, *, valid_value_keys: set[str]) -> List[Dict[str, Any]]:
+        values: List[Dict[str, Any]] = []
+        for edge in self._as_list(edges):
+            if not isinstance(edge, dict):
+                continue
+            source = str(edge.get("source", edge.get("source_id", "")))
+            target = str(edge.get("target", edge.get("target_id", "")))
+            if source not in valid_value_keys or target not in valid_value_keys or source == target:
+                continue
+            expected_sign = str(edge.get("expected_sign") or edge.get("sign") or "+")
+            expected_sign = "-" if expected_sign.strip().startswith("-") else "+"
+            values.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "expected_sign": expected_sign,
+                    "strength": str(edge.get("strength") or "strong"),
+                    "weight": None if edge.get("weight") is None else float(edge.get("weight")),
+                    "weight_source": str(edge.get("weight_source") or "llm_normalized"),
+                    "metadata": edge.get("metadata", {}) if isinstance(edge.get("metadata", {}), dict) else {},
+                }
+            )
+        return self._dedupe_causal_edges(values)
+
+    def _normalize_actor_update_rules(
+        self,
+        rules: Any,
+        *,
+        actor_ids: set[str],
+        valid_value_keys: set[str],
+    ) -> Dict[str, Any]:
+        if not isinstance(rules, dict):
+            return {}
+        normalized: Dict[str, Any] = {}
+        for actor_id, state_rules in rules.items():
+            if actor_id not in actor_ids or not isinstance(state_rules, dict):
+                continue
+            cleaned_rules: Dict[str, Any] = {}
+            for state_key, spec in state_rules.items():
+                if not isinstance(spec, dict):
+                    continue
+                weights = spec.get("weights", {})
+                if isinstance(weights, dict):
+                    spec = dict(spec)
+                    spec["weights"] = {
+                        str(key): float(value)
+                        for key, value in weights.items()
+                        if key in valid_value_keys and self._is_number(value)
+                    }
+                cleaned_rules[str(state_key)] = spec
+            if cleaned_rules:
+                normalized[str(actor_id)] = cleaned_rules
+        return normalized
+
+    def _relations_to_causal_edges(
+        self,
+        source: str,
+        target: str,
+        weights: Dict[str, Any],
+        valid_value_keys: set[str],
+    ) -> List[Dict[str, Any]]:
+        edges: List[Dict[str, Any]] = []
+        if source in valid_value_keys and target in valid_value_keys and source != target:
+            edges.append(self._causal_edge_from_weight(source, target, weights.get(target, 1.0)))
+        if target in valid_value_keys:
+            for key, value in weights.items():
+                if key in valid_value_keys and key != target:
+                    edges.append(self._causal_edge_from_weight(str(key), target, value))
+        if source in valid_value_keys:
+            for key, value in weights.items():
+                if key in valid_value_keys and key != source:
+                    edges.append(self._causal_edge_from_weight(source, str(key), value))
+        return edges
+
+    def _causal_edge_from_weight(self, source: str, target: str, weight: Any) -> Dict[str, Any]:
+        value = float(weight) if self._is_number(weight) else 1.0
+        return {
+            "source": source,
+            "target": target,
+            "expected_sign": "-" if value < 0.0 else "+",
+            "strength": "strong",
+            "weight": value,
+            "weight_source": "normalized_relation",
+            "metadata": {"normalized_from": "relation"},
+        }
+
+    def _legacy_resource_params(self, resource: Dict[str, Any]) -> Dict[str, Any]:
+        if any(key in resource for key in ("inflow", "outflow", "growth_rate", "decay_rate")):
+            growth = float(resource.get("growth_rate", 0.0) or 0.0)
+            decay = float(resource.get("decay_rate", 0.0) or 0.0)
+            inflow = float(resource.get("inflow", 0.0) or 0.0)
+            outflow = float(resource.get("outflow", 0.0) or 0.0)
+            return {
+                "a": max(0.0, min(0.95, 1.0 + growth - decay)),
+                "b": 0.0,
+                "c": inflow - outflow,
+                "coupling_weights": {},
+            }
+        return {"a": 0.8, "b": 0.0, "c": 0.0, "coupling_weights": {}}
+
+    def _actor_state_keys(self, actors: List[Dict[str, Any]]) -> set[str]:
+        keys: set[str] = set()
+        for actor in actors:
+            actor_id = actor["id"]
+            for state_key in actor.get("state", {}):
+                keys.add(str(state_key))
+                keys.add(f"{actor_id}.{state_key}")
+        return keys
+
+    def _as_list(self, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _safe_id(self, value: Any, *, fallback: str) -> str:
+        text = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+        return text or fallback
+
+    def _dedupe_by_id(self, values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: set[str] = set()
+        result: List[Dict[str, Any]] = []
+        for value in values:
+            item_id = str(value.get("id", ""))
+            if not item_id or item_id in seen:
+                continue
+            seen.add(item_id)
+            result.append(value)
+        return result
+
+    def _dedupe_causal_edges(self, values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        seen: set[tuple[str, str]] = set()
+        result: List[Dict[str, Any]] = []
+        for value in values:
+            key = (str(value.get("source", "")), str(value.get("target", "")))
+            if not key[0] or not key[1] or key in seen:
+                continue
+            seen.add(key)
+            result.append(value)
+        return result
+
+    def _is_number(self, value: Any) -> bool:
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            return False
+        return True
+
+    def _float_or_inf(self, value: Any) -> float:
+        if value in {None, "inf", "infinity"}:
+            return float("inf")
+        return float(value)
 
     def _verifier_schema_spec(self) -> Dict[str, Any]:
         """Return the structural contract a package must satisfy to be verifier-clean."""
@@ -237,6 +960,30 @@ class FreemanOrchestrator:
             violations.extend(step_violations)
         return violations
 
+    def repair_sign_edges(
+        self,
+        package: Dict[str, Any],
+        violations: List[Dict[str, Any]],
+        *,
+        domain_description: str = "",
+    ) -> Dict[str, Any]:
+        """Repair level-2 sign failures by asking only for corrected causal edges."""
+
+        repaired = json.loads(json.dumps(package, ensure_ascii=False))
+        schema = repaired["schema"]
+        payload = self.client.chat_json(
+            self._sign_repair_messages(repaired, violations, domain_description=domain_description),
+            temperature=0.1,
+            max_tokens=1800,
+        )
+        source = payload.get("schema", payload) if isinstance(payload, dict) else {}
+        resource_ids = {resource["id"] for resource in schema.get("resources", [])}
+        valid_value_keys = resource_ids | self._actor_state_keys(schema.get("actors", []))
+        edge_payload = source.get("causal_dag", []) if isinstance(source, dict) else []
+        schema["causal_dag"] = self._normalize_causal_dag(edge_payload, valid_value_keys=valid_value_keys)
+        self._materialize_edge_couplings(schema)
+        return self._normalize_package(repaired)
+
     def compile_and_repair(
         self,
         domain_description: str,
@@ -244,15 +991,20 @@ class FreemanOrchestrator:
         max_retries: int = 5,
         trial_steps: int = 3,
         config: Optional[SimConfig] = None,
+        etl_bootstrap: bool = True,
     ) -> tuple[Dict[str, Any], str, int, List[Dict[str, Any]]]:
-        """Synthesize, verify, and iteratively repair a Freeman package until it compiles cleanly."""
+        """Synthesize via ETL, verify, and repair a Freeman package until it compiles cleanly."""
 
         sim_config = config or SimConfig(convergence_check_steps=250, convergence_epsilon=3.0e-2)
-        package = self._normalize_package(
-            self.client.chat_json(self._synthesis_messages(domain_description), temperature=0.2, max_tokens=4000)
-        )
-        repair_history: List[Dict[str, Any]] = []
-        self.last_bootstrap_attempts = []
+        if etl_bootstrap:
+            package, repair_history = self._synthesize_etl_package(domain_description)
+        else:
+            package = self._normalize_package(
+                self.client.chat_json(self._synthesis_messages(domain_description), temperature=0.2, max_tokens=4000)
+            )
+            repair_history = []
+        self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
+        sign_repair_attempts = 0
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -262,6 +1014,7 @@ class FreemanOrchestrator:
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "compile",
+                    "etl_phase": "edges",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
                     "repair_stage": self._repair_stage(attempt + 1),
@@ -286,6 +1039,7 @@ class FreemanOrchestrator:
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "level1",
+                    "etl_phase": "edges",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
                     "repair_stage": self._repair_stage(attempt + 1),
@@ -310,6 +1064,7 @@ class FreemanOrchestrator:
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "level0_trial",
+                    "etl_phase": "edges",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
                     "repair_stage": self._repair_stage(attempt + 1),
@@ -336,25 +1091,34 @@ class FreemanOrchestrator:
             )
             if l2_violations:
                 feedback = self._violation_feedback("level2", l2_violations)
+                sign_repair_attempts += 1
                 attempt_record = {
                     "attempt": attempt,
                     "phase": "level2",
+                    "etl_phase": "sign_repair",
                     "verifier_error": self._feedback_summary(feedback),
                     "feedback": feedback,
-                    "repair_stage": self._repair_stage(attempt + 1),
+                    "repair_stage": "surgical_sign_repair",
                 }
                 repair_history.append(attempt_record)
                 self.last_bootstrap_attempts = json.loads(json.dumps(repair_history, ensure_ascii=False))
-                package = self._normalize_package(
-                    self.client.repair_schema(
+                if sign_repair_attempts <= 2:
+                    package = self.repair_sign_edges(
                         package,
                         feedback,
                         domain_description=domain_description,
-                        error_history=repair_history,
-                        verifier_schema_spec=self._verifier_schema_spec(),
-                        repair_stage=self._repair_stage(attempt + 1),
                     )
-                )
+                else:
+                    package = self._normalize_package(
+                        self.client.repair_schema(
+                            package,
+                            feedback,
+                            domain_description=domain_description,
+                            error_history=repair_history,
+                            verifier_schema_spec=self._verifier_schema_spec(),
+                            repair_stage=self._repair_stage(attempt + 1),
+                        )
+                    )
                 continue
 
             compile_result = freeman_compile_domain(package["schema"])
@@ -367,7 +1131,11 @@ class FreemanOrchestrator:
     def synthesize_package(self, domain_description: str, max_attempts: int = 3) -> tuple[Dict[str, Any], str, int]:
         """Use an LLM client to produce a verified Freeman schema and baseline policies."""
 
-        package, world_id, attempts, _ = self.compile_and_repair(domain_description, max_retries=max_attempts)
+        package, world_id, attempts, _ = self.compile_and_repair(
+            domain_description,
+            max_retries=max_attempts,
+            etl_bootstrap=False,
+        )
         return package, world_id, attempts
 
     def interpret_run(
@@ -410,6 +1178,7 @@ class FreemanOrchestrator:
             max_retries=5,
             trial_steps=3,
             config=SimConfig(seed=seed, convergence_check_steps=250, convergence_epsilon=3.0e-2),
+            etl_bootstrap=False,
         )
         simulation = json.loads(
             freeman_run_simulation(

@@ -28,6 +28,7 @@ def test_forecast_registry_due_uses_created_step_plus_horizon(tmp_path) -> None:
         horizon_steps=3,
         created_at=datetime(2026, 3, 27, tzinfo=timezone.utc),
         created_step=5,
+        created_runtime_step=100,
     )
     future_forecast = Forecast(
         forecast_id="water:6:crisis",
@@ -38,6 +39,7 @@ def test_forecast_registry_due_uses_created_step_plus_horizon(tmp_path) -> None:
         horizon_steps=4,
         created_at=datetime(2026, 3, 27, tzinfo=timezone.utc),
         created_step=6,
+        created_runtime_step=101,
     )
     registry.record(due_forecast)
     registry.record(future_forecast)
@@ -45,6 +47,7 @@ def test_forecast_registry_due_uses_created_step_plus_horizon(tmp_path) -> None:
     due = registry.due(current_step=8)
 
     assert [forecast.forecast_id for forecast in due] == ["water:5:cooperation"]
+    assert due_forecast.deadline_step == 8
 
 
 def test_forecast_registry_verify_sets_error_and_roundtrips_json(tmp_path) -> None:

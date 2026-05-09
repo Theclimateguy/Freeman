@@ -83,3 +83,5 @@ python -m freeman.runtime.stream_runtime --config-path config.yaml --hours 8 --r
 ```
 
 Connector-specific release tests live in `tests/test_connectors.py`, while runtime integration remains covered by the main daemon tests in `tests/test_runtime.py`.
+
+License: Apache License 2.0. See [LICENSE](/Users/theclimateguy/Documents/science/Freeman/packages/freeman-connectors/LICENSE).
