@@ -985,6 +985,10 @@ class ConsciousnessEngine:
         return diff
 
     def _apply_diff(self, diff: dict[str, Any]) -> None:
+        # `shadow_graph` permission protects mutations that touch the persisted
+        # KG-backed self-model namespace. Pure in-memory state updates
+        # (`attention_state`, `goal_state`, `runtime_metadata`) are intentionally
+        # allowed without that gate because they do not write KG nodes/edges.
         if diff.get("remove_node_ids") or diff.get("nodes") or diff.get("edges"):
             self._require_permission("shadow_graph", detail="self-model diff application")
         for node_id in diff.get("remove_node_ids", []):

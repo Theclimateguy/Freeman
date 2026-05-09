@@ -168,6 +168,8 @@ Write access must be restricted by design:
 
 This write guard prevents accidental identity drift from CLI helpers, ingestion adapters, or LLM-facing paths.
 
+Current implementation note: the guard applies to KG-backed self-model writes. Pure in-memory changes to `goal_state`, `attention_state`, or `runtime_metadata` are treated as local state transitions, not as shadow-graph writes.
+
 ### 3. `IdleScheduler`
 
 Deterministic scorer that decides whether the agent should perform internal deliberation.

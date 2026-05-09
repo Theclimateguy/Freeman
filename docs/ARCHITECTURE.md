@@ -136,6 +136,13 @@ Roles are explicit:
 
 The role field lives in `ConsciousState.agent_role`. Mutating acts are checked through `ConsciousnessEngine._require_permission(...)`, raising `RolePermissionError` on forbidden writes.
 
+The current permission boundary is intentionally narrow:
+
+- persisted self-model / KG mutations require `shadow_graph`
+- ontology-repair emission requires `repair_request`
+- anomaly-candidate review requires `candidate_node`
+- pure in-memory updates to `attention_state`, `goal_state`, and `runtime_metadata` do not require `shadow_graph`
+
 Trail scopes are:
 
 - `ingestor -> {None}`
