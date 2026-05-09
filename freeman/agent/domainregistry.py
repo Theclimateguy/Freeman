@@ -5,10 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List
 
+from freeman.core.types import AgentRole, TrailType
 from freeman.core.multiworld import MultiDomainWorld, SharedResourceBus
 from freeman.core.world import WorldState
 from freeman.domain.compiler import DomainCompiler
 from freeman.utils import deep_copy_jsonable
+
+ROLE_TRAIL_SCOPE: dict[AgentRole, tuple[TrailType | None, ...]] = {
+    "ingestor": (None,),
+    "repairer": ("ingest", "llm_propose"),
+    "planner": ("verified", "repair"),
+    "narrator": ("read_plan",),
+    "verifier": ("llm_propose",),
+}
 
 
 @dataclass
@@ -58,4 +67,20 @@ class DomainTemplateRegistry:
         return MultiDomainWorld(self.compile_many(template_ids), shared_resource_ids)
 
 
-__all__ = ["DomainTemplate", "DomainTemplateRegistry", "MultiDomainWorld", "SharedResourceBus"]
+def trail_scope_for_role(agent_role: AgentRole) -> tuple[TrailType | None, ...]:
+    """Return the admissible trail types for one hive-mind role."""
+
+    normalized_role = str(agent_role)
+    if normalized_role not in ROLE_TRAIL_SCOPE:
+        raise ValueError(f"Unsupported agent role: {agent_role}")
+    return ROLE_TRAIL_SCOPE[normalized_role]
+
+
+__all__ = [
+    "DomainTemplate",
+    "DomainTemplateRegistry",
+    "MultiDomainWorld",
+    "ROLE_TRAIL_SCOPE",
+    "SharedResourceBus",
+    "trail_scope_for_role",
+]
