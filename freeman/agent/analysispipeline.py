@@ -245,6 +245,11 @@ class AnalysisPipeline:
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
         self.reconciler = reconciler or Reconciler.from_config(config_path)
         self.forecast_registry = forecast_registry
+        if self.forecast_registry is None:
+            LOGGER.warning(
+                "AnalysisPipeline initialized without ForecastRegistry; "
+                "forecast recording, verification, and explanation are disabled."
+            )
         self.emitter = emitter
         self.config = config or AnalysisPipelineConfig.from_config(config_path)
         self.epistemic_log = EpistemicLog(self.knowledge_graph)
@@ -397,11 +402,16 @@ class AnalysisPipeline:
             reference_outcome_probs,
             belief_confidence=float(sim_result.confidence),
         )
+        causal_export_signal_id = (
+            str(update_signal_id)
+            if update_signal_id
+            else f"bootstrap:{final_world.domain_id}:{int(final_world.t)}"
+        )
         causal_edge_ids = self._export_causal_edges(
             final_world=final_world,
             sim_result=sim_result,
             session_log=session_log,
-            signal_id=update_signal_id,
+            signal_id=causal_export_signal_id,
             final_outcome_probs=sim_result.final_outcome_probs,
         )
         recorded_forecasts = self._record_forecasts(
@@ -725,13 +735,21 @@ class AnalysisPipeline:
     ) -> List[str]:
         """Persist a deterministic causal trace from signal -> params -> variables -> outcomes."""
 
-        if not signal_id:
-            return []
         runtime_step = int(final_world.runtime_step)
         simulation_seed = int(final_world.seed)
         confidence = max((float(value) for value in final_outcome_probs.values()), default=0.0)
         edge_ids: List[str] = []
         param_specs = self._parameter_delta_specs(final_world)
+        bootstrap_mode = str(signal_id).startswith("bootstrap:")
+        if bootstrap_mode and not param_specs:
+            param_specs = [
+                {
+                    "param_name": "baseline_world",
+                    "delta_value": 1.0,
+                    "delta_sign": 1,
+                    "node_id": f"param_delta:baseline_world:{final_world.domain_id}:t={int(final_world.t)}",
+                }
+            ]
         if not param_specs:
             return []
 
@@ -1159,10 +1177,8 @@ class AnalysisPipeline:
         """Return the pre-prior belief surface needed to estimate current momentum."""
 
         history = self._outcome_history.get(domain_id, [])
-        if not history:
+        if len(history) < 2:
             return None
-        if len(history) == 1:
-            return history[0]
         if self._same_probability_surface(history[-1], prior_outcome_probs):
             return history[-2]
         return history[-1]

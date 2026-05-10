@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+import logging
 
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.attentionscheduler import ObligationQueue
@@ -96,6 +97,15 @@ def test_analysis_pipeline_records_forecasts_and_creates_forecast_debt(tmp_path,
     assert {forecast.forecast_id for forecast in recorded} == set(result.metadata["forecast_ids"])
     assert all(forecast.session_id == "forecast-session" for forecast in recorded)
     assert all(forecast.horizon_steps == 5 for forecast in recorded)
+
+
+def test_analysis_pipeline_warns_when_forecast_registry_is_missing(tmp_path, caplog) -> None:
+    knowledge_graph = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+
+    with caplog.at_level(logging.WARNING):
+        _ = AnalysisPipeline(knowledge_graph=knowledge_graph)
+
+    assert "without ForecastRegistry" in caplog.text
 
 
 def test_analysis_pipeline_records_confidence_weighted_disagreement(tmp_path, water_market_schema) -> None:
@@ -200,6 +210,24 @@ def test_analysis_pipeline_update_exports_causal_edges_and_forecast_paths(tmp_pa
     assert {"causes", "propagates_to", "threshold_exceeded"} <= relation_types
     assert all(forecast.causal_path for forecast in recorded)
     assert any(edge.source == "signal:signal-123" and edge.relation_type == "causes" for edge in knowledge_graph.edges())
+
+
+def test_analysis_pipeline_run_exports_bootstrap_causal_edges_for_forecasts(tmp_path, water_market_schema) -> None:
+    registry = ForecastRegistry(auto_load=False, auto_save=False)
+    knowledge_graph = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    pipeline = AnalysisPipeline(
+        sim_config=SimConfig(max_steps=3, convergence_check_steps=50, convergence_epsilon=1.0e-4, seed=17),
+        knowledge_graph=knowledge_graph,
+        forecast_registry=registry,
+    )
+
+    result = pipeline.run(water_market_schema, session_log=SessionLog(session_id="bootstrap-causal"))
+    recorded = registry.pending()
+
+    assert result.metadata["forecast_ids"]
+    assert recorded
+    assert all(forecast.causal_path for forecast in recorded)
+    assert any(edge.source.startswith("signal:bootstrap:") and edge.relation_type == "causes" for edge in knowledge_graph.edges())
 
 
 def test_detect_belief_conflict_uses_signal_direction_vs_momentum() -> None:
@@ -491,6 +519,19 @@ def test_explain_forecast_legacy(tmp_path) -> None:
     assert explanation.causal_chain == []
     assert explanation.note is not None
     assert "Legacy forecast" in explanation.note
+
+
+def test_momentum_reference_returns_none_for_first_history_entry(tmp_path, water_market_schema) -> None:
+    knowledge_graph = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    pipeline = AnalysisPipeline(
+        sim_config=SimConfig(max_steps=2, convergence_check_steps=25, convergence_epsilon=1.0e-5, seed=11),
+        knowledge_graph=knowledge_graph,
+    )
+
+    result = pipeline.run(water_market_schema, session_log=SessionLog(session_id="momentum-prior"))
+    prior = result.simulation["final_outcome_probs"]
+
+    assert pipeline._momentum_reference("water_market", prior) is None
 
 
 def test_update_records_parameter_effect_mismatch_when_probability_moves_opposite(tmp_path) -> None:
