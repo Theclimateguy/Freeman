@@ -3670,10 +3670,10 @@
         ],
         "outputs": [
           "metadata patch",
-          "causal edges",
+          "relation review queue",
           "proposal node"
         ],
-        "comment": "Для schema_path/fallback режимов auto-applies ontology topics/aliases/causal edges.",
+        "comment": "Для schema_path/fallback режимов применяет ontology topics/aliases, но inferred causal edges по умолчанию ставит в review queue.",
         "invariant": "",
         "critical": false,
         "fallback": true,
@@ -5643,7 +5643,7 @@
         "target": "persist_context",
         "relation": "persists",
         "order": 104,
-        "comment": "Auto-applied repair updates KG/package/world metadata.",
+        "comment": "Repair persists KG/package/world metadata and only auto-applies causal edges when explicitly enabled above the confidence gate.",
         "transformation": "",
         "condition": "",
         "critical": false,

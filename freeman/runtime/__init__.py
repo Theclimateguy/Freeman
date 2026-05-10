@@ -2,6 +2,7 @@
 
 from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.contracts import ConsciousStateContract, KnowledgeGraphContract, WorldStateContract
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
 
@@ -13,4 +14,13 @@ def stream_runtime_main(argv=None):
 
     return main(argv)
 
-__all__ = ["AgentRuntime", "CheckpointManager", "EventLog", "StreamCursorStore", "stream_runtime_main"]
+__all__ = [
+    "AgentRuntime",
+    "CheckpointManager",
+    "ConsciousStateContract",
+    "EventLog",
+    "KnowledgeGraphContract",
+    "StreamCursorStore",
+    "WorldStateContract",
+    "stream_runtime_main",
+]

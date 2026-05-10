@@ -1494,16 +1494,59 @@ def test_trigger_ontology_repair_schema_path_writes_overlay_and_review_queue(tmp
     ]
     assert queue_lines
     queue_payload = json.loads(queue_lines[-1])
-    assert queue_payload["review_required"] is False
+    assert queue_payload["review_required"] is True
+    assert queue_payload["review_status"] == "queued_for_review"
     assert queue_payload["relation_candidates"]
-    assert queue_payload["applied_relation_candidates"]
-    assert queue_payload["appended_causal_edges"]
-    assert any(edge["source"] == "agriculture_output" and edge["target"] == "conflict_level" for edge in package_payload["schema"]["causal_dag"])
-    assert any(edge.source == "agriculture_output" and edge.target == "conflict_level" for edge in ctx.current_world.causal_dag)
+    assert queue_payload["relation_candidates"][0]["requires_confirmation"] is True
+    assert queue_payload["applied_relation_candidates"] == []
+    assert queue_payload["appended_causal_edges"] == []
     assert refreshed_trait is not None
     assert refreshed_trait.metadata["payload"]["repair_applied"] is True
-    assert refreshed_trait.metadata["payload"]["repair_review_required"] is False
+    assert refreshed_trait.metadata["payload"]["repair_review_required"] is True
     assert proposal_nodes
+
+
+def test_normalize_relation_candidates_requires_confirmation_by_default() -> None:
+    candidates = [
+        {
+            "source": "water_stock",
+            "target": "conflict_level",
+            "confidence": 0.9,
+            "support_topics": ["water stress"],
+        }
+    ]
+
+    normalized, applied = stream_runtime._normalize_relation_candidates(
+        candidates,
+        auto_apply=False,
+        min_confidence=0.75,
+    )
+
+    assert applied == []
+    assert normalized[0]["review_status"] == "queued_for_confirmation"
+    assert normalized[0]["requires_confirmation"] is True
+    assert normalized[0]["auto_applied"] is False
+
+
+def test_normalize_relation_candidates_can_auto_apply_when_explicitly_enabled() -> None:
+    candidates = [
+        {
+            "source": "water_stock",
+            "target": "conflict_level",
+            "confidence": 0.9,
+            "support_topics": ["water stress"],
+        }
+    ]
+
+    normalized, applied = stream_runtime._normalize_relation_candidates(
+        candidates,
+        auto_apply=True,
+        min_confidence=0.75,
+    )
+
+    assert applied == normalized
+    assert normalized[0]["review_status"] == "auto_applied"
+    assert normalized[0]["requires_confirmation"] is False
 
 
 def test_process_one_signal_blocks_updates_when_budget_is_exhausted(tmp_path, water_market_schema) -> None:

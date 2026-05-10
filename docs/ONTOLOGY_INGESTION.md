@@ -22,6 +22,7 @@ Best for:
 Limitations:
 - initial ontology coverage is bounded by the seed graph
 - novelty must arrive later through stream updates and ontology repair
+- inferred causal edges from repair are review-queued by default; enable auto-apply only for trusted, high-confidence maintenance runs
 
 ### 2. `brief_local_etl`
 

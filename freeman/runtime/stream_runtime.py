@@ -1684,9 +1684,18 @@ def _normalize_relation_candidates(
             "target": target,
             "confidence": confidence,
             "expected_sign": expected_sign if expected_sign in {"+", "-"} else "+",
+            "auto_apply_enabled": bool(auto_apply),
+            "min_confidence": float(min_confidence),
         }
         should_apply = bool(auto_apply and confidence >= float(min_confidence))
         normalized_candidate["auto_applied"] = should_apply
+        normalized_candidate["requires_confirmation"] = not should_apply
+        if should_apply:
+            normalized_candidate["review_status"] = "auto_applied"
+        elif confidence >= float(min_confidence):
+            normalized_candidate["review_status"] = "queued_for_confirmation"
+        else:
+            normalized_candidate["review_status"] = "below_confidence_threshold"
         normalized.append(normalized_candidate)
         if should_apply:
             applied.append(normalized_candidate)
@@ -1802,8 +1811,8 @@ def _apply_schema_path_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[
             }
         )
     metadata["ontology_aliases"] = alias_map
-    auto_apply_candidates = bool(ontology_cfg.get("auto_apply_relation_candidates", True))
-    auto_apply_min_confidence = float(ontology_cfg.get("auto_apply_min_confidence", 0.15))
+    auto_apply_candidates = bool(ontology_cfg.get("auto_apply_relation_candidates", False))
+    auto_apply_min_confidence = float(ontology_cfg.get("auto_apply_min_confidence", 0.75))
     default_relation_strength = str(ontology_cfg.get("default_relation_strength", "weak")).strip() or "weak"
     relation_candidates, applied_candidates = _normalize_relation_candidates(
         relation_candidates,
@@ -1815,6 +1824,16 @@ def _apply_schema_path_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[
         applied_candidates,
         default_strength=default_relation_strength,
     )
+    review_required = bool(
+        relation_candidates
+        and any(bool(candidate.get("requires_confirmation", False)) for candidate in relation_candidates)
+    )
+    if appended_edges:
+        review_status = "partial_auto_applied" if review_required else "auto_applied"
+    elif relation_candidates:
+        review_status = "queued_for_review"
+    else:
+        review_status = "metadata_only"
 
     proposal_id = f"ontology-repair:{_utc_now().strftime('%Y%m%dT%H%M%S')}:{abs(hash(tuple(unique_topics))) % 100000:05d}"
     history = [item for item in metadata.get("ontology_patch_history", []) if isinstance(item, dict)]
@@ -1825,7 +1844,8 @@ def _apply_schema_path_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[
             "gap_topics": list(unique_topics),
             "auto_applied_metadata": True,
             "auto_applied_relations": len(appended_edges),
-            "review_required": False,
+            "review_required": review_required,
+            "review_status": review_status,
         }
     )
     metadata["ontology_patch_history"] = history[-20:]
@@ -1855,12 +1875,11 @@ def _apply_schema_path_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[
     _apply_causal_edges_to_world(ctx.current_world, appended_edges)
     _apply_causal_edges_to_world(ctx.base_world_template, appended_edges)
 
-    review_required = False
     queue_payload = {
         "proposal_id": proposal_id,
         "timestamp": _utc_now().isoformat(),
         "bootstrap_mode": overlay_package["bootstrap_mode"],
-        "review_status": "auto_applied",
+        "review_status": review_status,
         "review_required": review_required,
         "gap_topics": list(unique_topics),
         "metadata_patch": {
@@ -1906,9 +1925,10 @@ def _apply_schema_path_ontology_repair(ctx: RuntimeContext, *, gap_topics: list[
     ctx.pipeline.conscious_state.runtime_metadata["ontology_repairs_triggered"] = int(ctx.stats["ontology_repairs_triggered"])
     ctx.pipeline.conscious_state.runtime_metadata["pending_ontology_repair_topics"] = list(unique_topics)
     LOGGER.info(
-        "Ontology repair overlay auto-applied. gap_topics=%s appended_edges=%s",
+        "Ontology repair overlay processed. gap_topics=%s appended_edges=%s review_required=%s",
         unique_topics,
         len(appended_edges),
+        review_required,
     )
     _persist_context(ctx)
     return True
@@ -2316,6 +2336,7 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
         return result
 
     trigger = triggers[0]
+    ctx.ingestion_engine._annotate_signal_conflicts([signal_payload, *ctx.pending_signals], [trigger])
     raw_requested_mode = str(getattr(trigger, "requested_mode", "") or "").upper()
     raw_mode = str(getattr(trigger, "mode", "") or "WATCH").upper()
     requested_mode = raw_requested_mode if raw_requested_mode not in {"", "WATCH"} or raw_mode == "WATCH" else raw_mode
@@ -2424,6 +2445,9 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
             "requested_mode": requested_mode,
             "budget_reason": budget_decision.stop_reason if budget_decision is not None else None,
             "estimated_cost": float(approved_cost if budget_decision is not None else 0.0),
+            "conflict_score": float(getattr(trigger, "conflict_score", 0.0)),
+            "conflict_reason": getattr(trigger, "conflict_reason", None),
+            "conflicts_with": list(getattr(trigger, "conflicts_with", [])),
         },
     )
     ctx.pipeline.conscious_state.trace_state.append(runtime_event)
@@ -2441,6 +2465,9 @@ def _process_one_signal(signal_payload: Signal, *, ctx: RuntimeContext) -> Signa
                 "approved_estimated_cost": float(approved_cost),
                 "world_updated": bool(should_update),
                 "update_error": update_error,
+                "conflict_score": float(getattr(trigger, "conflict_score", 0.0)),
+                "conflict_reason": getattr(trigger, "conflict_reason", None),
+                "conflicts_with": list(getattr(trigger, "conflicts_with", [])),
             },
         )
     ctx.cursor_store.commit(signal_id)

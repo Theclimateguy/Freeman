@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from freeman.agent.signalingestion import ManualSignalSource, Signal, SignalIngestionEngine, SignalMemory
+from freeman.agent.signalingestion import (
+    ManualSignalSource,
+    ShockClassification,
+    Signal,
+    SignalIngestionEngine,
+    SignalMemory,
+    SignalTrigger,
+)
 from freeman_connectors.http import HTTPJSONSignalSource
 from freeman_connectors.rss import _normalize_entry_timestamp
 
@@ -113,6 +120,67 @@ def test_signal_ingestion_uses_generic_interest_budget_without_dropping_signals(
     assert sum(1 for trigger in triggers if trigger.mode == "WATCH") == 2
     assert all(trigger.interest_score >= 0.0 for trigger in triggers)
     assert all(trigger.requested_mode in {"ANALYZE", "DEEP_DIVE"} for trigger in triggers)
+
+
+def test_signal_ingestion_marks_opposing_same_topic_signals_as_conflicts() -> None:
+    engine = SignalIngestionEngine()
+    signals = [
+        Signal(
+            signal_id="signal:stress",
+            source_type="manual",
+            text="Reservoir stress rising sharply.",
+            topic="water",
+            entities=["reservoir"],
+            sentiment=-0.8,
+        ),
+        Signal(
+            signal_id="signal:recovery",
+            source_type="manual",
+            text="Reservoir recovery improves allocation outlook.",
+            topic="water",
+            entities=["reservoir"],
+            sentiment=0.7,
+        ),
+    ]
+
+    triggers = engine.ingest(ManualSignalSource(signals))
+
+    assert {trigger.signal_id for trigger in triggers} == {"signal:stress", "signal:recovery"}
+    assert all(trigger.conflict_score > 0.0 for trigger in triggers)
+    assert triggers[0].conflicts_with == ["signal:recovery"]
+    assert triggers[1].conflicts_with == ["signal:stress"]
+    assert all(trigger.conflict_reason == "opposing_sentiment_same_topic_or_entity" for trigger in triggers)
+
+
+def test_signal_conflict_annotation_can_mark_current_trigger_against_queue() -> None:
+    engine = SignalIngestionEngine()
+    current = Signal(
+        signal_id="signal:current",
+        source_type="manual",
+        text="Reservoir stress rising.",
+        topic="water",
+        entities=["reservoir"],
+        sentiment=-0.8,
+    )
+    queued = Signal(
+        signal_id="signal:queued",
+        source_type="manual",
+        text="Reservoir recovery improving.",
+        topic="water",
+        entities=["reservoir"],
+        sentiment=0.8,
+    )
+    trigger = SignalTrigger(
+        signal_id="signal:current",
+        mahalanobis_score=0.0,
+        classification=ShockClassification("routine", 0.2, 0.1),
+        mode="WATCH",
+    )
+
+    engine._annotate_signal_conflicts([current, queued], [trigger])
+
+    assert trigger.conflict_score > 0.0
+    assert trigger.conflicts_with == ["signal:queued"]
 
 
 def test_http_json_source_uses_fallback_topic_when_topic_path_is_unset() -> None:

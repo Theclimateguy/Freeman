@@ -469,7 +469,15 @@ flowchart TD
     Q --> R
 ```
 
-Schema-path repair is metadata-first and can auto-append weak causal edges inferred from semantic co-mentions. LLM-synthesize repair appends observed topics to the domain brief, deletes the package and rebuilds through `_bootstrap`; it preserves KG by default.
+Schema-path repair is metadata-first. It always records ontology topics, aliases, relation candidates, and a KG proposal node, but inferred causal edges are queued for review by default. Auto-append of weak causal edges from semantic co-mentions is only allowed when `auto_apply_relation_candidates: true` and confidence is above `auto_apply_min_confidence`. LLM-synthesize repair appends observed topics to the domain brief, deletes the package and rebuilds through `_bootstrap`; it preserves KG by default.
+
+The runtime layer exposes structural contracts in `freeman.runtime.contracts`:
+
+- `WorldStateContract`: executable world state with snapshot/clone semantics.
+- `KnowledgeGraphContract`: persistent memory read/write/search surface.
+- `ConsciousStateContract`: deterministic consciousness-state serialization boundary.
+
+`SignalIngestionEngine` also marks contradictory retained signals before budgeting. Same-topic/entity signals with opposing sentiment receive `conflict_score`, `conflict_reason`, and `conflicts_with`; ingestion does not discard either side, so downstream belief-conflict logic sees the contradiction explicitly.
 
 ## 11. Budget governance
 

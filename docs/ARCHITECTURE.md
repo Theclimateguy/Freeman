@@ -174,6 +174,16 @@ Trail scopes are:
 
 These are registered in `freeman.agent.domainregistry.ROLE_TRAIL_SCOPE`.
 
+## Runtime Contracts
+
+The runtime boundary is documented as structural protocols in `freeman.runtime.contracts`:
+
+- `WorldStateContract`: executable world snapshots with `domain_id`, `t`, `runtime_step`, `snapshot()`, and `clone()`
+- `KnowledgeGraphContract`: persistent memory operations used by pipeline/runtime/query layers
+- `ConsciousStateContract`: serializable agent state exposed to deterministic consciousness operators
+
+These contracts are intentionally typing/documentation boundaries. Core classes do not inherit from them; tests assert structural compatibility so the layer interfaces remain explicit without adding coupling.
+
 ## Attention Routing
 
 Each task carries information features plus optional trail metadata:
@@ -209,6 +219,8 @@ sources -> SignalIngestionEngine -> AttentionScheduler -> AnalysisPipeline
 -> KnowledgeGraph / ForecastRegistry / ConsciousnessEngine
 -> Reconciler -> checkpoint / query / export
 ```
+
+`SignalIngestionEngine` preserves all retained signals but marks contradictory same-topic/entity signals with `conflict_score`, `conflict_reason`, and `conflicts_with`. This keeps the evidence available for downstream belief-conflict handling instead of suppressing one side at ingestion time.
 
 Bootstrap supports:
 
