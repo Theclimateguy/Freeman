@@ -2,7 +2,7 @@
 
 `hive_mind` is the compact production branch of Freeman: deterministic world simulation, persistent knowledge graph, stream runtime, and a role-scoped multi-agent layer on top of the same state.
 
-Current package version: `3.1.2`.
+Current package version: `3.2.0`.
 
 ## Scope
 
@@ -26,6 +26,8 @@ The hive-mind layer adds coordination on top of that base:
 - edge trail weights: `KGEdge.trail_weight`, `deposit_trail(...)`
 - role-scoped consciousness writes via `ConsciousState.agent_role`
 - role-scoped attention routing via `AttentionScheduler.eligible_tasks(trail_scope=...)`
+- safe ontology repair: inferred causal edges are review-queued by default, not silently appended
+- structural runtime contracts for `WorldState`, `KnowledgeGraph`, and `ConsciousState`
 
 ## What It Does
 
@@ -138,10 +140,12 @@ Role contracts live in:
 - 3D architecture: [docs/FREEMAN_ARCHITECTURE_3D.html](/Users/theclimateguy/Documents/science/Freeman/docs/FREEMAN_ARCHITECTURE_3D.html)
 - Consciousness layer: [docs/CONSCIOUSNESS_ARCHITECTURE.md](/Users/theclimateguy/Documents/science/Freeman/docs/CONSCIOUSNESS_ARCHITECTURE.md)
 - Ontology ingestion: [docs/ONTOLOGY_INGESTION.md](/Users/theclimateguy/Documents/science/Freeman/docs/ONTOLOGY_INGESTION.md)
+- Release 3.2 notes: [docs/RELEASE_3_2.md](/Users/theclimateguy/Documents/science/Freeman/docs/RELEASE_3_2.md)
 
 ## Notes
 
 - `runtime_step` is the agent clock; forecast horizons are verified on domain time `world.t`.
+- contradictory retained signals are marked with conflict metadata before budgeting and downstream belief updates.
 - compiled worlds created through `freeman.api.tool_api` persist under `runtime/compiled_worlds.json`, so tool-driven simulations survive process restarts.
 - `llm.provider: openai-compatible` is accepted as an alias of `openai`; use `llm.base_url` to point at any compatible endpoint.
 - LLMs are optional and do not own mutable internal state.

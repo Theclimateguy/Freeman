@@ -2,7 +2,7 @@
 
 This document describes the deterministic consciousness layer used on `hive_mind`: `SelfModelGraph`, `ConsciousState`, `ConsciousnessEngine`, `IdleScheduler`, `IdentityNarrator`, `ExplanationRenderer`, and their persistence hooks.
 
-This document defines the next development stage for Freeman: a deterministic consciousness layer built on top of the existing world model, knowledge graph, and reconciliation machinery.
+It describes the implemented deterministic consciousness layer built on top of the world model, knowledge graph, forecast registry, and reconciliation machinery.
 
 The design goal is to keep reasoning, identity, and continuity inside structured state rather than inside an LLM prompt. LLMs remain optional read-only interpreters of that state.
 
@@ -101,8 +101,8 @@ Primary stateful reasoning must remain in:
 - `WorldState`
 - `KnowledgeGraph`
 - `Reconciler`
-- new `SelfModelGraph`
-- new `ConsciousnessEngine`
+- `SelfModelGraph`
+- `ConsciousnessEngine`
 
 ### LLM layer
 
@@ -139,11 +139,11 @@ Forecast verification is now two-part:
 
 This keeps self-model updates tied to observed model performance rather than narrative residue.
 
-## Proposed Runtime Components
+## Runtime Components
 
 ### 1. `ConsciousState`
 
-New top-level state container:
+Implemented top-level state container:
 
 ```text
 ConsciousState
@@ -155,7 +155,7 @@ ConsciousState
   runtime_metadata
 ```
 
-Recommended location:
+Implementation:
 
 - `freeman/agent/consciousness.py`
 
@@ -163,11 +163,11 @@ Recommended location:
 
 Structured metacognitive memory built on top of KG-compatible concepts.
 
-Recommended location:
+Implementation:
 
 - `freeman/memory/selfmodel.py`
 
-This can initially wrap the existing `KnowledgeGraph` and reserve a namespace for self-model nodes.
+This wraps the existing `KnowledgeGraph` and reserves a namespace for self-model nodes.
 
 Write access must be restricted by design:
 
@@ -182,7 +182,7 @@ Current implementation note: the guard applies to KG-backed self-model writes. P
 
 Deterministic scorer that decides whether the agent should perform internal deliberation.
 
-Recommended location:
+Implementation:
 
 - `freeman/agent/consciousness.py`
 
@@ -235,7 +235,7 @@ consciousness:
 
 Read-only translator from `ConsciousState` to human narrative.
 
-Recommended location:
+Implementation:
 
 - `freeman/llm/identity_narrator.py`
 
@@ -243,20 +243,20 @@ Recommended location:
 
 Read-only renderer from transition trace to explanation text.
 
-Recommended location:
+Implementation:
 
 - `freeman/llm/explanation_renderer.py`
 
 ## Runtime Persistence and Resume
 
-The agent also needs a production runtime layer that can:
+The implemented production runtime layer can:
 
 - consume a local signal stream
 - update state incrementally
 - stop safely
 - restart from the same development level
 
-Persisting only the knowledge graph is not sufficient. To resume the agent faithfully, Freeman must persist the full runtime checkpoint:
+Persisting only the knowledge graph is not sufficient. To resume the agent faithfully, Freeman persists the full runtime checkpoint plus event log:
 
 ```text
 R_t = (C_t, O_t, S_t, P_t)
@@ -320,7 +320,7 @@ After a clean stop and restart:
 
 ### Runtime components
 
-Recommended new modules:
+Implemented modules:
 
 - `freeman/runtime/agent_runtime.py`
 - `freeman/runtime/checkpoint.py`
@@ -336,7 +336,7 @@ Single-process orchestrator:
 poll stream -> normalize signal -> update ConsciousState -> append event -> maybe checkpoint
 ```
 
-No background daemon is required for MVP; a foreground loop with graceful shutdown is enough.
+The shipped runtime is a foreground long-run loop with checkpoint/resume and graceful shutdown.
 
 #### `CheckpointManager`
 
@@ -382,16 +382,11 @@ The runtime should support three modes:
 
 ### CLI surface
 
-Recommended commands:
+The operational entrypoint is:
 
-- `freeman agent-start`
-- `freeman agent-stop`
-- `freeman agent-status`
-- `freeman agent-resume`
-- `freeman checkpoint-list`
-- `freeman checkpoint-inspect`
+- `python -m freeman.runtime.stream_runtime --config-path config.yaml --resume ...`
 
-For MVP, `agent-stop` can be implemented as graceful termination on `SIGINT` or `SIGTERM`, which forces:
+Stopping is graceful on `SIGINT` or `SIGTERM`, which forces:
 
 1. flush pending event log
 2. save checkpoint
@@ -415,9 +410,9 @@ data/
     runtime_state.json
 ```
 
-### Config extensions
+### Config surface
 
-Recommended additions to `config.yaml`:
+Relevant `config.yaml` fields:
 
 ```yaml
 runtime:
@@ -740,15 +735,6 @@ Do not add these yet:
 - free-form LLM reflection that mutates identity
 - unrestricted narrative memory as a source of truth
 
-## Implementation Order
+## Implementation Status
 
-Recommended execution order:
-
-1. `selfmodel.py`
-2. `ConsciousState` in `consciousness.py`
-3. trace schema and replay helpers
-4. pipeline integration hooks
-5. `IdleScheduler`
-6. read-only LLM narrators
-
-This order minimizes risk because it introduces structure first, operators second, and language-facing components last.
+The consciousness layer is implemented in `freeman.agent.consciousness`, `freeman.memory.selfmodel`, `freeman.runtime.checkpoint`, `freeman.runtime.event_log`, and `freeman.runtime.stream_runtime`. LLM-facing components remain read-only translators over deterministic state.

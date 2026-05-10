@@ -11,13 +11,14 @@ Normalize fresh or LLM-proposed graph state so the canonical model can be update
 
 ## Writes to
 
-- Graph layer: repaired canonical nodes, ontology-gap review state, and repair-trigger metadata.
+- Graph layer: repaired canonical nodes, ontology-gap review state, relation-candidate proposals, and repair-trigger metadata.
 - Trail left behind: `repair`.
 
 ## Triggers
 
 - Accumulated ontology-gap traits inside `freeman.agent.consciousness.ConsciousnessEngine._pending_ontology_gap_traits()`.
 - Reconciliation / canonical update pressure in `freeman.memory.reconciler.Reconciler`.
+- Relation candidates inferred from ontology gaps; causal DAG insertion remains review-queued unless auto-apply is explicitly enabled above the confidence gate.
 
 ## Idle Behaviour
 

@@ -3342,14 +3342,14 @@
           "AnalysisPipeline.verify_forecast"
         ],
         "inputs": [
-          "runtime_step",
+          "world.t",
           "current probabilities"
         ],
         "outputs": [
           "verified forecasts",
           "epistemic log"
         ],
-        "comment": "Монотонный runtime_step определяет due forecasts и фактическую ошибку.",
+        "comment": "Domain time world.t determines due forecasts; runtime_step remains agent-clock provenance.",
         "invariant": "",
         "critical": true,
         "fallback": false,

@@ -477,7 +477,7 @@ The runtime layer exposes structural contracts in `freeman.runtime.contracts`:
 - `KnowledgeGraphContract`: persistent memory read/write/search surface.
 - `ConsciousStateContract`: deterministic consciousness-state serialization boundary.
 
-`SignalIngestionEngine` also marks contradictory retained signals before budgeting. Same-topic/entity signals with opposing sentiment receive `conflict_score`, `conflict_reason`, and `conflicts_with`; ingestion does not discard either side, so downstream belief-conflict logic sees the contradiction explicitly.
+`SignalIngestionEngine` also marks contradictory retained signals before budgeting. Same-topic/entity signals with opposing sentiment receive `conflict_score`, `conflict_reason`, and `conflicts_with`; ingestion does not discard either side, so downstream belief-conflict logic sees the contradiction explicitly. The stream runtime also checks the current signal against the pending queue so one-at-a-time processing does not hide near-term contradictions.
 
 ## 11. Budget governance
 
@@ -901,6 +901,9 @@ The following index is generated from source files. It uses each symbol's docstr
   - `SignalIngestionEngine.trigger_mode(self, mahalanobis_score, classification, *, anomaly_lambda=..., semantic_threshold=...)`: Map statistical and semantic triggers into WATCH / ANALYZE / DEEP_DIVE.
   - `SignalIngestionEngine.novelty_score(self, signal, *, signal_memory=...)`: Return a generic novelty score from signal recurrence, independent of domain.
   - `SignalIngestionEngine.interest_score(self, *, mahalanobis_score, classification, novelty, anomaly_lambda=...)`: Score how much compute attention a signal deserves, without filtering domains.
+  - `SignalIngestionEngine._signal_overlap(self, left, right)`: Compare topic/entity overlap for conflict marking.
+  - `SignalIngestionEngine._pair_conflict_score(self, left, right)`: Score opposing-sentiment same-topic/entity contradictions.
+  - `SignalIngestionEngine._annotate_signal_conflicts(self, signals, triggers)`: Add conflict metadata to retained triggers without dropping evidence.
   - `SignalIngestionEngine._estimated_mode_cost(self, mode, *, analyze_cost, deep_dive_cost)`: Estimated mode cost.
   - `SignalIngestionEngine._apply_interest_budget(self, triggers, *, analysis_budget, analyze_cost, deep_dive_cost)`: Downgrade expensive analysis modes by generic interest ranking, not by topic.
   - `SignalIngestionEngine.ingest(self, source, *, classifier=..., signal_memory=..., skip_duplicates_within_hours=..., anomaly_lambda=..., semantic_threshold=..., analysis_budget=..., analyze_cost=..., deep_dive_cost=...)`: Fetch, score, classify, and rank signals for compute attention.
@@ -1800,6 +1803,12 @@ The following index is generated from source files. It uses each symbol's docstr
   - `KGSnapshotManager._prune_if_needed(self, manifest_path)`: Prune if needed.
 - `snapshot_manager_from_config(config, *, runtime_path, config_base)`: Snapshot manager from config.
 
+### `freeman/runtime/contracts.py`
+- `module`: Structural protocol contracts between core world, memory, and consciousness layers.
+- `class WorldStateContract`: Executable world state contract with `domain_id`, `t`, `runtime_step`, `snapshot()`, and `clone()`.
+- `class KnowledgeGraphContract`: Persistent memory read/write/search contract.
+- `class ConsciousStateContract`: Serializable deterministic consciousness-state contract.
+
 ### `freeman/runtime/queryengine.py`
 - `module`: Semantic runtime retrieval and answer synthesis over persisted artifacts.
 - `_merge_dicts(base, override)`: Merge dicts.
@@ -2252,5 +2261,5 @@ The following index is generated from source files. It uses each symbol's docstr
 
 - Generated symbol entries: `1229`.
 - Source roots: `freeman/`, `packages/freeman-connectors/freeman_connectors/`, `scripts/`.
-- Generated on: `2026-04-23`.
-- Branch constraint observed by caller: `main`.
+- Generated on: `2026-05-10`.
+- Branch constraint observed by caller: `hive_mind`.

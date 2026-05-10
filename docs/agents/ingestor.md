@@ -12,6 +12,7 @@ Absorb raw external signals and create the first machine-readable candidate node
 ## Writes to
 
 - Graph layer: candidate/raw KG nodes, typically signal- or anomaly-adjacent payloads.
+- Trigger metadata: contradictory same-topic/entity signals are marked with `conflict_score`, `conflict_reason`, and `conflicts_with` before downstream budgeting.
 - Trail left behind: `ingest`.
 
 ## Triggers
