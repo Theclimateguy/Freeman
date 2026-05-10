@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "hive_mind-*"
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -136,18 +137,31 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           notes_file="docs/RELEASE_3_2.md"
-          if [[ "$tag" != "hive_mind-3.2.0" || ! -f "$notes_file" ]]; then
+          release_title="$tag"
+          prerelease_flag="--prerelease"
+
+          if [[ "$tag" == "v3.2.0" ]]; then
+            release_title="Freeman 3.2.0"
+            prerelease_flag=""
+          elif [[ "$tag" == "hive_mind-3.2.0" ]]; then
+            release_title="Freeman 3.2.0 (hive_mind prerelease)"
+          else
             notes_file=""
           fi
+
+          if [[ ! -f "$notes_file" ]]; then
+            notes_file=""
+          fi
+
           if gh release view "$tag" >/dev/null 2>&1; then
             if [[ -n "$notes_file" ]]; then
-              gh release edit "$tag" --title "$tag" --notes-file "$notes_file" --prerelease
+              gh release edit "$tag" --title "$release_title" --notes-file "$notes_file" ${prerelease_flag}
             else
-              gh release edit "$tag" --title "$tag" --prerelease
+              gh release edit "$tag" --title "$release_title" ${prerelease_flag}
             fi
           elif [[ -n "$notes_file" ]]; then
-            gh release create "$tag" --title "$tag" --notes-file "$notes_file" --prerelease
+            gh release create "$tag" --title "$release_title" --notes-file "$notes_file" ${prerelease_flag}
           else
-            gh release create "$tag" --title "$tag" --notes "Automated prerelease for $tag" --prerelease
+            gh release create "$tag" --title "$release_title" --notes "Automated release for $tag" ${prerelease_flag}
           fi
           gh release upload "$tag" dist/* packages/freeman-connectors/dist/* --clobber

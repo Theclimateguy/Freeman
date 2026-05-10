@@ -1,6 +1,6 @@
 # Freeman 3.2
 
-`3.2.0` is the hive-mind hardening prerelease. It keeps the E2E runtime compact while closing the main architecture-review gaps around ontology repair safety, layer contracts, signal conflicts, and release CI.
+`3.2.0` is the official 3.2 release cut from the stabilized `hive_mind` branch. It keeps the E2E runtime compact while closing the main architecture-review gaps around ontology repair safety, layer contracts, signal conflicts, and release CI.
 
 ## What Changed
 
@@ -17,14 +17,14 @@
   - `conflict_reason`
   - `conflicts_with`
 - The stream runtime checks the current signal against the pending queue, so single-signal processing still surfaces near-term contradictions.
-- GitHub Actions now cover full pytest, CLI smoke tests, build artifacts, and prerelease publication for `hive_mind-*` tags.
+- GitHub Actions now cover full pytest, CLI smoke tests, build artifacts, `hive_mind-*` prereleases, and official `v*` release tags.
 
 ## Why It Matters
 
 - Freeman no longer silently converts semantic co-mentions into causal DAG mutations in the default path.
 - The core state interfaces are documented and tested without coupling the implementation to inheritance.
 - Contradictory evidence remains visible to downstream belief-conflict handling instead of being hidden by ingestion order.
-- The `hive_mind` branch is now a deployable prerelease branch with repeatable CI and release artifacts.
+- The `hive_mind` branch now serves as the release base for a repeatable, artifact-backed 3.2 line.
 
 ## Validation
 
