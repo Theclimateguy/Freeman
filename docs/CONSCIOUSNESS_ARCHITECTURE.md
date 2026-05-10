@@ -111,8 +111,16 @@ LLMs are restricted to read-only interpretation tasks:
 - unstructured signal -> structured candidate signal
 - structured state -> human-readable identity snapshot
 - trace slice -> human-readable explanation
+- persisted runtime evidence -> answer synthesis
+- persisted world state + explicit scenario policies -> calibrated what-if answer synthesis
 
 LLMs must not directly mutate `ConsciousState`.
+
+The what-if path stays on the same boundary:
+
+- the simulator computes baseline and scenario rollouts from `world_state.json`
+- the LLM only verbalizes the resulting deltas plus supporting KG / forecast evidence
+- no LLM call may alter `WorldState`, `KnowledgeGraph`, `ForecastRegistry`, or `ConsciousState`
 
 ## Current Implemented Grounding
 
@@ -603,6 +611,27 @@ signal
 ```
 
 This should be added after the existing `AnalysisPipeline` write/reconcile stage rather than replacing it.
+
+## Runtime Interpretation Boundary
+
+The current `hive_mind` branch now exposes two read-only interpretation surfaces:
+
+- `freeman ask`: retrieve runtime evidence from persisted `K_k`, `F_k`, and the current `W_k`, then synthesize an answer
+- `freeman what-if`: clone the persisted `W_k`, run baseline and scenario rollouts under explicit policies, then synthesize an answer from simulation deltas plus runtime evidence
+
+Formally, the scenario surface verbalizes:
+
+\[
+\Delta p(o) = p_{\mathrm{scenario}}(o) - p_{\mathrm{baseline}}(o),
+\]
+
+and selected state deltas
+
+\[
+\Delta r_j = r^{\mathrm{scenario}}_j - r^{\mathrm{baseline}}_j.
+\]
+
+This keeps the consciousness layer deterministic: the LLM may narrate or compare, but it does not own the internal state transition.
 
 ## Proposed File Plan
 

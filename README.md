@@ -134,6 +134,8 @@ Role contracts live in:
 ## Documentation
 
 - Architecture: [docs/ARCHITECTURE.md](/Users/theclimateguy/Documents/science/Freeman/docs/ARCHITECTURE.md)
+- Full architecture: [docs/FREEMAN_FULL_ARCHITECTURE.md](/Users/theclimateguy/Documents/science/Freeman/docs/FREEMAN_FULL_ARCHITECTURE.md)
+- 3D architecture: [docs/FREEMAN_ARCHITECTURE_3D.html](/Users/theclimateguy/Documents/science/Freeman/docs/FREEMAN_ARCHITECTURE_3D.html)
 - Consciousness layer: [docs/CONSCIOUSNESS_ARCHITECTURE.md](/Users/theclimateguy/Documents/science/Freeman/docs/CONSCIOUSNESS_ARCHITECTURE.md)
 - Ontology ingestion: [docs/ONTOLOGY_INGESTION.md](/Users/theclimateguy/Documents/science/Freeman/docs/ONTOLOGY_INGESTION.md)
 
