@@ -47,6 +47,27 @@ Checkpointing, stream execution, forecast verification, query/answer surface.
 6. `freeman.interface`
 CLI, exports, identity/explanation views, overrides, MCP entrypoints.
 
+## Query and Scenario E2E
+
+Freeman now exposes two distinct answer surfaces over persisted runtime state:
+
+- `ask`: retrieve runtime evidence from `K_k`, `F_k`, and the current `W_k`, then generate a grounded answer.
+- `what-if`: clone the persisted `W_k`, run a baseline rollout plus a scenario rollout under explicit policies, and only then generate an answer calibrated by both simulation deltas and runtime evidence.
+
+Formally, the scenario path computes
+
+\[
+\Delta p(o) = p_{\text{scenario}}(o) - p_{\text{baseline}}(o),
+\]
+
+plus top resource deltas
+
+\[
+\Delta r_j = r^{\text{scenario}}_j - r^{\text{baseline}}_j.
+\]
+
+The language model receives \((\Delta p, \Delta r)\) as the primary calibration layer and the KG / forecast evidence only as mechanistic support.
+
 ## Simulation Core
 
 The inner world step is
@@ -196,11 +217,14 @@ Bootstrap supports:
 
 and persists the chosen ingestion contract in `bootstrap_package.json`.
 
+Compiled worlds created through the tool API are also persisted under `runtime/compiled_worlds.json`, so `compile -> verify -> run -> get_state` remains valid across process restarts.
+
 ## Invariants
 
 - world updates are deterministic given the same structured inputs
 - mutable agent identity lives in structured state, not in prompts
 - LLMs are read-only interpreters, not the source of truth
+- OpenAI-compatible endpoints are supported through the `openai` / `openai-compatible` provider path as long as they expose chat-completions semantics
 - forecast verification is anchored to `world.t`, not `runtime_step`
 - role permissions and trail scopes constrain who can write and what each role can target
 

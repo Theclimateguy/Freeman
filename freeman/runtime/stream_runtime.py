@@ -189,7 +189,7 @@ def _build_chat_client(
             base_url=base_url or "https://api.deepseek.com",
             timeout_seconds=timeout_seconds,
         )
-    if provider_name == "openai":
+    if provider_name in {"openai", "openai-compatible", "openai_compatible"}:
         api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY or LLM_API_KEY is required for openai bootstrap mode.")

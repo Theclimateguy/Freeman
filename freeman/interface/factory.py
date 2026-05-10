@@ -107,7 +107,7 @@ def build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
     timeout_seconds = float(llm_cfg.get("timeout_seconds", 90.0))
     if provider in {"", "none"}:
         return None, "llm provider is not configured"
-    if provider == "openai":
+    if provider in {"openai", "openai-compatible", "openai_compatible"}:
         api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
         if not api_key:
             return None, "OPENAI_API_KEY or LLM_API_KEY is not set"

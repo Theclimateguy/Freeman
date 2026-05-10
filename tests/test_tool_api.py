@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -226,3 +227,62 @@ def test_invoke_tool_dispatches_runtime_query(tmp_path, water_market_schema) -> 
     )
 
     assert semantic["matched"] is True
+
+
+def test_compiled_world_registry_persists_across_registry_resets(tmp_path, water_market_schema) -> None:
+    config_path = tmp_path / "config.yaml"
+    runtime_path = tmp_path / "runtime"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "runtime": {"runtime_path": str(runtime_path)},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    tool_api.WORLD_REGISTRY.clear()
+    tool_api.TRAJECTORY_REGISTRY.clear()
+    compiled = tool_api.freeman_compile_domain(water_market_schema, config_path=str(config_path))
+    world_id = compiled["world_id"]
+    _ = tool_api.freeman_run_simulation(world_id, policies=[], max_steps=2, seed=11, config_path=str(config_path))
+
+    tool_api.WORLD_REGISTRY.clear()
+    tool_api.TRAJECTORY_REGISTRY.clear()
+    restored = tool_api.freeman_get_world_state(world_id, config_path=str(config_path))
+    verification = tool_api.freeman_verify_domain(world_id, config_path=str(config_path))
+
+    assert restored["domain_id"] == "water_market"
+    assert restored["t"] >= 1
+    assert verification["domain_id"] == "water_market"
+    assert (runtime_path / "compiled_worlds.json").exists()
+
+
+def test_runtime_what_if_tool_uses_world_model_and_runtime_evidence(tmp_path, water_market_schema, monkeypatch) -> None:
+    scenario_schema = copy.deepcopy(water_market_schema)
+    scenario_schema["resources"][0]["owner_id"] = "country_a"
+    scenario_schema["resources"][0]["evolution_params"]["phi_params"]["policy_scale"] = 25.0
+    config_path = _write_runtime_fixture(tmp_path, scenario_schema)
+
+    class _FakeChatClient:
+        def chat_text(self, messages, *, temperature=0.1, max_tokens=900):  # noqa: ANN001
+            del temperature, max_tokens
+            payload = json.loads(messages[1]["content"])
+            delta = payload["comparison"]["outcome_probability_delta"]["cooperation"]
+            return f"Scenario calibrated. Cooperation delta={delta:.3f}."
+
+    monkeypatch.setattr("freeman.runtime.queryengine.build_chat_client", lambda config: (_FakeChatClient(), None))
+    payload = tool_api.freeman_answer_what_if(
+        config_path=str(config_path),
+        text="What if Country A raises water inflow effort?",
+        policies=[{"actor_id": "country_a", "actions": {"water_release": 1.0}}],
+        max_steps=4,
+        limit=4,
+    )
+
+    assert payload["answer_generated"] is True
+    assert "Cooperation delta=" in str(payload["answer"])
+    assert payload["scenario_simulation"]["steps_run"] >= 1
+    assert payload["comparison"]["top_resource_deltas"][0]["resource_id"] == "water_stock"
+    assert abs(float(payload["comparison"]["outcome_probability_delta"]["cooperation"])) > 0.0

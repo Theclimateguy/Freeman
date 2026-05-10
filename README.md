@@ -86,7 +86,13 @@ Query persisted state:
 ```bash
 freeman query --config-path config.yaml --text "heat adaptation migration" --limit 5
 freeman ask "What changed most since the previous similar case?" --config-path config.yaml
+freeman what-if "What if Country A increases water releases?" \
+  --config-path config.yaml \
+  --policies-path examples/scenario_policies.json \
+  --max-steps 8
 ```
+
+`ask` answers from persisted runtime evidence only. `what-if` first simulates the current `world_state.json` under scenario policies, then uses runtime evidence as mechanism-level calibration for the final answer.
 
 Export the graph:
 
@@ -134,6 +140,8 @@ Role contracts live in:
 ## Notes
 
 - `runtime_step` is the agent clock; forecast horizons are verified on domain time `world.t`.
+- compiled worlds created through `freeman.api.tool_api` persist under `runtime/compiled_worlds.json`, so tool-driven simulations survive process restarts.
+- `llm.provider: openai-compatible` is accepted as an alias of `openai`; use `llm.base_url` to point at any compatible endpoint.
 - LLMs are optional and do not own mutable internal state.
 - `freeman-connectors` stays separate from the core runtime.
 - License: Apache License 2.0.

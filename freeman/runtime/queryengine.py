@@ -22,8 +22,10 @@ from freeman.agent.costmodel import (
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.consciousness import ConsciousState
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
+from freeman.core.scorer import score_outcomes
+from freeman.core.types import Policy
 from freeman.core.world import WorldState
-from freeman.game.runner import SimConfig
+from freeman.game.runner import GameRunner, SimConfig
 from freeman.interface.factory import (
     build_chat_client,
     build_embedding_adapter,
@@ -691,7 +693,159 @@ class RuntimeAnswerEngine:
             payload["budget"] = self._budget_summary()
         return payload
 
+    def answer_what_if(
+        self,
+        query_text: str,
+        *,
+        scenario_policies: Sequence[Policy | Dict[str, Any]],
+        baseline_policies: Sequence[Policy | Dict[str, Any]] | None = None,
+        max_steps: int = 10,
+        seed: int | None = None,
+        limit: int = 10,
+        chat_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """Answer a scenario question using the persisted world state as simulator input."""
+
+        result = self.query_engine.semantic_query(query_text, limit=limit)
+        payload = result.to_dict()
+        payload["budget"] = self._budget_summary()
+        world = self.artifacts.world_state
+        if world is None:
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": "persisted world_state is required for what-if analysis",
+                }
+            )
+            return payload
+
+        scenario_policy_objects = self._coerce_policies(scenario_policies)
+        if not scenario_policy_objects:
+            raise ValueError("scenario_policies must contain at least one policy.")
+        baseline_policy_objects = self._coerce_policies(baseline_policies or [])
+
+        budget_decision, approved_cost = self._what_if_budget_decision(query_text, max_steps=max_steps)
+        if budget_decision is not None and (not budget_decision.allowed or budget_decision.approved_mode == "WATCH"):
+            if self.artifacts.budget_ledger is not None:
+                self.artifacts.budget_ledger.record(
+                    task_type="what_if_generation",
+                    requested_mode="ANALYZE",
+                    decision=budget_decision,
+                    actual_cost=0.0,
+                    metadata={
+                        "query": query_text,
+                        "approved_estimated_cost": float(approved_cost),
+                        "max_steps": int(max_steps),
+                        "evidence_count": len(result.evidence),
+                    },
+                )
+                payload["budget"] = self._budget_summary()
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": f"budget gate blocked what-if analysis: {budget_decision.stop_reason or 'budget_policy'}",
+                }
+            )
+            return payload
+
+        runner = GameRunner(self._scenario_sim_config(world, max_steps=max_steps, seed=seed))
+        baseline_result = runner.run(world.clone(), baseline_policy_objects)
+        scenario_result = runner.run(world.clone(), scenario_policy_objects)
+        comparison = self._simulation_comparison(baseline_result.trajectory[-1], scenario_result.trajectory[-1])
+        payload.update(
+            {
+                "baseline_policies": [policy.snapshot() for policy in baseline_policy_objects],
+                "scenario_policies": [policy.snapshot() for policy in scenario_policy_objects],
+                "baseline_simulation": self._simulation_summary(baseline_result),
+                "scenario_simulation": self._simulation_summary(scenario_result),
+                "comparison": comparison,
+            }
+        )
+
+        if chat_client is None:
+            chat_client, llm_error = build_chat_client(self.artifacts.config)
+            if chat_client is None:
+                payload.update(
+                    {
+                        "answer": None,
+                        "answer_generated": False,
+                        "llm_error": llm_error or "llm provider is not configured",
+                    }
+                )
+                return payload
+
+        context_items = [self._answer_context_item(item) for item in result.evidence[: min(max(limit, 1), 8)]]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are Freeman's scenario answer engine. "
+                    "Use the baseline and scenario simulations as the primary calibration. "
+                    "Use the runtime evidence only to justify mechanisms or uncertainty. "
+                    "Answer the what-if question directly in 1-2 sentences, then give up to 4 short points. "
+                    "Distinguish simulated changes from current-state evidence, and state when the scenario impact is weak."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "query": query_text,
+                        "world_state": self._world_summary(),
+                        "baseline_simulation": payload["baseline_simulation"],
+                        "scenario_simulation": payload["scenario_simulation"],
+                        "comparison": comparison,
+                        "runtime_evidence": context_items,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        attempted_generation = False
+        try:
+            attempted_generation = True
+            answer = str(chat_client.chat_text(messages, temperature=0.1, max_tokens=900)).strip()
+            payload.update(
+                {
+                    "answer": answer,
+                    "answer_generated": True,
+                    "llm_error": None,
+                }
+            )
+        except Exception as exc:  # pragma: no cover - exercised only with live providers
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": str(exc),
+                }
+            )
+        if budget_decision is not None and self.artifacts.budget_ledger is not None:
+            self.artifacts.budget_ledger.record(
+                task_type="what_if_generation",
+                requested_mode="ANALYZE",
+                decision=budget_decision,
+                actual_cost=float(approved_cost if attempted_generation else 0.0),
+                metadata={
+                    "query": query_text,
+                    "approved_estimated_cost": float(approved_cost),
+                    "max_steps": int(max_steps),
+                    "evidence_count": len(result.evidence),
+                    "answer_generated": bool(payload.get("answer_generated")),
+                },
+            )
+            payload["budget"] = self._budget_summary()
+        return payload
+
     def _answer_budget_decision(self, query_text: str) -> tuple[Any | None, float]:
+        return self._budget_decision(query_text, sim_steps=0, task_prefix="answer")
+
+    def _what_if_budget_decision(self, query_text: str, *, max_steps: int) -> tuple[Any | None, float]:
+        return self._budget_decision(query_text, sim_steps=max(int(max_steps), 1) * 2, task_prefix="what_if")
+
+    def _budget_decision(self, query_text: str, *, sim_steps: int, task_prefix: str) -> tuple[Any | None, float]:
         if not self.artifacts.budget_tracking_enabled or self.artifacts.budget_ledger is None:
             return None, 0.0
         world = self.artifacts.world_state
@@ -703,9 +857,9 @@ class RuntimeAnswerEngine:
         def _estimate_for_mode(mode: str):
             idle_mode = str(mode or "WATCH").upper() == "WATCH"
             return self.artifacts.cost_model.estimate(
-                task_id=f"answer:{query_tokens}:{mode.lower()}",
+                task_id=f"{task_prefix}:{query_tokens}:{mode.lower()}",
                 llm_calls=0 if idle_mode else 1,
-                sim_steps=0,
+                sim_steps=0 if idle_mode else sim_steps,
                 actors=0 if idle_mode else actors,
                 resources=0 if idle_mode else resources,
                 domains=0 if idle_mode else domains,
@@ -753,6 +907,84 @@ class RuntimeAnswerEngine:
             "resources": sorted(world.resources),
             "outcomes": sorted(world.outcomes),
         }
+
+    def _scenario_sim_config(self, world: WorldState, *, max_steps: int, seed: int | None) -> SimConfig:
+        base_config = _build_sim_config(self.artifacts.config)
+        base_config.max_steps = max(int(max_steps), 1)
+        base_config.seed = int(world.seed if seed is None else seed)
+        return base_config
+
+    def _coerce_policies(self, policies: Sequence[Policy | Dict[str, Any]]) -> list[Policy]:
+        return [
+            policy if isinstance(policy, Policy) else Policy.from_snapshot(dict(policy))
+            for policy in policies
+        ]
+
+    def _simulation_summary(self, result: Any) -> dict[str, Any]:
+        final_snapshot = dict(result.trajectory[-1])
+        return {
+            "domain_id": result.domain_id,
+            "steps_run": int(result.steps_run),
+            "confidence": float(result.confidence),
+            "converged": bool(result.converged),
+            "stop_reason": result.metadata.get("stop_reason"),
+            "final_outcome_probs": {
+                outcome_id: float(value) for outcome_id, value in dict(result.final_outcome_probs).items()
+            },
+            "dominant_outcome": self._dominant_outcome(result.final_outcome_probs),
+            "world_t": int(final_snapshot.get("t", 0)),
+            "runtime_step": int(final_snapshot.get("runtime_step", 0)),
+        }
+
+    def _simulation_comparison(
+        self,
+        baseline_snapshot: dict[str, Any],
+        scenario_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        baseline_probs = self._snapshot_outcome_probs(baseline_snapshot)
+        scenario_probs = self._snapshot_outcome_probs(scenario_snapshot)
+        outcome_ids = sorted(set(baseline_probs) | set(scenario_probs))
+        outcome_deltas = {
+            outcome_id: float(scenario_probs.get(outcome_id, 0.0) - baseline_probs.get(outcome_id, 0.0))
+            for outcome_id in outcome_ids
+        }
+        resource_deltas = []
+        baseline_resources = dict(baseline_snapshot.get("resources", {}))
+        scenario_resources = dict(scenario_snapshot.get("resources", {}))
+        for resource_id in sorted(set(baseline_resources) | set(scenario_resources)):
+            baseline_resource = dict(baseline_resources.get(resource_id, {}))
+            scenario_resource = dict(scenario_resources.get(resource_id, {}))
+            baseline_value = float(baseline_resource.get("value", 0.0))
+            scenario_value = float(scenario_resource.get("value", 0.0))
+            resource_deltas.append(
+                {
+                    "resource_id": resource_id,
+                    "baseline_value": baseline_value,
+                    "scenario_value": scenario_value,
+                    "delta": float(scenario_value - baseline_value),
+                }
+            )
+        resource_deltas.sort(key=lambda item: abs(float(item["delta"])), reverse=True)
+        return {
+            "baseline_dominant_outcome": self._dominant_outcome(baseline_probs),
+            "scenario_dominant_outcome": self._dominant_outcome(scenario_probs),
+            "outcome_probability_delta": outcome_deltas,
+            "top_resource_deltas": resource_deltas[:5],
+        }
+
+    @staticmethod
+    def _snapshot_outcome_probs(snapshot: dict[str, Any]) -> dict[str, float]:
+        world = WorldState.from_snapshot(snapshot)
+        return {
+            outcome_id: float(value)
+            for outcome_id, value in score_outcomes(world).items()
+        }
+
+    @staticmethod
+    def _dominant_outcome(outcome_probs: dict[str, float]) -> str | None:
+        if not outcome_probs:
+            return None
+        return max(outcome_probs.items(), key=lambda item: float(item[1]))[0]
 
     def _answer_context_item(self, item: RuntimeEvidence) -> dict[str, Any]:
         payload = item.payload

@@ -421,6 +421,15 @@ def build_parser() -> argparse.ArgumentParser:
     ask_parser.add_argument("--node-type")
     ask_parser.add_argument("--min-confidence", type=float)
 
+    what_if_parser = subparsers.add_parser("what-if")
+    _add_config_option(what_if_parser)
+    what_if_parser.add_argument("query")
+    what_if_parser.add_argument("--policies-path", required=True)
+    what_if_parser.add_argument("--baseline-policies-path")
+    what_if_parser.add_argument("--max-steps", type=int, default=10)
+    what_if_parser.add_argument("--seed", type=int)
+    what_if_parser.add_argument("--limit", type=int, default=5)
+
     status_parser = subparsers.add_parser("status")
     _add_config_option(status_parser)
 
@@ -598,6 +607,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         payload["llm_error"] = payload.get("llm_error") or llm_error
         payload["match_count"] = payload.get("count", 0)
+        _print_json(payload)
+        return 0
+
+    if args.command == "what-if":
+        runtime_artifacts = load_runtime_artifacts(config_path)
+        chat_client, llm_error = _build_chat_client(config)
+        scenario_policies = _load_payload(args.policies_path)
+        baseline_policies = _load_payload(args.baseline_policies_path) if args.baseline_policies_path else []
+        payload = RuntimeAnswerEngine(runtime_artifacts).answer_what_if(
+            args.query,
+            scenario_policies=scenario_policies,
+            baseline_policies=baseline_policies,
+            max_steps=args.max_steps,
+            seed=args.seed,
+            limit=args.limit,
+            chat_client=chat_client,
+        )
+        payload["llm_error"] = payload.get("llm_error") or llm_error
         _print_json(payload)
         return 0
 
