@@ -94,6 +94,12 @@ Latency risk: the runtime can call one model per eligible role/node pair. With O
 
 Cost risk: OpenAI-compatible providers charge per token and per role frontier. Restrict `agent_stack.llm.roles`, lower `max_tokens`, and prefer planner-only augmentation for production runs with remote endpoints.
 
+## Known Limitations
+
+Distributed locking: `KnowledgeGraph.try_lock(...)` is a cooperative lock stored in the current KG backend. It is suitable for a single runtime process, a single host, or carefully serialized operational runs, but it is not a distributed consensus lock. Do not run multiple hive runtimes against the same mutable KG path from different hosts or unsynchronized processes and assume exactly-once role execution.
+
+Production deployments that need concurrent workers should put a real lease layer in front of the KG, for example Postgres advisory locks, Redis `SET NX PX`, etcd leases, or a queue with visibility timeouts. Until that exists, treat `lock_ttl_seconds` as stale-lock recovery for local/process failure, not as a cross-host correctness guarantee.
+
 Production baseline:
 
 ```yaml
