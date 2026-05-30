@@ -136,17 +136,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
-          notes_file="docs/RELEASE_3_2.md"
           release_title="$tag"
           prerelease_flag="--prerelease"
+          version=""
 
-          if [[ "$tag" == "v3.2.0" ]]; then
-            release_title="Freeman 3.2.0"
+          if [[ "$tag" == v* ]]; then
+            version="${tag#v}"
+            release_title="Freeman $version"
             prerelease_flag=""
-          elif [[ "$tag" == "hive_mind-3.2.0" ]]; then
-            release_title="Freeman 3.2.0 (hive_mind prerelease)"
-          else
-            notes_file=""
+          elif [[ "$tag" == hive_mind-* ]]; then
+            version="${tag#hive_mind-}"
+            release_title="Freeman $version (hive_mind prerelease)"
+          fi
+
+          notes_file=""
+          if [[ -n "$version" ]]; then
+            notes_file="docs/RELEASE_${version//./_}.md"
+          fi
+          if [[ ! -f "$notes_file" && "$version" == "3.2.0" ]]; then
+            notes_file="docs/RELEASE_3_2.md"
           fi
 
           if [[ ! -f "$notes_file" ]]; then

@@ -4,7 +4,7 @@
 
 `hive_mind` is the compact production branch of Freeman: deterministic world simulation, persistent knowledge graph, stream runtime, and a role-scoped multi-agent layer on top of the same state.
 
-Current package version: `3.2.0`.
+Current package version: `3.2.1`.
 
 ## Scope
 
