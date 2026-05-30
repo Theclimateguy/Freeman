@@ -98,7 +98,7 @@ Cost risk: OpenAI-compatible providers charge per token and per role frontier. R
 
 Distributed locking is backend-dependent. The default `memory` backend preserves the original cooperative KG-node lock fields and is suitable for a single runtime process, a single host, or carefully serialized operational runs, but it is not a distributed consensus lock. Do not run multiple hive runtimes against the same mutable KG path from different hosts or unsynchronized processes with `lock_backend: "memory"` and assume exactly-once role execution.
 
-`filesystem` is a zero-dependency single-host multi-process backend based on atomic lock files. `redis` is the first cross-host backend and uses Redis `SET NX PX` leases. Install it with `pip install ".[redis]"` or provide the `redis` package in the runtime image. Production deployments that need concurrent workers should use `redis` or put an equivalent lease layer in front of the KG, for example Postgres advisory locks, etcd leases, or a queue with visibility timeouts.
+`filesystem` is a zero-dependency single-host multi-process backend based on atomic lock files. `redis` is the first cross-host backend and uses Redis `SET NX PX` leases. Owner-checked Redis unlocks use a Lua compare-and-delete script so a late unlock cannot delete a new owner's lease after TTL rollover. Install it with `pip install ".[redis]"` or provide the `redis` package in the runtime image. Production deployments that need concurrent workers should use `redis` or put an equivalent lease layer in front of the KG, for example Postgres advisory locks, etcd leases, or a queue with visibility timeouts.
 
 ## Horizontal Scaling
 

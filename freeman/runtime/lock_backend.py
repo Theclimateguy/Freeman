@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -12,6 +12,10 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 
 SaveCallback = Callable[[], None]
+REDIS_UNLOCK_SCRIPT = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
 
 
 @runtime_checkable
@@ -247,6 +251,7 @@ class RedisLockBackend:
     key_prefix: str = "freeman:node-lock"
     backend_name: str = "redis"
     stores_graph_lock_state: bool = False
+    _unlock_script: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.client is not None:
@@ -297,12 +302,9 @@ class RedisLockBackend:
     ) -> bool:
         del graph, save_callback
         key = self._key(namespace, node_id)
-        current_owner = self._decode(self.client.get(key))
-        if current_owner is None:
-            return False
-        if not force and agent_id is not None and current_owner != str(agent_id):
-            return False
-        return bool(self.client.delete(key))
+        if force or agent_id is None:
+            return bool(self.client.delete(key))
+        return bool(self._registered_unlock_script()(keys=[key], args=[str(agent_id)]))
 
     def _key(self, namespace: str, node_id: str) -> str:
         return f"{self.key_prefix}:{_safe_key(namespace)}:{_safe_key(node_id)}"
@@ -314,10 +316,16 @@ class RedisLockBackend:
             return value.decode("utf-8")
         return str(value)
 
+    def _registered_unlock_script(self) -> Any:
+        if self._unlock_script is None:
+            self._unlock_script = self.client.register_script(REDIS_UNLOCK_SCRIPT)
+        return self._unlock_script
+
 
 __all__ = [
     "FileSystemLockBackend",
     "InMemoryLockBackend",
     "LockBackend",
+    "REDIS_UNLOCK_SCRIPT",
     "RedisLockBackend",
 ]

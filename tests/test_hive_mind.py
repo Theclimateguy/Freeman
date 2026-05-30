@@ -103,6 +103,10 @@ class FakeRedisClient:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.expirations: dict[str, int] = {}
+        self.delete_calls: list[str] = []
+        self.get_calls: list[str] = []
+        self.registered_scripts: list[str] = []
+        self.script_calls: list[tuple[str, list[str], list[str]]] = []
 
     def set(self, key: str, value: str, *, nx: bool = False, px: int | None = None):  # noqa: ANN001
         if nx and key in self.values:
@@ -113,6 +117,7 @@ class FakeRedisClient:
         return True
 
     def get(self, key: str):  # noqa: ANN001
+        self.get_calls.append(key)
         value = self.values.get(key)
         return value.encode("utf-8") if value is not None else None
 
@@ -123,10 +128,26 @@ class FakeRedisClient:
         return True
 
     def delete(self, key: str) -> int:
+        self.delete_calls.append(key)
         existed = key in self.values
         self.values.pop(key, None)
         self.expirations.pop(key, None)
         return int(existed)
+
+    def register_script(self, script: str):  # noqa: ANN001
+        self.registered_scripts.append(script)
+
+        def run(*, keys: list[str], args: list[str]) -> int:
+            self.script_calls.append((script, list(keys), list(args)))
+            key = keys[0]
+            owner = args[0]
+            if self.values.get(key) != owner:
+                return 0
+            self.values.pop(key, None)
+            self.expirations.pop(key, None)
+            return 1
+
+        return run
 
 
 def test_redis_lock_backend_uses_set_nx_px_and_owner_guard(tmp_path) -> None:
@@ -151,9 +172,31 @@ def test_redis_lock_backend_uses_set_nx_px_and_owner_guard(tmp_path) -> None:
     assert not second.try_lock("n1", "agent-b", lock_ttl_seconds=2.5)
     assert first.try_lock("n1", "agent-a", lock_ttl_seconds=3.0)
     assert list(client.expirations.values())[-1] == 3000
+    get_calls_before_unlock = len(client.get_calls)
     assert not second.unlock("n1", "agent-b")
+    assert len(client.get_calls) == get_calls_before_unlock
+    assert not client.delete_calls
+    assert client.script_calls[-1][2] == ["agent-b"]
     assert first.unlock("n1", "agent-a")
+    assert client.script_calls[-1][2] == ["agent-a"]
     assert second.try_lock("n1", "agent-b", lock_ttl_seconds=2.5)
+
+
+def test_redis_lock_backend_force_unlock_uses_plain_delete(tmp_path) -> None:
+    client = FakeRedisClient()
+    graph_path = tmp_path / "kg.json"
+    kg = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=RedisLockBackend(client=client),
+    )
+    kg.add_node(KGNode(id="n1", label="Node 1", confidence=0.8))
+
+    assert kg.try_lock("n1", "agent-a", lock_ttl_seconds=2.5)
+    assert kg.unlock("n1", "agent-b", force=True)
+    assert client.delete_calls
+    assert not client.script_calls
 
 
 def test_build_hive_runtime_from_config_selects_filesystem_lock_backend(tmp_path) -> None:
