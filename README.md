@@ -1,5 +1,7 @@
 # Freeman Hive Mind
 
+[![Tests](https://github.com/Theclimateguy/Freeman/actions/workflows/tests.yml/badge.svg?branch=hive_mind)](https://github.com/Theclimateguy/Freeman/actions/workflows/tests.yml?query=branch%3Ahive_mind)
+
 `hive_mind` is the compact production branch of Freeman: deterministic world simulation, persistent knowledge graph, stream runtime, and a role-scoped multi-agent layer on top of the same state.
 
 Current package version: `3.2.0`.

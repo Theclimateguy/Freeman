@@ -36,7 +36,7 @@ agent_stack:
   event_log_path: ""
   llm:
     enabled: false
-    roles: ["narrator"]
+    roles: ["narrator", "planner"]
     temperature: 0.1
     max_tokens: 512
     role_models:
@@ -48,11 +48,9 @@ agent_stack:
       narrator:
         provider: "ollama"
         model: "qwen2.5-coder:14b"
-      verifier:
-        provider: "openai-compatible"
-        model: "gpt-4o-mini"
-        base_url: "https://api.openai.com/v1"
-        api_key_env: "OPENAI_API_KEY"
+      planner:
+        provider: "ollama"
+        model: "qwen2.5-coder:14b"
 
 llm:
   provider: ""

@@ -266,6 +266,146 @@ def test_hive_runtime_uses_role_scoped_llm_when_enabled(tmp_path) -> None:
     assert node.metadata["hive_role_outputs"]["narrator"]["summary"] == "structured narrator proposal"
 
 
+def test_hive_runtime_planner_uses_role_scoped_llm_when_enabled(tmp_path) -> None:
+    class FakeChatClient:
+        model = "fake-qwen"
+        base_url = "memory://fake"
+
+        def chat_text(self, messages, *, temperature, max_tokens):  # noqa: ANN001
+            assert messages[0]["role"] == "system"
+            assert temperature == pytest.approx(0.1)
+            assert max_tokens == 48
+            return "planner selected the dominant causal frontier"
+
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(
+        KGNode(
+            id="claim:repair",
+            label="Repaired mechanism",
+            content="A repaired mechanism is ready for planner attention.",
+            confidence=0.8,
+            metadata={"trail_type": "repair"},
+        )
+    )
+    runtime = HiveMindRuntime(
+        state=_state(kg),
+        knowledge_graph=kg,
+        runtime_path=tmp_path,
+        config=HiveRuntimeConfig(
+            role_order=("planner",),
+            llm_enabled=True,
+            llm_roles=("planner",),
+            llm_max_tokens=48,
+        ),
+        role_clients={
+            "planner": RoleClientBinding(
+                role="planner",
+                provider="ollama",
+                model="fake-qwen",
+                base_url="memory://fake",
+                client=FakeChatClient(),
+            )
+        },
+    )
+
+    report = runtime.run(cycles=1)
+    node = kg.get_node("claim:repair")
+
+    assert report.actions[0].llm_used is True
+    assert report.actions[0].summary == "planner selected the dominant causal frontier"
+    assert node is not None
+    assert node.metadata["trail_type"] == "read_plan"
+    assert node.metadata["hive_role_outputs"]["planner"]["summary"] == "planner selected the dominant causal frontier"
+
+
+def test_hive_runtime_planner_missing_api_key_falls_back_to_deterministic_summary(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    config = {
+        "agent_stack": {
+            "role_order": ["planner"],
+            "llm": {
+                "enabled": True,
+                "roles": ["planner"],
+                "role_models": {
+                    "default": {
+                        "provider": "openai-compatible",
+                        "model": "gpt-4o-mini",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key_env": "OPENAI_API_KEY",
+                    }
+                },
+            },
+        }
+    }
+    bindings = build_hive_role_clients(config)
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(KGNode(id="claim:verified", label="Verified claim", confidence=0.8, metadata={"trail_type": "verified"}))
+    runtime = HiveMindRuntime(
+        state=_state(kg),
+        knowledge_graph=kg,
+        runtime_path=tmp_path,
+        config=HiveRuntimeConfig(role_order=("planner",), llm_enabled=True, llm_roles=("planner",)),
+        role_clients=bindings,
+    )
+
+    report = runtime.run(cycles=1)
+
+    assert bindings["planner"].available is False
+    assert report.actions[0].llm_used is False
+    assert report.actions[0].summary == "planner routed node claim:verified from verified to read_plan"
+    assert report.actions[0].metadata["llm_error"] == "OPENAI_API_KEY or LLM_API_KEY is required for openai-compatible"
+
+
+def test_hive_runtime_planner_llm_exception_records_error_and_falls_back(tmp_path) -> None:
+    class RaisingChatClient:
+        model = "broken-qwen"
+        base_url = "memory://broken"
+
+        def chat_text(self, messages, *, temperature, max_tokens):  # noqa: ANN001
+            del messages, temperature, max_tokens
+            raise RuntimeError("planner model unavailable")
+
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(KGNode(id="claim:verified", label="Verified claim", confidence=0.8, metadata={"trail_type": "verified"}))
+    runtime = HiveMindRuntime(
+        state=_state(kg),
+        knowledge_graph=kg,
+        runtime_path=tmp_path,
+        config=HiveRuntimeConfig(role_order=("planner",), llm_enabled=True, llm_roles=("planner",)),
+        role_clients={
+            "planner": RoleClientBinding(
+                role="planner",
+                provider="ollama",
+                model="broken-qwen",
+                base_url="memory://broken",
+                client=RaisingChatClient(),
+            )
+        },
+    )
+
+    report = runtime.run(cycles=1)
+
+    assert report.actions[0].llm_used is False
+    assert report.actions[0].summary == "planner routed node claim:verified from verified to read_plan"
+    assert report.actions[0].metadata["llm_error"] == "planner model unavailable"
+
+
+def test_hive_runtime_deterministic_fallback_summary_format_is_stable(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(KGNode(id="claim:verified", label="Verified claim", confidence=0.8, metadata={"trail_type": "verified"}))
+    runtime = HiveMindRuntime(
+        state=_state(kg),
+        knowledge_graph=kg,
+        runtime_path=tmp_path,
+        config=HiveRuntimeConfig(role_order=("planner",), llm_enabled=False),
+    )
+
+    report = runtime.run(cycles=1)
+
+    assert report.actions[0].summary == "planner routed node claim:verified from verified to read_plan"
+
+
 def test_build_hive_role_clients_accepts_qwen_and_openai_compatible_localhost(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)

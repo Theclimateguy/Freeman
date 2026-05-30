@@ -53,7 +53,7 @@ DEFAULT_HIVE_CONFIG: dict[str, Any] = {
         "event_log_path": "",
         "llm": {
             "enabled": False,
-            "roles": ["narrator"],
+            "roles": ["narrator", "planner"],
             "temperature": 0.1,
             "max_tokens": 512,
             "role_models": {
@@ -158,7 +158,7 @@ class HiveRuntimeConfig:
     max_role_revisits_per_node: int = 1
     lock_ttl_seconds: float = 120.0
     llm_enabled: bool = False
-    llm_roles: tuple[AgentRole, ...] = ("narrator",)
+    llm_roles: tuple[AgentRole, ...] = ("narrator", "planner")
     llm_temperature: float = 0.1
     llm_max_tokens: int = 512
 
@@ -167,7 +167,7 @@ class HiveRuntimeConfig:
         stack_cfg = dict(config.get("agent_stack", {}) or {})
         llm_cfg = dict(stack_cfg.get("llm", {}) or {})
         role_order = tuple(_coerce_role(role) for role in stack_cfg.get("role_order", HIVE_ROLE_ORDER))
-        llm_roles = tuple(_coerce_role(role) for role in llm_cfg.get("roles", ["narrator"]))
+        llm_roles = tuple(_coerce_role(role) for role in llm_cfg.get("roles", ["narrator", "planner"]))
         return cls(
             enabled=bool(stack_cfg.get("enabled", True)),
             runtime_id=str(stack_cfg.get("runtime_id") or "hive-local"),
@@ -436,7 +436,7 @@ class HiveMindRuntime:
                         )
                     ).strip()
                     llm_used = bool(llm_text)
-                except Exception as exc:  # pragma: no cover - live LLM boundary
+                except Exception as exc:
                     llm_error = str(exc)
             else:
                 llm_error = binding.error or "role client unavailable"
