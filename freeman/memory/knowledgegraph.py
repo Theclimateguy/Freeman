@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
-import time
 from typing import TYPE_CHECKING, Any, Dict, List, Sequence
 
 import networkx as nx
@@ -273,12 +272,15 @@ class KnowledgeGraph:
         llm_adapter: Any | None = None,
         vectorstore: KGVectorStore | None = None,
         sync_vectorstore_on_load: bool = True,
+        lock_backend: Any | None = None,
     ) -> None:
         self.json_path = Path(json_path).resolve() if json_path is not None else _default_json_path(config_path)
         self.auto_save = auto_save
         self.llm_adapter = llm_adapter
         self.vectorstore = vectorstore
         self.sync_vectorstore_on_load = bool(sync_vectorstore_on_load)
+        self.lock_backend = lock_backend or self._default_lock_backend()
+        self.lock_namespace = str(self.json_path)
         self.graph = nx.MultiDiGraph()
         if auto_load and self.json_path.exists():
             self.load()
@@ -334,43 +336,34 @@ class KnowledgeGraph:
 
         if node_id not in self.graph:
             return False
-        if not str(agent_id).strip():
-            raise ValueError("agent_id must be non-empty")
-        now = time.time()
-        lock_owner = self.graph.nodes[node_id].get("locked_by")
-        lock_timestamp = self.graph.nodes[node_id].get("locked_at")
-        if lock_owner is None:
-            self.graph.nodes[node_id]["locked_by"] = str(agent_id)
-            self.graph.nodes[node_id]["locked_at"] = now
-            self._maybe_save()
-            return True
-        if lock_owner == str(agent_id):
-            self.graph.nodes[node_id]["locked_at"] = now
-            self._maybe_save()
-            return True
-        if lock_ttl_seconds is not None and lock_timestamp is not None:
-            if (now - float(lock_timestamp)) >= max(float(lock_ttl_seconds), 0.0):
-                self.graph.nodes[node_id]["locked_by"] = str(agent_id)
-                self.graph.nodes[node_id]["locked_at"] = now
-                self._maybe_save()
-                return True
-        return False
+        acquired = self.lock_backend.try_lock(
+            node_id,
+            agent_id,
+            graph=self.graph,
+            namespace=self.lock_namespace,
+            lock_ttl_seconds=lock_ttl_seconds,
+            save_callback=self._maybe_save,
+        )
+        if acquired and not bool(getattr(self.lock_backend, "stores_graph_lock_state", False)):
+            self._mark_graph_lock(node_id, agent_id)
+        return bool(acquired)
 
     def unlock(self, node_id: str, agent_id: str | None = None, *, force: bool = False) -> bool:
         """Release a cooperative node lock."""
 
         if node_id not in self.graph:
             return False
-        node_payload = self.graph.nodes[node_id]
-        lock_owner = node_payload.get("locked_by")
-        if lock_owner is None:
-            return False
-        if not force and agent_id is not None and str(lock_owner) != str(agent_id):
-            return False
-        node_payload["locked_by"] = None
-        node_payload["locked_at"] = None
-        self._maybe_save()
-        return True
+        unlocked = self.lock_backend.unlock(
+            node_id,
+            agent_id,
+            graph=self.graph,
+            namespace=self.lock_namespace,
+            force=force,
+            save_callback=self._maybe_save,
+        )
+        if unlocked and not bool(getattr(self.lock_backend, "stores_graph_lock_state", False)):
+            self._clear_graph_lock(node_id)
+        return bool(unlocked)
 
     def deposit_trail(
         self,
@@ -1079,6 +1072,31 @@ class KnowledgeGraph:
         if not left_node.embedding or not right_node.embedding:
             return None
         return self._cosine_similarity(left_node.embedding, right_node.embedding)
+
+    def _default_lock_backend(self) -> Any:
+        """Build the default graph-backed lock backend lazily to avoid import cycles."""
+
+        from freeman.runtime.lock_backend import InMemoryLockBackend
+
+        return InMemoryLockBackend()
+
+    def _mark_graph_lock(self, node_id: str, agent_id: str) -> None:
+        """Mirror an external lock into node metadata for local observability."""
+
+        if node_id not in self.graph:
+            return
+        self.graph.nodes[node_id]["locked_by"] = str(agent_id)
+        self.graph.nodes[node_id]["locked_at"] = datetime.now(timezone.utc).timestamp()
+        self._maybe_save()
+
+    def _clear_graph_lock(self, node_id: str) -> None:
+        """Clear local lock observability fields after an external unlock."""
+
+        if node_id not in self.graph:
+            return
+        self.graph.nodes[node_id]["locked_by"] = None
+        self.graph.nodes[node_id]["locked_at"] = None
+        self._maybe_save()
 
     def _prepare_node(self, node: KGNode, previous: KGNode | None) -> KGNode:
         prepared = KGNode.from_snapshot(node.snapshot())

@@ -30,6 +30,7 @@ from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.selfmodel import SelfModelGraph
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
+from freeman.runtime.lock_backend import FileSystemLockBackend, InMemoryLockBackend, RedisLockBackend
 from freeman.utils import deep_copy_jsonable
 
 HIVE_ROLE_ORDER: tuple[AgentRole, ...] = ("ingestor", "repairer", "planner", "narrator", "verifier")
@@ -48,6 +49,9 @@ DEFAULT_HIVE_CONFIG: dict[str, Any] = {
         "frontier_limit_per_role": 5,
         "max_actions_per_cycle": 25,
         "max_role_revisits_per_node": 1,
+        "lock_backend": "memory",
+        "lock_redis_url": "",
+        "lock_filesystem_path": "",
         "lock_ttl_seconds": 120.0,
         "checkpoint_path": "",
         "event_log_path": "",
@@ -625,6 +629,34 @@ def _event_log_path(config: Mapping[str, Any], *, config_path: Path, runtime_pat
     return runtime_path / "hive_event_log.jsonl"
 
 
+def build_lock_backend_from_config(
+    config: Mapping[str, Any],
+    *,
+    config_path: Path,
+    runtime_path: Path,
+) -> Any:
+    """Build the configured node-lock backend for hive runtimes."""
+
+    stack_cfg = dict(config.get("agent_stack", {}) or {})
+    backend = str(stack_cfg.get("lock_backend", "memory") or "memory").strip().lower()
+    if backend in {"", "memory", "inmemory", "in_memory"}:
+        return InMemoryLockBackend()
+    if backend in {"filesystem", "file", "fs"}:
+        configured_path = str(stack_cfg.get("lock_filesystem_path", "") or "")
+        lock_dir = (
+            resolve_path(config_path.parent, configured_path, configured_path)
+            if configured_path
+            else runtime_path / "node_locks"
+        )
+        return FileSystemLockBackend(lock_dir=lock_dir)
+    if backend == "redis":
+        redis_url = str(stack_cfg.get("lock_redis_url", "") or os.getenv("FREEMAN_REDIS_URL", "")).strip()
+        if not redis_url:
+            raise RuntimeError("agent_stack.lock_redis_url or FREEMAN_REDIS_URL is required when lock_backend=redis")
+        return RedisLockBackend(redis_url=redis_url)
+    raise ValueError(f"Unsupported agent_stack.lock_backend: {backend}")
+
+
 def build_hive_runtime_from_config(
     config_path: str | Path = "config.yaml",
     *,
@@ -638,6 +670,11 @@ def build_hive_runtime_from_config(
     runtime_path.mkdir(parents=True, exist_ok=True)
     vectorstore = build_vectorstore(config, config_path=resolved_config_path)
     embedding_adapter, _embedding_label = build_embedding_adapter(config)
+    lock_backend = build_lock_backend_from_config(
+        config,
+        config_path=resolved_config_path,
+        runtime_path=runtime_path,
+    )
     knowledge_graph = build_knowledge_graph(
         config,
         config_path=resolved_config_path,
@@ -645,6 +682,7 @@ def build_hive_runtime_from_config(
         vectorstore=vectorstore,
         auto_load=True,
         auto_save=True,
+        lock_backend=lock_backend,
     )
     checkpoint_path = _checkpoint_path(config, config_path=resolved_config_path, runtime_path=runtime_path)
     if resume and checkpoint_path.exists():
@@ -716,5 +754,6 @@ __all__ = [
     "RoleClientBinding",
     "build_hive_role_clients",
     "build_hive_runtime_from_config",
+    "build_lock_backend_from_config",
     "main",
 ]

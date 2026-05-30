@@ -19,7 +19,9 @@ from freeman.runtime.hive_runtime import (
     HiveRuntimeConfig,
     RoleClientBinding,
     build_hive_role_clients,
+    build_hive_runtime_from_config,
 )
+from freeman.runtime.lock_backend import FileSystemLockBackend, RedisLockBackend
 
 
 def _state(kg: KnowledgeGraph) -> ConsciousState:
@@ -43,6 +45,140 @@ def test_knowledge_graph_node_lock_and_unlock_with_ttl(tmp_path) -> None:
 
     kg.graph.nodes["n1"]["locked_at"] = float(kg.graph.nodes["n1"]["locked_at"]) - 20.0
     assert kg.try_lock("n1", "agent-c", lock_ttl_seconds=5.0)
+
+
+def test_filesystem_lock_backend_blocks_cross_process_same_node(tmp_path) -> None:
+    graph_path = tmp_path / "kg.json"
+    lock_dir = tmp_path / "node_locks"
+    first = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=FileSystemLockBackend(lock_dir),
+    )
+    second = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=FileSystemLockBackend(lock_dir),
+    )
+    for kg in (first, second):
+        kg.add_node(KGNode(id="n1", label="Node 1", confidence=0.8))
+
+    assert first.try_lock("n1", "agent-a", lock_ttl_seconds=120.0)
+    assert not second.try_lock("n1", "agent-b", lock_ttl_seconds=120.0)
+    assert not second.unlock("n1", "agent-b")
+    assert first.unlock("n1", "agent-a")
+    assert second.try_lock("n1", "agent-b", lock_ttl_seconds=120.0)
+
+
+def test_filesystem_lock_backend_recovers_stale_lock(tmp_path) -> None:
+    graph_path = tmp_path / "kg.json"
+    lock_dir = tmp_path / "node_locks"
+    first = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=FileSystemLockBackend(lock_dir),
+    )
+    second = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=FileSystemLockBackend(lock_dir),
+    )
+    for kg in (first, second):
+        kg.add_node(KGNode(id="n1", label="Node 1", confidence=0.8))
+
+    assert first.try_lock("n1", "agent-a", lock_ttl_seconds=120.0)
+    lock_files = list(lock_dir.glob("*.lock"))
+    assert len(lock_files) == 1
+    payload = lock_files[0].read_text(encoding="utf-8")
+    lock_files[0].write_text(payload.replace('"locked_at":', '"locked_at": -1000000, "old_locked_at":'), encoding="utf-8")
+
+    assert second.try_lock("n1", "agent-b", lock_ttl_seconds=1.0)
+
+
+class FakeRedisClient:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expirations: dict[str, int] = {}
+
+    def set(self, key: str, value: str, *, nx: bool = False, px: int | None = None):  # noqa: ANN001
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        if px is not None:
+            self.expirations[key] = int(px)
+        return True
+
+    def get(self, key: str):  # noqa: ANN001
+        value = self.values.get(key)
+        return value.encode("utf-8") if value is not None else None
+
+    def pexpire(self, key: str, px: int) -> bool:
+        if key not in self.values:
+            return False
+        self.expirations[key] = int(px)
+        return True
+
+    def delete(self, key: str) -> int:
+        existed = key in self.values
+        self.values.pop(key, None)
+        self.expirations.pop(key, None)
+        return int(existed)
+
+
+def test_redis_lock_backend_uses_set_nx_px_and_owner_guard(tmp_path) -> None:
+    client = FakeRedisClient()
+    graph_path = tmp_path / "kg.json"
+    first = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=RedisLockBackend(client=client),
+    )
+    second = KnowledgeGraph(
+        json_path=graph_path,
+        auto_load=False,
+        auto_save=False,
+        lock_backend=RedisLockBackend(client=client),
+    )
+    for kg in (first, second):
+        kg.add_node(KGNode(id="n1", label="Node 1", confidence=0.8))
+
+    assert first.try_lock("n1", "agent-a", lock_ttl_seconds=2.5)
+    assert not second.try_lock("n1", "agent-b", lock_ttl_seconds=2.5)
+    assert first.try_lock("n1", "agent-a", lock_ttl_seconds=3.0)
+    assert list(client.expirations.values())[-1] == 3000
+    assert not second.unlock("n1", "agent-b")
+    assert first.unlock("n1", "agent-a")
+    assert second.try_lock("n1", "agent-b", lock_ttl_seconds=2.5)
+
+
+def test_build_hive_runtime_from_config_selects_filesystem_lock_backend(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+agent_stack:
+  lock_backend: "filesystem"
+  lock_filesystem_path: "./locks"
+memory:
+  json_path: "./kg.json"
+  embedding_provider: "hashing"
+  hashing_embedding_dimension: 32
+  vector_store:
+    enabled: false
+runtime:
+  runtime_path: "./runtime"
+""",
+        encoding="utf-8",
+    )
+
+    runtime = build_hive_runtime_from_config(config_path, resume=False)
+
+    assert isinstance(runtime.knowledge_graph.lock_backend, FileSystemLockBackend)
+    assert runtime.knowledge_graph.lock_backend.lock_dir == (tmp_path / "locks").resolve()
 
 
 def test_knowledge_graph_deposit_trail_updates_causal_edges_only(tmp_path) -> None:

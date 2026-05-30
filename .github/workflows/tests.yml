@@ -41,6 +41,7 @@ jobs:
         run: |
           PYTHONPATH=. pytest tests/test_hive_mind.py \
             --cov=freeman.runtime.hive_runtime \
+            --cov=freeman.runtime.lock_backend \
             --cov-report=term-missing \
             --cov-fail-under=80
 

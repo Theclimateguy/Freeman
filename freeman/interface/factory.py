@@ -154,6 +154,7 @@ def build_knowledge_graph(
     auto_load: bool = True,
     auto_save: bool = True,
     sync_vectorstore_on_load: bool = True,
+    lock_backend: Any | None = None,
 ) -> KnowledgeGraph:
     """Instantiate a config-backed knowledge graph."""
 
@@ -164,6 +165,7 @@ def build_knowledge_graph(
         llm_adapter=embedding_adapter,
         vectorstore=vectorstore,
         sync_vectorstore_on_load=sync_vectorstore_on_load,
+        lock_backend=lock_backend,
     )
 
 

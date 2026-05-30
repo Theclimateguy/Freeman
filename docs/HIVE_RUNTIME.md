@@ -96,9 +96,39 @@ Cost risk: OpenAI-compatible providers charge per token and per role frontier. R
 
 ## Known Limitations
 
-Distributed locking: `KnowledgeGraph.try_lock(...)` is a cooperative lock stored in the current KG backend. It is suitable for a single runtime process, a single host, or carefully serialized operational runs, but it is not a distributed consensus lock. Do not run multiple hive runtimes against the same mutable KG path from different hosts or unsynchronized processes and assume exactly-once role execution.
+Distributed locking is backend-dependent. The default `memory` backend preserves the original cooperative KG-node lock fields and is suitable for a single runtime process, a single host, or carefully serialized operational runs, but it is not a distributed consensus lock. Do not run multiple hive runtimes against the same mutable KG path from different hosts or unsynchronized processes with `lock_backend: "memory"` and assume exactly-once role execution.
 
-Production deployments that need concurrent workers should put a real lease layer in front of the KG, for example Postgres advisory locks, Redis `SET NX PX`, etcd leases, or a queue with visibility timeouts. Until that exists, treat `lock_ttl_seconds` as stale-lock recovery for local/process failure, not as a cross-host correctness guarantee.
+`filesystem` is a zero-dependency single-host multi-process backend based on atomic lock files. `redis` is the first cross-host backend and uses Redis `SET NX PX` leases. Install it with `pip install ".[redis]"` or provide the `redis` package in the runtime image. Production deployments that need concurrent workers should use `redis` or put an equivalent lease layer in front of the KG, for example Postgres advisory locks, etcd leases, or a queue with visibility timeouts.
+
+## Horizontal Scaling
+
+The runtime preserves role order per node by routing only nodes whose current `trail_type` is visible to a role. Parallelism is intra-role: multiple `planner` workers may process different `repair` or `verified` nodes, but a node cannot reach `narrator` until one planner has written `trail_type: read_plan`.
+
+Lock backend options:
+
+| Backend | Scope | Config | Use when |
+| --- | --- | --- | --- |
+| `memory` | one process / serialized local runs | `lock_backend: "memory"` | Default compatibility mode and tests. |
+| `filesystem` | one host, multiple processes | `lock_backend: "filesystem"` | Local worker fan-out without Redis. |
+| `redis` | multiple hosts/processes | `lock_backend: "redis"` plus `lock_redis_url` or `FREEMAN_REDIS_URL` | Production horizontal scaling. |
+
+Redis deployment example:
+
+```yaml
+agent_stack:
+  lock_backend: "redis"
+  lock_redis_url: "redis://redis:6379/0"
+  lock_ttl_seconds: 120
+```
+
+Filesystem deployment example:
+
+```yaml
+agent_stack:
+  lock_backend: "filesystem"
+  lock_filesystem_path: "/var/lib/freeman/node_locks"
+  lock_ttl_seconds: 120
+```
 
 Production baseline:
 
@@ -110,6 +140,8 @@ agent_stack:
   frontier_limit_per_role: 3
   max_actions_per_cycle: 15
   max_role_revisits_per_node: 1
+  lock_backend: "redis"
+  lock_redis_url: "redis://redis:6379/0"
   lock_ttl_seconds: 120
   llm:
     enabled: true
