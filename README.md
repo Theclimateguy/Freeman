@@ -83,6 +83,14 @@ python -m freeman.runtime.stream_runtime \
   --model auto
 ```
 
+Run the hive-mind role dispatcher:
+
+```bash
+python -m freeman.runtime.hive_runtime --config-path config.yaml --cycles 1
+# or, after installation:
+freeman-hive --config-path config.yaml --cycles 1
+```
+
 Query persisted state:
 
 ```bash
@@ -148,6 +156,7 @@ Role contracts live in:
 - contradictory retained signals are marked with conflict metadata before budgeting and downstream belief updates.
 - compiled worlds created through `freeman.api.tool_api` persist under `runtime/compiled_worlds.json`, so tool-driven simulations survive process restarts.
 - `llm.provider: openai-compatible` is accepted as an alias of `openai`; use `llm.base_url` to point at any compatible endpoint.
+- `agent_stack.llm.role_models` can bind individual hive roles to local Qwen/Ollama or OpenAI-compatible chat endpoints.
 - LLMs are optional and do not own mutable internal state.
 - `freeman-connectors` stays separate from the core runtime.
 - License: Apache License 2.0.

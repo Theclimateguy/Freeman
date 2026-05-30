@@ -24,6 +24,36 @@ agent:
     preserve_kg: true
     max_repairs_per_session: 3
 
+agent_stack:
+  enabled: true
+  runtime_id: "hive-local"
+  role_order: ["ingestor", "repairer", "planner", "narrator", "verifier"]
+  frontier_limit_per_role: 5
+  max_actions_per_cycle: 25
+  max_role_revisits_per_node: 1
+  lock_ttl_seconds: 120
+  checkpoint_path: ""
+  event_log_path: ""
+  llm:
+    enabled: false
+    roles: ["narrator"]
+    temperature: 0.1
+    max_tokens: 512
+    role_models:
+      default:
+        provider: "ollama"
+        model: "qwen2.5-coder:14b"
+        base_url: "http://127.0.0.1:11434"
+        timeout_seconds: 120
+      narrator:
+        provider: "ollama"
+        model: "qwen2.5-coder:14b"
+      verifier:
+        provider: "openai-compatible"
+        model: "gpt-4o-mini"
+        base_url: "https://api.openai.com/v1"
+        api_key_env: "OPENAI_API_KEY"
+
 llm:
   provider: ""
   model: ""
