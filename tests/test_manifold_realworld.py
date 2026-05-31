@@ -188,6 +188,44 @@ def test_initialize_spatial_relations_materializes_actor_adjacency(water_market_
     assert world.metadata["_spatial_materialization"]["relation_count"] == 2
 
 
+def test_spatial_materialization_warns_for_large_region_graph(caplog) -> None:
+    actor_count = 101
+    schema = {
+        "domain_id": "large_spatial",
+        "actors": [
+            {
+                "id": f"actor_{idx}",
+                "name": f"Actor {idx}",
+                "state": {"influence": 0.1},
+                "metadata": {"geo_id": f"REGION_{idx}"},
+            }
+            for idx in range(actor_count)
+        ],
+        "resources": [
+            {
+                "id": "risk",
+                "name": "Risk",
+                "value": 1.0,
+                "unit": "index",
+                "evolution_type": "linear",
+                "evolution_params": {"a": 1.0, "b": 0.0, "c": 0.0, "coupling_weights": {}},
+            }
+        ],
+        "relations": [],
+        "outcomes": [{"id": "risk_outcome", "label": "Risk", "scoring_weights": {"risk": 1.0}}],
+        "causal_dag": [],
+        "spatial": {
+            "adjacency": [{"source": "REGION_0", "target": "REGION_1", "weight": 1.0}],
+        },
+    }
+    caplog.set_level("WARNING", logger="freeman.domain.spatial")
+
+    world = DomainCompiler().compile(schema)
+
+    assert len([relation for relation in world.relations if relation.relation_type == "spatial_neighbor"]) == 2
+    assert any("large_spatial_materialization" in record.message for record in caplog.records)
+
+
 def test_build_historical_news_provider_defaults_to_gdelt_without_key(monkeypatch) -> None:
     monkeypatch.delenv("NEWSAPI_API_KEY", raising=False)
     monkeypatch.delenv("NEWS_API_KEY", raising=False)

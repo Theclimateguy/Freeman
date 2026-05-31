@@ -135,6 +135,20 @@ missing `Relation` objects to `world.relations`, and writes a compact trace to:
 The operation is idempotent: repeated calls do not duplicate existing relations
 with the same `(source_id, target_id, relation_type)`.
 
+## Large Graph Diagnostics
+
+Spatial materialization is sparse-adjacency driven, but actor-pair expansion can
+still become expensive when many actors share adjacent regions. Freeman logs a
+warning through `freeman.domain.spatial` when either:
+
+- mapped region count exceeds `SPATIAL_REGION_WARNING_THRESHOLD = 100`
+- estimated materialized relations exceed `SPATIAL_RELATION_WARNING_THRESHOLD = 10000`
+
+The warning includes `domain_id`, mapped region count, adjacency-edge count and
+estimated relation count. It does not stop compilation; it is a signal to check
+whether the schema should aggregate actors, prune weak adjacency edges or move to
+a dedicated sparse spatial operator.
+
 ## Vector Geometry Adapter
 
 `freeman.realworld.spatial_adapter.SpatialAdapter` handles vector geometry:

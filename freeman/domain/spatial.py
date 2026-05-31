@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import logging
 from typing import Any
 
 from freeman.core.types import Relation
 from freeman.core.world import WorldState
 
+LOGGER = logging.getLogger(__name__)
 SPATIAL_NEIGHBOR_RELATION = "spatial_neighbor"
+SPATIAL_REGION_WARNING_THRESHOLD = 100
+SPATIAL_RELATION_WARNING_THRESHOLD = 10_000
 _SPATIAL_ACTOR_REGION_KEYS = (
     "geo_id",
     "region_id",
@@ -168,6 +172,57 @@ def _spatial_relation_exists(world: WorldState, source_id: str, target_id: str, 
     )
 
 
+def _estimated_relation_count(
+    adjacency_edges: Sequence[dict[str, Any]],
+    actors_by_region: dict[str, list[str]],
+    *,
+    include_inverse_default: bool,
+    default_directed: bool,
+) -> int:
+    estimate = 0
+    for edge in adjacency_edges:
+        source_region = _coerce_region_id(edge.get("source"))
+        target_region = _coerce_region_id(edge.get("target"))
+        if not source_region or not target_region or source_region == target_region:
+            continue
+        directed = bool(edge.get("directed", default_directed))
+        include_inverse = bool(edge.get("include_inverse", include_inverse_default and not directed))
+        multiplier = 2 if include_inverse else 1
+        estimate += multiplier * len(actors_by_region.get(source_region, [])) * len(actors_by_region.get(target_region, []))
+    return estimate
+
+
+def _warn_if_large_spatial_materialization(
+    world: WorldState,
+    adjacency_edges: Sequence[dict[str, Any]],
+    actors_by_region: dict[str, list[str]],
+    *,
+    include_inverse_default: bool,
+    default_directed: bool,
+) -> None:
+    if not adjacency_edges:
+        return
+    region_count = len(actors_by_region)
+    estimated_relations = _estimated_relation_count(
+        adjacency_edges,
+        actors_by_region,
+        include_inverse_default=include_inverse_default,
+        default_directed=default_directed,
+    )
+    if region_count <= SPATIAL_REGION_WARNING_THRESHOLD and estimated_relations <= SPATIAL_RELATION_WARNING_THRESHOLD:
+        return
+    LOGGER.warning(
+        "large_spatial_materialization domain_id=%s regions=%d adjacency_edges=%d estimated_relations=%d "
+        "threshold_regions=%d threshold_relations=%d",
+        world.domain_id,
+        region_count,
+        len(adjacency_edges),
+        estimated_relations,
+        SPATIAL_REGION_WARNING_THRESHOLD,
+        SPATIAL_RELATION_WARNING_THRESHOLD,
+    )
+
+
 def initialize_spatial_relations(world: WorldState) -> int:
     """Materialize ``world.metadata['spatial'].adjacency`` as actor relations.
 
@@ -193,10 +248,18 @@ def initialize_spatial_relations(world: WorldState) -> int:
     default_relation_type = str(spatial.get("relation_type", SPATIAL_NEIGHBOR_RELATION))
     default_directed = bool(spatial.get("directed", False))
     include_inverse_default = bool(spatial.get("include_inverse", not default_directed))
+    adjacency_edges = _spatial_adjacency_edges(spatial)
+    _warn_if_large_spatial_materialization(
+        world,
+        adjacency_edges,
+        actors_by_region,
+        include_inverse_default=include_inverse_default,
+        default_directed=default_directed,
+    )
     added = 0
     materialized: list[dict[str, Any]] = []
 
-    for edge in _spatial_adjacency_edges(spatial):
+    for edge in adjacency_edges:
         source_region = _coerce_region_id(edge.get("source"))
         target_region = _coerce_region_id(edge.get("target"))
         if not source_region or not target_region or source_region == target_region:
@@ -253,4 +316,9 @@ def initialize_spatial_relations(world: WorldState) -> int:
     return added
 
 
-__all__ = ["SPATIAL_NEIGHBOR_RELATION", "initialize_spatial_relations"]
+__all__ = [
+    "SPATIAL_NEIGHBOR_RELATION",
+    "SPATIAL_REGION_WARNING_THRESHOLD",
+    "SPATIAL_RELATION_WARNING_THRESHOLD",
+    "initialize_spatial_relations",
+]
