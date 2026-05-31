@@ -14,6 +14,13 @@ from freeman.realworld.manifold import (
     freeman_probability_with_llm_signal,
     run_manifold_climate_experiment,
 )
+from freeman.realworld.spatial_adapter import (
+    GeoAdapter,
+    GeoDependencyError,
+    SpatialAdapter,
+    SpatialRegion,
+    SpatialRelation,
+)
 from freeman.realworld.test_a_preflight import (
     TestAMarketRow,
     build_recommended_inclusion_list,
@@ -36,10 +43,15 @@ from freeman.realworld.test_c_cross_domain import (
 __all__ = [
     "BBCRSSClient",
     "GDELTDocClient",
+    "GeoAdapter",
+    "GeoDependencyError",
     "LiveMarketSnapshot",
     "ManifoldBacktestResult",
     "ManifoldClient",
     "MarketFeatures",
+    "SpatialAdapter",
+    "SpatialRegion",
+    "SpatialRelation",
     "TestAMarketRow",
     "build_binary_market_schema",
     "build_recommended_inclusion_list",

@@ -24,6 +24,10 @@ causal = [
     "pandas>=2.0",
     "scikit-learn>=1.3",
 ]
+geo = [
+    "geopandas>=0.14",
+    "shapely>=2.0",
+]
 benchmark = [
     "chromadb>=0.5",
     "pandas>=2.2",

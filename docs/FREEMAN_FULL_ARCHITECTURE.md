@@ -539,6 +539,7 @@ Runtime source failures are non-fatal: `_run_poll` catches source exceptions, lo
 The codebase also contains experimental paths outside the main daemon loop:
 
 - `freeman.realworld.manifold`: Manifold market snapshots, BBC/GDELT/NewsAPI/GNews historical news, market feature extraction, binary market schemas, Brier scores and experiment reports.
+- `freeman.realworld.spatial_adapter`: regional GeoPandas/Shapely adapter for GeoJSON/Shapefile data, spatial-region KG nodes and topology relations (`geo:borderedBy`, `geo:withinRegion`, `geo:intersects`).
 - `freeman.realworld.test_a_preflight` and `test_a_experiment`: market filtering/stratification and focused test-A evaluation.
 - `freeman.realworld.test_c_cross_domain` and `causal_graph`: cross-domain causal tests and Paris causal graph test.
 - `freeman.causal.estimator`: optional causal ML edge-weight estimation with fallback estimators depending on available libraries and treatment type.

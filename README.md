@@ -95,6 +95,12 @@ Optional causal-estimation extras:
 pip install ".[causal]"
 ```
 
+Optional regional geospatial adapter:
+
+```bash
+pip install ".[geo]"
+```
+
 Development extras:
 
 ```bash

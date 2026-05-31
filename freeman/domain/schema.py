@@ -15,6 +15,20 @@ REQUIRED_SCHEMA_KEYS = {
     "causal_dag",
 }
 
+SPATIAL_REGION_NODE_TYPE = "SpatialRegion"
+GEO_HAS_GEOMETRY = "geo:hasGeometry"
+GEO_BORDERED_BY = "geo:borderedBy"
+GEO_WITHIN_REGION = "geo:withinRegion"
+GEO_INTERSECTS = "geo:intersects"
+GEO_HAS_CLIMATE_ZONE = "geo:hasClimateZone"
+GEO_PREDICATES = {
+    GEO_HAS_GEOMETRY,
+    GEO_BORDERED_BY,
+    GEO_WITHIN_REGION,
+    GEO_INTERSECTS,
+    GEO_HAS_CLIMATE_ZONE,
+}
+
 
 def validate_required_keys(schema: Dict[str, Any]) -> None:
     """Validate the presence of top-level required schema keys."""

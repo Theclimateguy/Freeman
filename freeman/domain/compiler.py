@@ -30,6 +30,10 @@ class DomainCompiler:
             metadata["domain_polarity"] = schema["domain_polarity"]
         if "modifier_mode" in schema:
             metadata["modifier_mode"] = schema["modifier_mode"]
+        if "spatial" in schema:
+            metadata["spatial"] = deep_copy_jsonable(schema["spatial"])
+        if "geo" in schema:
+            metadata["geo"] = deep_copy_jsonable(schema["geo"])
 
         return WorldState(
             domain_id=schema["domain_id"],
