@@ -271,7 +271,7 @@ $$
 \text{schema} \mapsto W_0=(A,R,E,O,D,\rho,\mu),
 $$
 
-where actors/resources/relations/outcomes/causal edges are converted into dataclasses. Validation rejects unknown IDs, invalid evolution operators, invalid scoring keys, invalid DAG endpoints, invalid actor update rules and invalid exogenous inflows.
+where actors/resources/relations/outcomes/causal edges are converted into dataclasses. Validation rejects unknown IDs, invalid evolution operators, invalid scoring keys, invalid DAG endpoints, invalid actor update rules and invalid exogenous inflows. If `metadata["spatial"]` contains an adjacency graph, compile-time materialization adds actor-level `spatial_neighbor` relations before the simulator sees the world.
 
 ### 5.2 Resource transition
 
@@ -540,6 +540,7 @@ The codebase also contains experimental paths outside the main daemon loop:
 
 - `freeman.realworld.manifold`: Manifold market snapshots, BBC/GDELT/NewsAPI/GNews historical news, market feature extraction, binary market schemas, Brier scores and experiment reports.
 - `freeman.realworld.spatial_adapter`: regional GeoPandas/Shapely adapter for GeoJSON/Shapefile data, spatial-region KG nodes and topology relations (`geo:borderedBy`, `geo:withinRegion`, `geo:intersects`).
+- `freeman.domain.spatial.initialize_spatial_relations`: reads `world.metadata["spatial"].adjacency` and materializes actor-level `spatial_neighbor` relations at compile time and before real-world simulation. See `docs/GEO_ANALYTICS.md`.
 - `freeman.realworld.test_a_preflight` and `test_a_experiment`: market filtering/stratification and focused test-A evaluation.
 - `freeman.realworld.test_c_cross_domain` and `causal_graph`: cross-domain causal tests and Paris causal graph test.
 - `freeman.causal.estimator`: optional causal ML edge-weight estimation with fallback estimators depending on available libraries and treatment type.

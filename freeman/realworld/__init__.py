@@ -12,6 +12,7 @@ from freeman.realworld.manifold import (
     fetch_and_run_experiment,
     freeman_probability_from_schema,
     freeman_probability_with_llm_signal,
+    initialize_spatial_relations,
     run_manifold_climate_experiment,
 )
 from freeman.realworld.spatial_adapter import (
@@ -61,6 +62,7 @@ __all__ = [
     "filter_test_a_rows",
     "freeman_probability_from_schema",
     "freeman_probability_with_llm_signal",
+    "initialize_spatial_relations",
     "load_market_ids",
     "CrossDomainResult",
     "CrossDomainTarget",

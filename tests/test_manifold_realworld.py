@@ -18,6 +18,7 @@ from freeman.realworld.manifold import (
     build_binary_market_schema,
     compute_market_features,
     freeman_probability_from_schema,
+    initialize_spatial_relations,
     reconstruct_probability_path,
 )
 
@@ -164,6 +165,27 @@ def test_probability_monotonic_modifier_increases_risk_yes_probability() -> None
 
     assert schema["domain_polarity"] == "negative"
     assert updated_probability > base_probability
+
+
+def test_initialize_spatial_relations_materializes_actor_adjacency(water_market_schema) -> None:
+    water_market_schema["actors"][0]["metadata"]["geo_id"] = "REGION_A"
+    water_market_schema["actors"][1]["metadata"]["geo_id"] = "REGION_B"
+    water_market_schema["spatial"] = {
+        "adjacency": [{"source": "REGION_A", "target": "REGION_B", "weight": 0.7}],
+        "relation_type": "spatial_neighbor",
+    }
+    world = DomainCompiler().compile(water_market_schema)
+    added_again = initialize_spatial_relations(world)
+    spatial_relations = [relation for relation in world.relations if relation.relation_type == "spatial_neighbor"]
+
+    assert added_again == 0
+    assert len(spatial_relations) == 2
+    assert {(relation.source_id, relation.target_id) for relation in spatial_relations} == {
+        ("country_a", "country_b"),
+        ("country_b", "country_a"),
+    }
+    assert all(relation.weights["adjacency"] == pytest.approx(0.7) for relation in spatial_relations)
+    assert world.metadata["_spatial_materialization"]["relation_count"] == 2
 
 
 def test_build_historical_news_provider_defaults_to_gdelt_without_key(monkeypatch) -> None:

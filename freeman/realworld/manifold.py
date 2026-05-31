@@ -26,6 +26,7 @@ from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
 from freeman.agent.parameterestimator import ParameterEstimator
 from freeman.agent.signalingestion import RSSSignalSource, SignalIngestionEngine, SignalMemory
+from freeman.domain.spatial import initialize_spatial_relations
 from freeman.game.runner import SimConfig
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.memory.knowledgegraph import KnowledgeGraph
@@ -1093,8 +1094,10 @@ def freeman_probability_from_schema(schema: dict[str, Any]) -> float:
             seed=11,
         )
     )
+    world = pipeline.compiler.compile(schema)
+    initialize_spatial_relations(world)
     session_log = SessionLog(session_id=f"manifold:{schema['domain_id']}")
-    result = pipeline.run(schema, session_log=session_log)
+    result = pipeline.run(world, session_log=session_log)
     return float(result.simulation["final_outcome_probs"]["yes"])
 
 
@@ -1118,6 +1121,7 @@ def freeman_probability_with_llm_signal(
         )
     )
     previous_world = pipeline.compiler.compile(schema)
+    initialize_spatial_relations(previous_world)
     estimator = ParameterEstimator(llm_client)
     parameter_vector = estimator.estimate(previous_world, signal_text)
     result = pipeline.update(

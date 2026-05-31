@@ -8,6 +8,7 @@ from freeman.core.evolution import EVOLUTION_REGISTRY
 from freeman.core.types import Actor, CausalEdge, Outcome, Relation, Resource
 from freeman.core.world import WorldState
 from freeman.domain.schema import collect_actor_state_keys, ensure_unique_ids, validate_required_keys
+from freeman.domain.spatial import initialize_spatial_relations
 from freeman.exceptions import ValidationError
 from freeman.utils import deep_copy_jsonable
 
@@ -35,7 +36,7 @@ class DomainCompiler:
         if "geo" in schema:
             metadata["geo"] = deep_copy_jsonable(schema["geo"])
 
-        return WorldState(
+        world = WorldState(
             domain_id=schema["domain_id"],
             t=0,
             actors={actor["id"]: Actor(**actor) for actor in schema.get("actors", [])},
@@ -47,6 +48,8 @@ class DomainCompiler:
             seed=schema.get("seed", 42),
             metadata=metadata,
         )
+        initialize_spatial_relations(world)
+        return world
 
     def _validate_schema(self, schema: Dict[str, Any]) -> None:
         """Validate references, operator types, and score keys inside a domain schema."""

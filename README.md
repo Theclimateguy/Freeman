@@ -101,6 +101,8 @@ Optional regional geospatial adapter:
 pip install ".[geo]"
 ```
 
+Regional analytics details: [docs/GEO_ANALYTICS.md](docs/GEO_ANALYTICS.md).
+
 Development extras:
 
 ```bash
