@@ -2,6 +2,7 @@
 
 from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.contracts import ConsciousStateContract, KnowledgeGraphContract, WorldStateContract
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.stream import StreamCursorStore
 
@@ -13,4 +14,30 @@ def stream_runtime_main(argv=None):
 
     return main(argv)
 
-__all__ = ["AgentRuntime", "CheckpointManager", "EventLog", "StreamCursorStore", "stream_runtime_main"]
+
+def __getattr__(name):
+    if name in {"HiveMindRuntime", "HiveRuntimeConfig", "build_hive_runtime_from_config"}:
+        from freeman.runtime.hive_runtime import HiveMindRuntime, HiveRuntimeConfig, build_hive_runtime_from_config
+
+        exports = {
+            "HiveMindRuntime": HiveMindRuntime,
+            "HiveRuntimeConfig": HiveRuntimeConfig,
+            "build_hive_runtime_from_config": build_hive_runtime_from_config,
+        }
+        return exports[name]
+    raise AttributeError(name)
+
+
+__all__ = [
+    "AgentRuntime",
+    "CheckpointManager",
+    "ConsciousStateContract",
+    "EventLog",
+    "HiveMindRuntime",
+    "HiveRuntimeConfig",
+    "KnowledgeGraphContract",
+    "StreamCursorStore",
+    "WorldStateContract",
+    "build_hive_runtime_from_config",
+    "stream_runtime_main",
+]

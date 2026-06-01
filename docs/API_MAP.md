@@ -205,8 +205,13 @@ This is the implementation-facing map of modules, classes, and primary functions
 ### `freeman.domain`
 
 - `DomainCompiler`
+  - calls `initialize_spatial_relations(world)` during `compile()` when schema metadata contains `spatial`
 - `DomainRegistry`
 - schema validation helpers in `schema.py`
+- `spatial.py`
+  - `initialize_spatial_relations(world)`
+  - `SPATIAL_NEIGHBOR_RELATION`
+  - large materialization warning thresholds for mapped regions and estimated actor relations
 
 ### `freeman.game`
 
@@ -225,6 +230,7 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `OllamaEmbeddingClient`
 - `OllamaChatClient`
 - `DeepSeekChatClient`
+- shared structured-output helpers in `structured.py`
 - `FreemanOrchestrator`
 - `DeepSeekFreemanOrchestrator` (compatibility alias)
 - `IdentityNarrator`
@@ -236,6 +242,17 @@ This is the implementation-facing map of modules, classes, and primary functions
 - `AgentRuntime`
 - `KGSnapshotManager`
 - `stream_runtime_main()`
+- `HiveRuntime`
+- `HiveRuntimeConfig`
+- `run_hive_runtime()`
+- `LockBackend`
+- `InMemoryLockBackend`
+- `FileSystemLockBackend`
+- `RedisLockBackend`
+- structural contracts:
+  - `WorldStateContract`
+  - `KnowledgeGraphContract`
+  - `ConsciousStateContract`
 - `RuntimeArtifacts`
 - `RuntimeEvidence`
 - `RuntimeQueryResult`
@@ -263,9 +280,18 @@ This is the implementation-facing map of modules, classes, and primary functions
   - `freeman_trace_relation_learning()`
   - `freeman_query_runtime_context()`
   - `freeman_answer_query()`
-  - `freeman_query_anomalies()`
-  - `freeman_query_causal_edges()`
-  - `freeman_trace_relation_learning()`
+
+### `freeman.realworld`
+
+- `SpatialAdapter` / `GeoAdapter`
+- `SpatialRegion`
+- `SpatialRelation`
+- vector geometry predicates:
+  - `touches`
+  - `within`
+  - `intersects`
+- KG export for regional topology edges
+- legacy/benchmark Manifold and cross-domain experiment adapters
 
 ### `freeman.mcp`
 
@@ -369,6 +395,10 @@ Runtime command:
   - run semantic retrieval over persisted runtime context: KG nodes, saved forecasts, causal edges, and the latest world snapshot
 - `python -m freeman.runtime.stream_runtime --config-path config.yaml --query answer --text "What changed in warming risk?" --limit 10`
   - answer a user question strictly from persisted runtime evidence using the configured LLM summarizer and return the active budget summary
+- `freeman-hive --config-path config.yaml --cycles 1`
+  - run one role-scoped hive dispatcher cycle over the configured KG/runtime state
+- `python -m freeman.runtime.hive_runtime --config-path config.yaml --cycles 1`
+  - module form of the same hive runtime entrypoint
 - `freeman-mcp --transport stdio`
   - expose Freeman through MCP for external agents; wraps the OpenAI-style tool surface from `freeman.api.tool_api`
 - `freeman-mcp --transport streamable-http --host 127.0.0.1 --port 8000`

@@ -8,6 +8,95 @@
 
 - No unreleased changes.
 
+## v3.3.1 - 2026-06-01
+
+Release focused on promoting the stabilized hive-mind runtime to `main` and
+making regional geospatial structure active in compiled simulations.
+
+### Added
+
+- Role-scoped hive runtime entrypoint: `freeman-hive` /
+  `python -m freeman.runtime.hive_runtime`.
+- Hive role contracts for `ingestor`, `repairer`, `planner`, `narrator`, and
+  `verifier`, with per-role trail scopes and optional LLM policies.
+- Cooperative KG-node locking with an optional Redis backend through the
+  `redis` extra.
+- Runtime structural protocols in `freeman.runtime.contracts`.
+- Regional geospatial adapter in `freeman.realworld.spatial_adapter` using
+  optional GeoPandas/Shapely dependencies through the `geo` extra.
+- Compile-time spatial materialization from `world.metadata["spatial"]` into
+  actor `Relation(..., relation_type="spatial_neighbor")` records.
+- Dedicated regional analytics documentation in `docs/GEO_ANALYTICS.md`.
+
+### Changed
+
+- `main` now contains the release-grade hive-mind runtime and docs from the
+  3.2 line, without generated experiment artifacts from that branch.
+- `DomainCompiler.compile()` initializes spatial relations automatically; the
+  real-world manifold path performs the same initialization idempotently before
+  simulation.
+- README, architecture docs, release notes, and packaging metadata now describe
+  `3.3.1` as the active release.
+- Core package version bumped to `3.3.1`; `freeman-connectors` now targets
+  `freeman>=3.3.1,<4.0.0`.
+
+### Fixed
+
+- Large regional schemas now emit a warning when spatial actor-pair
+  materialization is likely to become expensive.
+
+### Validation
+
+- `PYTHONPATH="$PWD/packages/freeman-connectors:$PYTHONPATH" python -m pytest -q` -> `287 passed`
+- `python -m compileall -q freeman packages/freeman-connectors/freeman_connectors` -> passed
+- Core and connector sdist/wheel builds completed for `3.3.1`; see `docs/RELEASE_3_3_1.md`.
+
+## v3.2.2 - 2026-05-10
+
+Hive-mind bugfix prerelease focused on Redis-backed horizontal scaling.
+
+### Fixed
+
+- Redis lock release now checks lock ownership atomically, preventing one hive
+  worker from unlocking another worker's active KG-node lock.
+
+### Validation
+
+- `pytest tests/test_hive_mind.py` -> `19 passed`
+
+## v3.2.1 - 2026-05-10
+
+Hive-mind prerelease focused on making the role stack operational rather than
+conceptual.
+
+### Added
+
+- Executable hive runtime dispatcher over role-scoped KG frontiers.
+- Memory and Redis lock backends.
+- Optional role LLM policy and OpenAI-compatible structured client support.
+- Hive runtime documentation and role docs under `docs/`.
+
+### Validation
+
+- `pytest tests/test_hive_mind.py tests/test_openai_client.py tests/test_runtime.py` -> `48 passed`
+
+## v3.2.0 - 2026-05-10
+
+Official 3.2 release cut from the stabilized `hive_mind` branch.
+
+### Added
+
+- Explicit layer contracts around world, KG, and consciousness state.
+- Signal conflict preservation instead of suppressing contradictory evidence.
+- Flat graph export and interactive ask/what-if surfaces over persisted runtime
+  state.
+- Release CI for full pytest, CLI smoke tests, and build artifacts.
+
+### Changed
+
+- Ontology repair and runtime query paths were tightened around explicit
+  contracts and persisted evidence.
+
 ## v3.1.2 - 2026-05-01
 
 Patch release focused on forecast-verification clock semantics.

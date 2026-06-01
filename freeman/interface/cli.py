@@ -180,7 +180,7 @@ def _resolve_path(base: Path, candidate: str | None, default: str) -> Path:
 
 
 def _print_json(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
 
 
 def _budget_status(config: dict[str, Any], *, config_path: Path) -> dict[str, Any]:
@@ -399,6 +399,78 @@ def _summarize_query(
         return None, str(exc)
 
 
+def _ask_payload(
+    answer_engine: RuntimeAnswerEngine,
+    query: str,
+    *,
+    limit: int,
+    chat_client: Any | None,
+    llm_error: str | None,
+) -> dict[str, Any]:
+    payload = answer_engine.answer(
+        query,
+        limit=limit,
+        chat_client=chat_client,
+    )
+    payload["llm_error"] = payload.get("llm_error") or llm_error
+    payload["match_count"] = payload.get("count", 0)
+    return payload
+
+
+def _print_ask_console_answer(payload: dict[str, Any]) -> None:
+    answer = payload.get("answer")
+    if answer:
+        print(str(answer).strip())
+    else:
+        reason = payload.get("llm_error") or payload.get("no_match_reason") or "no answer generated"
+        print(f"[no answer] {reason}")
+
+    evidence = list(payload.get("evidence") or [])[:5]
+    if evidence:
+        print("\nEvidence:")
+        for item in evidence:
+            label = item.get("label") or item.get("id") or "evidence"
+            kind = item.get("kind") or "item"
+            score = float(item.get("score", 0.0) or 0.0)
+            print(f"- {label} [{kind}, score={score:.3f}]")
+    print()
+
+
+def _run_ask_console(
+    answer_engine: RuntimeAnswerEngine,
+    *,
+    limit: int,
+    chat_client: Any | None,
+    llm_error: str | None,
+) -> int:
+    print("Freeman ask console. Type /exit or press Ctrl-D to quit.", file=sys.stderr)
+    while True:
+        try:
+            query = input("freeman ask> ").strip()
+        except EOFError:
+            print(file=sys.stderr)
+            return 0
+        except KeyboardInterrupt:
+            print(file=sys.stderr)
+            continue
+        if not query:
+            continue
+        if query.lower() in {"/exit", "/quit", "/q", "exit", "quit", "q"}:
+            return 0
+        try:
+            payload = _ask_payload(
+                answer_engine,
+                query,
+                limit=limit,
+                chat_client=chat_client,
+                llm_error=llm_error,
+            )
+        except KeyboardInterrupt:
+            print("\nInterrupted.", file=sys.stderr)
+            continue
+        _print_ask_console_answer(payload)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="freeman")
     parser.add_argument("--config", "--config-path", dest="config_path", default="config.yaml")
@@ -415,11 +487,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_parser = subparsers.add_parser("ask")
     _add_config_option(ask_parser)
-    ask_parser.add_argument("query")
+    ask_parser.add_argument("query", nargs="?")
+    ask_parser.add_argument("-i", "--interactive", action="store_true")
     ask_parser.add_argument("--limit", type=int, default=5)
     ask_parser.add_argument("--status")
     ask_parser.add_argument("--node-type")
     ask_parser.add_argument("--min-confidence", type=float)
+
+    what_if_parser = subparsers.add_parser("what-if")
+    _add_config_option(what_if_parser)
+    what_if_parser.add_argument("query")
+    what_if_parser.add_argument("--policies-path", required=True)
+    what_if_parser.add_argument("--baseline-policies-path")
+    what_if_parser.add_argument("--max-steps", type=int, default=10)
+    what_if_parser.add_argument("--seed", type=int)
+    what_if_parser.add_argument("--limit", type=int, default=5)
 
     status_parser = subparsers.add_parser("status")
     _add_config_option(status_parser)
@@ -591,13 +673,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ask":
         runtime_artifacts = load_runtime_artifacts(config_path)
         chat_client, llm_error = _build_chat_client(config)
-        payload = RuntimeAnswerEngine(runtime_artifacts).answer(
+        answer_engine = RuntimeAnswerEngine(runtime_artifacts)
+        if args.interactive or not args.query:
+            return _run_ask_console(
+                answer_engine,
+                limit=args.limit,
+                chat_client=chat_client,
+                llm_error=llm_error,
+            )
+        payload = _ask_payload(
+            answer_engine,
             args.query,
+            limit=args.limit,
+            chat_client=chat_client,
+            llm_error=llm_error,
+        )
+        _print_json(payload)
+        return 0
+
+    if args.command == "what-if":
+        runtime_artifacts = load_runtime_artifacts(config_path)
+        chat_client, llm_error = _build_chat_client(config)
+        scenario_policies = _load_payload(args.policies_path)
+        baseline_policies = _load_payload(args.baseline_policies_path) if args.baseline_policies_path else []
+        payload = RuntimeAnswerEngine(runtime_artifacts).answer_what_if(
+            args.query,
+            scenario_policies=scenario_policies,
+            baseline_policies=baseline_policies,
+            max_steps=args.max_steps,
+            seed=args.seed,
             limit=args.limit,
             chat_client=chat_client,
         )
         payload["llm_error"] = payload.get("llm_error") or llm_error
-        payload["match_count"] = payload.get("count", 0)
         _print_json(payload)
         return 0
 

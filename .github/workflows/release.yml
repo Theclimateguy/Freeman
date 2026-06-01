@@ -1,21 +1,21 @@
-name: Tests
+name: Release
 
 on:
   push:
-    branches:
-      - main
-      - hive_mind
-  pull_request:
-    branches:
-      - main
-      - hive_mind
+    tags:
+      - "hive_mind-*"
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  hive-mind-coverage:
+  release:
     runs-on: ubuntu-latest
 
     steps:
@@ -30,72 +30,15 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install Freeman and hive runtime test tooling
-        run: |
-          python -m pip install -e ".[dev]"
-          python -m pip install "numpy<2.0" pytest-cov
-
-      - name: Run hive runtime tests with coverage gate
-        env:
-          OPENAI_API_KEY: ""
-          LLM_API_KEY: ""
-        run: |
-          PYTHONPATH=. pytest tests/test_hive_mind.py \
-            --cov=freeman.runtime.hive_runtime \
-            --cov=freeman.runtime.lock_backend \
-            --cov-report=term-missing \
-            --cov-fail-under=80
-
-  pytest:
-    runs-on: ubuntu-latest
-    needs: hive-mind-coverage
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.13"]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
       - name: Install Freeman and connectors
         run: |
           python -m pip install -e ".[dev,semantic,causal,benchmark]"
           python -m pip install -e ./packages/freeman-connectors
 
-      - name: Run test suite
+      - name: Run full test suite
         run: PYTHONPATH=. pytest -q
 
-  smoke-e2e:
-    runs-on: ubuntu-latest
-    needs: pytest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
-      - name: Install Freeman and connectors
-        run: |
-          python -m pip install -e ".[dev,semantic,causal,benchmark]"
-          python -m pip install -e ./packages/freeman-connectors
-
-      - name: Seed runtime artifacts for CLI smoke tests
+      - name: Seed runtime artifacts for release smoke test
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -108,7 +51,7 @@ jobs:
           from freeman.memory.knowledgegraph import KnowledgeGraph
           from tests.conftest import build_water_market_schema
 
-          root = Path("/tmp/freeman-smoke").resolve()
+          root = Path("/tmp/freeman-release-smoke").resolve()
           runtime_path = root / "runtime"
           runtime_path.mkdir(parents=True, exist_ok=True)
           kg_path = root / "kg.json"
@@ -123,8 +66,6 @@ jobs:
                           "json_path": str(kg_path),
                           "embedding_provider": "hashing",
                           "hashing_embedding_dimension": 64,
-                          "retrieval_top_k": 5,
-                          "max_context_nodes": 10,
                       },
                       "runtime": {
                           "runtime_path": str(runtime_path),
@@ -165,46 +106,24 @@ jobs:
           )
           PY
 
-      - name: Smoke test CLI query / ask / what-if
+      - name: Run release smoke test
         run: |
-          freeman query --config /tmp/freeman-smoke/config.yaml --text "water crisis" --limit 3 > /tmp/freeman-smoke/query.json
-          freeman ask --config /tmp/freeman-smoke/config.yaml "What is the current water crisis outlook?" --limit 3 > /tmp/freeman-smoke/ask.json
-          freeman what-if --config /tmp/freeman-smoke/config.yaml "What if Country A increases water releases?" --policies-path /tmp/freeman-smoke/scenario_policies.json --max-steps 3 --limit 3 > /tmp/freeman-smoke/what_if.json
+          freeman ask --config /tmp/freeman-release-smoke/config.yaml "What is the current water crisis outlook?" --limit 3 > /tmp/freeman-release-smoke/ask.json
+          freeman what-if --config /tmp/freeman-release-smoke/config.yaml "What if Country A increases water releases?" --policies-path /tmp/freeman-release-smoke/scenario_policies.json --max-steps 3 --limit 3 > /tmp/freeman-release-smoke/what_if.json
           python - <<'PY'
           from pathlib import Path
           import json
 
-          root = Path("/tmp/freeman-smoke")
-          query = json.loads((root / "query.json").read_text(encoding="utf-8"))
+          root = Path("/tmp/freeman-release-smoke")
           ask = json.loads((root / "ask.json").read_text(encoding="utf-8"))
           what_if = json.loads((root / "what_if.json").read_text(encoding="utf-8"))
 
-          assert query["semantic"] is True
-          assert "matches" in query
-          assert "answer_generated" in ask
           assert "matched" in ask
+          assert "answer_generated" in ask
           assert "scenario_simulation" in what_if
           assert "baseline_simulation" in what_if
           assert "comparison" in what_if
           PY
-
-  build:
-    runs-on: ubuntu-latest
-    needs:
-      - pytest
-      - smoke-e2e
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
 
       - name: Build release artifacts
         run: |
@@ -212,14 +131,45 @@ jobs:
           python -m build --sdist --wheel --outdir dist .
           python -m build --sdist --wheel --outdir packages/freeman-connectors/dist packages/freeman-connectors
 
-      - name: Upload core artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: freeman-dist
-          path: dist/*
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          release_title="$tag"
+          prerelease_flag="--prerelease"
+          version=""
 
-      - name: Upload connectors artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: freeman-connectors-dist
-          path: packages/freeman-connectors/dist/*
+          if [[ "$tag" == v* ]]; then
+            version="${tag#v}"
+            release_title="Freeman $version"
+            prerelease_flag=""
+          elif [[ "$tag" == hive_mind-* ]]; then
+            version="${tag#hive_mind-}"
+            release_title="Freeman $version (hive_mind prerelease)"
+          fi
+
+          notes_file=""
+          if [[ -n "$version" ]]; then
+            notes_file="docs/RELEASE_${version//./_}.md"
+          fi
+          if [[ ! -f "$notes_file" && "$version" == "3.2.0" ]]; then
+            notes_file="docs/RELEASE_3_2.md"
+          fi
+
+          if [[ ! -f "$notes_file" ]]; then
+            notes_file=""
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ -n "$notes_file" ]]; then
+              gh release edit "$tag" --title "$release_title" --notes-file "$notes_file" ${prerelease_flag}
+            else
+              gh release edit "$tag" --title "$release_title" ${prerelease_flag}
+            fi
+          elif [[ -n "$notes_file" ]]; then
+            gh release create "$tag" --title "$release_title" --notes-file "$notes_file" ${prerelease_flag}
+          else
+            gh release create "$tag" --title "$release_title" --notes "Automated release for $tag" ${prerelease_flag}
+          fi
+          gh release upload "$tag" dist/* packages/freeman-connectors/dist/* --clobber

@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import time
 
+import pytest
+
 from freeman.agent.consciousness import ConsciousState, ConsciousnessEngine, IdleScheduler
+from freeman.exceptions import RolePermissionError
 from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
 from freeman.memory.selfmodel import SelfModelEdge, SelfModelGraph, SelfModelNode
 
@@ -14,11 +17,12 @@ def _now() -> datetime:
     return datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc)
 
 
-def _state(tmp_path) -> ConsciousState:
+def _state(tmp_path, *, agent_role: str = "planner") -> ConsciousState:
     kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
     return ConsciousState(
         world_ref="world:test:0",
         self_model_ref=SelfModelGraph(kg),
+        agent_role=agent_role,
         goal_state=[],
         attention_state={"water": 0.5, "macro": 0.5},
         trace_state=[],
@@ -213,7 +217,7 @@ def test_anomaly_singleton_noise(tmp_path) -> None:
 
 
 def test_maybe_deliberate_emits_ontology_repair_request(tmp_path) -> None:
-    state = _state(tmp_path)
+    state = _state(tmp_path, agent_role="repairer")
     state.runtime_metadata["last_runtime_step"] = 100
     kg = state.self_model_ref.knowledge_graph
     for index in range(5):
@@ -271,3 +275,47 @@ def test_maybe_deliberate_emits_ontology_repair_request(tmp_path) -> None:
     assert request_events
     assert {"gap_topic_0", "gap_topic_1"}.issubset(set(request_events[-1].diff["gap_topics"]))
     assert all(node.payload["repair_triggered"] is True for node in traits)
+
+
+def test_ingestor_cannot_apply_shadow_graph_diff(tmp_path) -> None:
+    state = _state(tmp_path, agent_role="ingestor")
+    engine = ConsciousnessEngine(state, {})
+    node = SelfModelNode(
+        node_id="sm:goal_state:test:yes",
+        node_type="goal_state",
+        domain="test",
+        payload={"outcome_id": "yes"},
+        confidence=0.7,
+        created_at=_now(),
+        updated_at=_now(),
+        source_trace_id=None,
+    )
+
+    with pytest.raises(RolePermissionError):
+        engine._apply_diff({"nodes": [node.to_dict()]})
+
+
+def test_planner_cannot_emit_ontology_repair_request(tmp_path) -> None:
+    state = _state(tmp_path, agent_role="planner")
+    state.self_model_ref.write(
+        SelfModelNode(
+            node_id="sm:identity_trait:ontology_gap:test",
+            node_type="identity_trait",
+            domain="runtime",
+            payload={
+                "trait_key": "ontology_gap",
+                "cluster_topics": ["gap_topic"],
+                "repair_triggered": False,
+            },
+            confidence=0.9,
+            created_at=_now(),
+            updated_at=_now(),
+            source_trace_id=None,
+        ),
+        caller_token="freeman_consciousness_engine",
+    )
+    state.runtime_metadata["ontology_repairs_triggered"] = 0
+    engine = ConsciousnessEngine(state, {"ontology_repair": {"gap_threshold": 1}})
+
+    with pytest.raises(RolePermissionError):
+        engine._emit_ontology_repair_request()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.game.runner import SimConfig
 from freeman.interface.kgexport import KnowledgeGraphExporter
-from freeman.memory.knowledgegraph import KGNode, KnowledgeGraph
+from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.sessionlog import KGDelta, SessionLog
 from freeman.verifier.verifier import Verifier
 
@@ -50,3 +50,43 @@ def test_end_to_end_pipeline_30_steps_reconciles_and_exports(tmp_path, water_mar
     assert "3d-force-graph" in html_3d_path.read_text(encoding="utf-8")
     assert not any(violation["severity"] == "hard" for violation in result.simulation["violations"])
     assert verification.passed is True
+
+
+def test_flat_html_export_uses_interactive_russian_viewer(tmp_path) -> None:
+    knowledge_graph = KnowledgeGraph(json_path=tmp_path / "knowledge_graph.json", auto_load=False, auto_save=False)
+    knowledge_graph.add_node(
+        KGNode(
+            id="ru:a",
+            label="Русский узел",
+            content="Содержание узла на русском языке.",
+            node_type="claim",
+            metadata={
+                "locale": "ru",
+                "node_type_ru": "утверждение",
+                "bucket": "domain",
+                "bucket_ru": "домен",
+            },
+        )
+    )
+    knowledge_graph.add_node(KGNode(id="ru:b", label="Связанный узел", content="Контекст.", node_type="claim"))
+    knowledge_graph.add_edge(
+        KGEdge(
+            source="ru:a",
+            target="ru:b",
+            relation_type="supports",
+            metadata={"relation_ru": "поддерживает"},
+        )
+    )
+
+    html_path = KnowledgeGraphExporter().export_html(knowledge_graph, tmp_path / "kg.html")
+    html = html_path.read_text(encoding="utf-8")
+
+    assert '<html lang="ru">' in html
+    assert "Freeman: flat-граф знаний" in html
+    assert '<main class="canvas-wrap"><svg id="graph"></svg></main>' in html
+    assert 'class="type-filter"' in html
+    assert "function layoutNodes" in html
+    assert "function render()" in html
+    assert "Русский узел" in html
+    assert "поддерживает" in html
+    assert "\\u0420" not in html

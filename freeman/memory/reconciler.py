@@ -176,14 +176,37 @@ class Reconciler:
                 knowledge_graph.archive(node.id, reason="below_threshold")
                 result.archived_node_ids.append(node.id)
 
+        evaporated_edges = self.evaporate_trails(knowledge_graph)
+
         compaction_last_step = int(last_compaction_step) if last_compaction_step is not None else -1
         if self.compaction_interval > 0 and step_index is not None and int(step_index) > 0 and int(step_index) % self.compaction_interval == 0:
             result.compacted_node_ids = self.kg_compact(knowledge_graph)
             compaction_last_step = int(step_index)
 
         result.kg_health = self.kg_health(knowledge_graph, compaction_last_step)
+        result.kg_health["evaporated_trail_edges"] = int(evaporated_edges)
         knowledge_graph.save()
         return result
+
+    def evaporate_trails(self, knowledge_graph: KnowledgeGraph) -> int:
+        """Apply exponential trail evaporation on causal edges."""
+
+        if self.gamma <= 0.0:
+            return 0
+        decay = math.exp(-self.gamma)
+        updated = 0
+        for source, target, key, attrs in list(knowledge_graph.graph.edges(keys=True, data=True)):
+            relation_type = str(attrs.get("relation_type", ""))
+            if relation_type not in {"causes", "propagates_to"}:
+                continue
+            trail_weight = float(attrs.get("trail_weight", 0.0))
+            if trail_weight <= 0.0:
+                continue
+            edge = KGEdge.from_snapshot(dict(attrs))
+            edge.trail_weight = max(trail_weight * decay, 0.0)
+            knowledge_graph.graph.add_edge(source, target, key=key, **edge.snapshot())
+            updated += 1
+        return updated
 
     def _apply_delta(self, knowledge_graph: KnowledgeGraph, delta: KGDelta, result: ReconciliationResult) -> None:
         if delta.operation in {"add_node", "update_node"}:

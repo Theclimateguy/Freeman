@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 ACTIVE_THRESHOLD = 0.60
 UNCERTAIN_THRESHOLD = 0.30
 REVIEW_THRESHOLD = 0.15
+TRAIL_DECAY_FACTOR = 0.9
+TRAIL_EVICTION_THRESHOLD = 0.05
+_TRAIL_TYPES = {"ingest", "repair", "read_plan", "llm_propose", "verified"}
 
 
 def _now_iso() -> str:
@@ -58,6 +61,33 @@ def _default_json_path(config_path: str | Path | None = None) -> Path:
     return (_repo_root() / "runs" / "memory" / "knowledge_graph.json").resolve()
 
 
+def _normalize_trail_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep trail metadata consistent and JSON-safe."""
+
+    normalized = deep_copy_jsonable(metadata)
+    trail_type = normalized.get("trail_type")
+    if trail_type is not None:
+        trail_type = str(trail_type).strip()
+        if trail_type not in _TRAIL_TYPES:
+            raise ValueError(f"Unsupported trail_type: {trail_type}")
+        normalized["trail_type"] = trail_type
+    trail_intensity = normalized.get("trail_intensity")
+    if trail_intensity is not None:
+        normalized["trail_intensity"] = max(float(trail_intensity), 0.0)
+    if trail_type is None and trail_intensity is None:
+        return normalized
+    if trail_type is None:
+        normalized.pop("trail_intensity", None)
+        return normalized
+    if trail_intensity is None:
+        normalized["trail_intensity"] = 1.0
+        return normalized
+    if float(normalized["trail_intensity"]) < TRAIL_EVICTION_THRESHOLD:
+        normalized.pop("trail_type", None)
+        normalized.pop("trail_intensity", None)
+    return normalized
+
+
 @dataclass
 class KGNode:
     """Knowledge graph node."""
@@ -75,6 +105,8 @@ class KGNode:
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
     archived_at: str | None = None
+    locked_by: str | None = None
+    locked_at: float | None = None
 
     def __post_init__(self) -> None:
         self.confidence = float(min(max(self.confidence, 0.0), 1.0))
@@ -82,7 +114,7 @@ class KGNode:
             self.status = _status_for_confidence(self.confidence)
         self.evidence = list(self.evidence)
         self.sources = list(self.sources)
-        self.metadata = deep_copy_jsonable(self.metadata)
+        self.metadata = _normalize_trail_metadata(self.metadata)
         self.embedding = [float(value) for value in self.embedding]
 
     def snapshot(self) -> Dict[str, Any]:
@@ -101,6 +133,8 @@ class KGNode:
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
                 "archived_at": self.archived_at,
+                "locked_by": self.locked_by,
+                "locked_at": self.locked_at,
             }
         )
 
@@ -120,6 +154,12 @@ class KGNode:
             created_at=data.get("created_at", _now_iso()),
             updated_at=data.get("updated_at", _now_iso()),
             archived_at=data.get("archived_at"),
+            locked_by=data.get("locked_by"),
+            locked_at=(
+                float(data["locked_at"])
+                if data.get("locked_at") is not None
+                else None
+            ),
         )
 
 
@@ -132,6 +172,7 @@ class KGEdge:
     relation_type: str
     confidence: float = 0.5
     weight: float = 1.0
+    trail_weight: float = 0.0
     id: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=_now_iso)
@@ -140,6 +181,7 @@ class KGEdge:
     def __post_init__(self) -> None:
         self.confidence = float(min(max(self.confidence, 0.0), 1.0))
         self.weight = float(self.weight)
+        self.trail_weight = max(float(self.trail_weight), 0.0)
         self.metadata = deep_copy_jsonable(self.metadata)
 
     def snapshot(self) -> Dict[str, Any]:
@@ -151,6 +193,7 @@ class KGEdge:
                 "relation_type": self.relation_type,
                 "confidence": self.confidence,
                 "weight": self.weight,
+                "trail_weight": self.trail_weight,
                 "metadata": self.metadata,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
@@ -166,6 +209,7 @@ class KGEdge:
             relation_type=data["relation_type"],
             confidence=float(data.get("confidence", 0.5)),
             weight=float(data.get("weight", 1.0)),
+            trail_weight=float(data.get("trail_weight", 0.0)),
             metadata=deep_copy_jsonable(data.get("metadata", {})),
             created_at=data.get("created_at", _now_iso()),
             updated_at=data.get("updated_at", _now_iso()),
@@ -228,12 +272,15 @@ class KnowledgeGraph:
         llm_adapter: Any | None = None,
         vectorstore: KGVectorStore | None = None,
         sync_vectorstore_on_load: bool = True,
+        lock_backend: Any | None = None,
     ) -> None:
         self.json_path = Path(json_path).resolve() if json_path is not None else _default_json_path(config_path)
         self.auto_save = auto_save
         self.llm_adapter = llm_adapter
         self.vectorstore = vectorstore
         self.sync_vectorstore_on_load = bool(sync_vectorstore_on_load)
+        self.lock_backend = lock_backend or self._default_lock_backend()
+        self.lock_namespace = str(self.json_path)
         self.graph = nx.MultiDiGraph()
         if auto_load and self.json_path.exists():
             self.load()
@@ -283,6 +330,74 @@ class KnowledgeGraph:
             edge.id = f"{edge.source}:{edge.relation_type}:{edge.target}:{self.graph.number_of_edges(edge.source, edge.target)}"
         self.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
         self._maybe_save()
+
+    def try_lock(self, node_id: str, agent_id: str, *, lock_ttl_seconds: float | None = None) -> bool:
+        """Attempt to acquire a cooperative lock for one node."""
+
+        if node_id not in self.graph:
+            return False
+        acquired = self.lock_backend.try_lock(
+            node_id,
+            agent_id,
+            graph=self.graph,
+            namespace=self.lock_namespace,
+            lock_ttl_seconds=lock_ttl_seconds,
+            save_callback=self._maybe_save,
+        )
+        if acquired and not bool(getattr(self.lock_backend, "stores_graph_lock_state", False)):
+            self._mark_graph_lock(node_id, agent_id)
+        return bool(acquired)
+
+    def unlock(self, node_id: str, agent_id: str | None = None, *, force: bool = False) -> bool:
+        """Release a cooperative node lock."""
+
+        if node_id not in self.graph:
+            return False
+        unlocked = self.lock_backend.unlock(
+            node_id,
+            agent_id,
+            graph=self.graph,
+            namespace=self.lock_namespace,
+            force=force,
+            save_callback=self._maybe_save,
+        )
+        if unlocked and not bool(getattr(self.lock_backend, "stores_graph_lock_state", False)):
+            self._clear_graph_lock(node_id)
+        return bool(unlocked)
+
+    def deposit_trail(
+        self,
+        edge_ids: Sequence[str],
+        *,
+        quality: float,
+        allowed_relation_types: set[str] | None = None,
+    ) -> int:
+        """Increase trail weights on existing edges."""
+
+        relation_filter = allowed_relation_types or {"causes", "propagates_to"}
+        increment = max(float(quality), 0.0)
+        if increment <= 0.0:
+            return 0
+        updated = 0
+        edge_id_set = {str(edge_id) for edge_id in edge_ids}
+        if not edge_id_set:
+            return 0
+        for source, target, key, attrs in list(self.graph.edges(keys=True, data=True)):
+            edge_id = str(attrs.get("id", key))
+            if edge_id not in edge_id_set:
+                continue
+            relation_type = str(attrs.get("relation_type", ""))
+            if relation_type not in relation_filter:
+                continue
+            current = float(attrs.get("trail_weight", 0.0))
+            edge = KGEdge.from_snapshot(dict(attrs))
+            edge.trail_weight = current + increment
+            edge.updated_at = _now_iso()
+            self.graph.add_edge(source, target, key=key, **edge.snapshot())
+            updated += 1
+        if updated > 0:
+            self._maybe_save()
+        return updated
 
     def remove_edge(self, edge_id: str) -> None:
         """Remove one edge by id if present."""
@@ -652,7 +767,7 @@ class KnowledgeGraph:
         """Tokenize text for deterministic lexical retrieval."""
 
         normalized = str(text).lower().replace("_", " ")
-        return re.findall(r"[a-z0-9]+", normalized)
+        return re.findall(r"[a-zа-яё0-9]+", normalized)
 
     def _semantic_ngrams(self, tokens: Sequence[str], *, size: int) -> set[str]:
         """Return ordered token n-grams."""
@@ -958,14 +1073,52 @@ class KnowledgeGraph:
             return None
         return self._cosine_similarity(left_node.embedding, right_node.embedding)
 
+    def _default_lock_backend(self) -> Any:
+        """Build the default graph-backed lock backend lazily to avoid import cycles."""
+
+        from freeman.runtime.lock_backend import InMemoryLockBackend
+
+        return InMemoryLockBackend()
+
+    def _mark_graph_lock(self, node_id: str, agent_id: str) -> None:
+        """Mirror an external lock into node metadata for local observability."""
+
+        if node_id not in self.graph:
+            return
+        self.graph.nodes[node_id]["locked_by"] = str(agent_id)
+        self.graph.nodes[node_id]["locked_at"] = datetime.now(timezone.utc).timestamp()
+        self._maybe_save()
+
+    def _clear_graph_lock(self, node_id: str) -> None:
+        """Clear local lock observability fields after an external unlock."""
+
+        if node_id not in self.graph:
+            return
+        self.graph.nodes[node_id]["locked_by"] = None
+        self.graph.nodes[node_id]["locked_at"] = None
+        self._maybe_save()
+
     def _prepare_node(self, node: KGNode, previous: KGNode | None) -> KGNode:
         prepared = KGNode.from_snapshot(node.snapshot())
         force_reembed = bool(prepared.metadata.pop("_force_reembed", False))
         content_changed = previous is not None and previous.content != prepared.content
+        explicit_trail = "trail_type" in prepared.metadata or "trail_intensity" in prepared.metadata
+        if previous is not None and not explicit_trail:
+            previous_trail_type = previous.metadata.get("trail_type")
+            previous_trail_intensity = previous.metadata.get("trail_intensity")
+            if previous_trail_type is not None and previous_trail_intensity is not None:
+                decayed_intensity = max(float(previous_trail_intensity) * TRAIL_DECAY_FACTOR, 0.0)
+                if decayed_intensity >= TRAIL_EVICTION_THRESHOLD:
+                    prepared.metadata["trail_type"] = str(previous_trail_type)
+                    prepared.metadata["trail_intensity"] = decayed_intensity
+                else:
+                    prepared.metadata.pop("trail_type", None)
+                    prepared.metadata.pop("trail_intensity", None)
         if previous is not None and not force_reembed and not content_changed and not prepared.embedding and previous.embedding:
             prepared.embedding = list(previous.embedding)
         if prepared.content and self.llm_adapter is not None and (force_reembed or not prepared.embedding or content_changed):
             prepared.embedding = [float(value) for value in self.llm_adapter.embed(prepared.content)]
+        prepared.metadata = _normalize_trail_metadata(prepared.metadata)
         prepared.updated_at = _now_iso()
         if previous is not None:
             prepared.created_at = previous.created_at

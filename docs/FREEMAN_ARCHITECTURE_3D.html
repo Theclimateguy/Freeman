@@ -379,7 +379,7 @@
   "meta": {
     "title": "Freeman 3D Architecture Graph",
     "generatedFromBranch": "main",
-    "generatedAt": "2026-04-23",
+    "generatedAt": "2026-06-01",
     "nodeCount": 109,
     "edgeCount": 137,
     "comment": "Single visual architecture map. X axis is execution time, Y axis is subsystem layer, Z axis separates main flow, interfaces, research, and fallback branches."
@@ -453,7 +453,7 @@
     {
       "index": 13,
       "label": "Query and interfaces",
-      "comment": "CLI query modes, runtime answer engine, API/MCP/export/UI."
+      "comment": "CLI query modes, runtime answer and what-if engine, API/MCP/export/UI."
     }
   ],
   "layers": {
@@ -3342,14 +3342,14 @@
           "AnalysisPipeline.verify_forecast"
         ],
         "inputs": [
-          "runtime_step",
+          "world.t",
           "current probabilities"
         ],
         "outputs": [
           "verified forecasts",
           "epistemic log"
         ],
-        "comment": "Монотонный runtime_step определяет due forecasts и фактическую ошибку.",
+        "comment": "Domain time world.t determines due forecasts; runtime_step remains agent-clock provenance.",
         "invariant": "",
         "critical": true,
         "fallback": false,
@@ -3670,10 +3670,10 @@
         ],
         "outputs": [
           "metadata patch",
-          "causal edges",
+          "relation review queue",
           "proposal node"
         ],
-        "comment": "Для schema_path/fallback режимов auto-applies ontology topics/aliases/causal edges.",
+        "comment": "Для schema_path/fallback режимов применяет ontology topics/aliases, но inferred causal edges по умолчанию ставит в review queue.",
         "invariant": "",
         "critical": false,
         "fallback": true,
@@ -4022,7 +4022,8 @@
         "kind": "process",
         "module": "freeman.runtime.queryengine",
         "functions": [
-          "answer"
+          "answer",
+          "answer_what_if"
         ],
         "inputs": [
           "RuntimeQueryResult",
@@ -4031,7 +4032,7 @@
         "outputs": [
           "answer + evidence"
         ],
-        "comment": "Ответ строится по evidence; без совпадений возвращает no-evidence структуру.",
+        "comment": "Ответ строится либо по runtime evidence, либо по baseline/scenario rollouts + runtime evidence; без совпадений возвращает no-evidence структуру.",
         "invariant": "",
         "critical": false,
         "fallback": false,
@@ -4094,17 +4095,20 @@
           "freeman_run_simulation",
           "freeman_get_world_state",
           "freeman_verify_domain",
+          "freeman_answer_query",
+          "freeman_answer_what_if",
           "invoke_tool"
         ],
         "inputs": [
           "tool payloads"
         ],
         "outputs": [
-          "world registry",
+          "compiled world registry",
           "simulation JSON",
-          "verification"
+          "verification",
+          "scenario answer"
         ],
-        "comment": "OpenAI-compatible tool surface и in-memory registry.",
+        "comment": "OpenAI-compatible tool surface с persisted compiled worlds и scenario-answer path.",
         "invariant": "",
         "critical": false,
         "fallback": false,
@@ -5639,7 +5643,7 @@
         "target": "persist_context",
         "relation": "persists",
         "order": 104,
-        "comment": "Auto-applied repair updates KG/package/world metadata.",
+        "comment": "Repair persists KG/package/world metadata and only auto-applies causal edges when explicitly enabled above the confidence gate.",
         "transformation": "",
         "condition": "",
         "critical": false,

@@ -43,7 +43,7 @@
   - `fallback_schema_seed`
 - Resource normalization in ETL now coerces `evolution_params` to the operator contract so `logistic` resources cannot leak incompatible linear parameters into compiled worlds.
 - A transparent benchmark runner for random live RSS samples is now tracked in the repository:
-  - [scripts/run_random_news_etl_benchmark.py](/Users/theclimateguy/Documents/science/Freeman/scripts/run_random_news_etl_benchmark.py)
+  - [scripts/run_random_news_etl_benchmark.py](../scripts/run_random_news_etl_benchmark.py)
 
 ### Why It Matters
 

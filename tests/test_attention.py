@@ -13,6 +13,7 @@ from freeman.agent.attentionscheduler import (
     InterestNormalizer,
     ObligationQueue,
 )
+from freeman.agent.domainregistry import trail_scope_for_role
 
 
 def test_normalizer_zero_variance() -> None:
@@ -207,3 +208,90 @@ def test_scheduler_backward_compat() -> None:
 
     assert decision is not None
     assert decision.task_id == "a"
+
+
+def test_verified_trail_scores_lower_than_llm_propose() -> None:
+    scheduler = AttentionScheduler(attention_budget=2.0, ucb_beta=0.0)
+    scheduler.add_task(
+        AttentionTask(
+            task_id="verified",
+            description="Verified node",
+            expected_information_gain=1.0,
+            cost=1.0,
+            anomaly_score=0.2,
+            semantic_gap=0.2,
+            confidence_gap=0.2,
+            pulls=1,
+            metadata={"trail_type": "verified"},
+        )
+    )
+    scheduler.add_task(
+        AttentionTask(
+            task_id="proposal",
+            description="LLM proposal",
+            expected_information_gain=1.0,
+            cost=1.0,
+            anomaly_score=0.2,
+            semantic_gap=0.2,
+            confidence_gap=0.2,
+            pulls=1,
+            metadata={"trail_type": "llm_propose"},
+        )
+    )
+
+    decision = scheduler.select_task()
+
+    assert decision is not None
+    assert decision.task_id == "proposal"
+
+
+def test_eligible_tasks_filters_by_trail_scope() -> None:
+    scheduler = AttentionScheduler(attention_budget=3.0, ucb_beta=0.0)
+    scheduler.add_task(AttentionTask(task_id="raw", description="Raw", expected_information_gain=1.0, cost=1.0, metadata={}))
+    scheduler.add_task(
+        AttentionTask(
+            task_id="verified",
+            description="Verified",
+            expected_information_gain=1.0,
+            cost=1.0,
+            metadata={"trail_type": "verified"},
+        )
+    )
+    scheduler.add_task(
+        AttentionTask(
+            task_id="repair",
+            description="Repair",
+            expected_information_gain=1.0,
+            cost=1.0,
+            metadata={"trail_type": "repair"},
+        )
+    )
+
+    ingestor_ids = {task.task_id for task in scheduler.eligible_tasks(trail_scope=set(trail_scope_for_role("ingestor")))}
+    planner_ids = {task.task_id for task in scheduler.eligible_tasks(trail_scope=set(trail_scope_for_role("planner")))}
+
+    assert ingestor_ids == {"raw"}
+    assert planner_ids == {"verified", "repair"}
+
+
+def test_roles_visit_disjoint_trail_scopes_on_same_frontier() -> None:
+    scheduler = AttentionScheduler(attention_budget=5.0, ucb_beta=0.0)
+    for task in (
+        AttentionTask(task_id="raw", description="Raw", expected_information_gain=1.0, cost=1.0, metadata={}),
+        AttentionTask(task_id="ingest", description="Ingest", expected_information_gain=1.0, cost=1.0, metadata={"trail_type": "ingest"}),
+        AttentionTask(task_id="repair", description="Repair", expected_information_gain=1.0, cost=1.0, metadata={"trail_type": "repair"}),
+        AttentionTask(task_id="verified", description="Verified", expected_information_gain=1.0, cost=1.0, metadata={"trail_type": "verified"}),
+        AttentionTask(task_id="read_plan", description="Read plan", expected_information_gain=1.0, cost=1.0, metadata={"trail_type": "read_plan"}),
+    ):
+        scheduler.add_task(task)
+
+    repairer_ids = {task.task_id for task in scheduler.eligible_tasks(trail_scope=set(trail_scope_for_role("repairer")))}
+    narrator_ids = {task.task_id for task in scheduler.eligible_tasks(trail_scope=set(trail_scope_for_role("narrator")))}
+    planner_ids = {task.task_id for task in scheduler.eligible_tasks(trail_scope=set(trail_scope_for_role("planner")))}
+
+    assert repairer_ids == {"ingest"}
+    assert narrator_ids == {"read_plan"}
+    assert planner_ids == {"repair", "verified"}
+    assert repairer_ids.isdisjoint(narrator_ids)
+    assert repairer_ids.isdisjoint(planner_ids)
+    assert narrator_ids.isdisjoint(planner_ids)

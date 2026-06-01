@@ -16,6 +16,9 @@ ALLOWED_TRANSITIONS = {
     "COMPLETED": {"ARCHIVED"},
     "ARCHIVED": set(),
 }
+TRAIL_BONUS = 0.25
+VERIFIED_DECAY = 0.35
+READ_PLAN_COOLDOWN = 0.15
 
 
 @dataclass
@@ -140,10 +143,11 @@ class AttentionTask:
     anomaly_score: float = 0.0
     semantic_gap: float = 0.0
     confidence_gap: float = 0.0
+    trail_weight: float = 0.0
     state: str = "PENDING"
     pulls: int = 0
     last_interest_score: float = 0.0
-    metadata: Dict[str, float | str] = field(default_factory=dict)
+    metadata: Dict[str, float | str | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.state not in VALID_STATES:
@@ -153,6 +157,7 @@ class AttentionTask:
         self.anomaly_score = float(self.anomaly_score)
         self.semantic_gap = float(self.semantic_gap)
         self.confidence_gap = float(self.confidence_gap)
+        self.trail_weight = max(float(self.trail_weight), 0.0)
 
 
 @dataclass
@@ -209,13 +214,32 @@ class AttentionScheduler:
         """Return raw component values before normalization."""
 
         obligation = self.obligation_queue.pressure(task.task_id) if self.obligation_queue is not None else 0.0
-        return {
+        metadata_trail = float(task.metadata.get("trail_weight", 0.0)) if task.metadata else 0.0
+        components = {
             "expected_information_gain": task.expected_information_gain,
             "anomaly_score": task.anomaly_score,
             "semantic_gap": task.semantic_gap,
             "confidence_gap": task.confidence_gap,
             "obligation_pressure": obligation,
+            "trail_weight": max(task.trail_weight, metadata_trail),
         }
+        trail_type = task.metadata.get("trail_type") if task.metadata else None
+        normalized_trail = None if trail_type in {None, "", "None"} else str(trail_type)
+        if normalized_trail == "ingest":
+            components["anomaly_score"] += TRAIL_BONUS
+        elif normalized_trail == "repair":
+            components["semantic_gap"] = max(components["semantic_gap"] - TRAIL_BONUS, 0.0)
+        elif normalized_trail == "llm_propose":
+            components["confidence_gap"] += TRAIL_BONUS
+        elif normalized_trail == "verified":
+            for name in components:
+                components[name] *= VERIFIED_DECAY
+        elif normalized_trail == "read_plan":
+            components["expected_information_gain"] = max(
+                components["expected_information_gain"] - READ_PLAN_COOLDOWN,
+                0.0,
+            )
+        return components
 
     def _normalize_components(self, components: Dict[str, float]) -> Dict[str, float]:
         """Normalize each component when rolling statistics are available."""
@@ -235,11 +259,22 @@ class AttentionScheduler:
             for name, value in components.items():
                 self.interest_normalizer.observe(name, value)
 
-    def eligible_tasks(self) -> List[AttentionTask]:
+    def eligible_tasks(self, trail_scope: set[str | None] | tuple[str | None, ...] | list[str | None] | None = None) -> List[AttentionTask]:
+        normalized_scope = None
+        if trail_scope is not None:
+            normalized_scope = {
+                None if value in {None, "", "None"} else str(value)
+                for value in trail_scope
+            }
         return [
             task
             for task in self.tasks.values()
             if task.state in {"PENDING", "ACTIVE", "SUSPENDED"} and task.cost <= self.remaining_budget
+            and (
+                normalized_scope is None
+                or (None if task.metadata.get("trail_type") in {None, "", "None"} else str(task.metadata.get("trail_type")))
+                in normalized_scope
+            )
         ]
 
     def select_task(self) -> AttentionDecision | None:

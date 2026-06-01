@@ -22,6 +22,7 @@ Best for:
 Limitations:
 - initial ontology coverage is bounded by the seed graph
 - novelty must arrive later through stream updates and ontology repair
+- inferred causal edges from repair are review-queued by default; enable auto-apply only for trusted, high-confidence maintenance runs
 
 ### 2. `brief_local_etl`
 
@@ -46,7 +47,7 @@ Best for:
 
 Limitations:
 - if ETL fails, the returned graph may be dominated by the fallback ontology rather than the brief
-- benchmarking must record whether the final graph came from `etl_from_brief` or `fallback_schema_seed`
+- operations must record whether the final graph came from `etl_from_brief` or `fallback_schema_seed`
 
 ### 4. `brief_remote_etl`
 

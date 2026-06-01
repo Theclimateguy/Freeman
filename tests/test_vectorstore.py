@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from freeman.agent.analysispipeline import AnalysisPipeline, AnalysisPipelineConfig
-from freeman.interface.cli import main as cli_main
+from freeman.interface.cli import _run_ask_console, build_parser, main as cli_main
 from freeman.llm.adapter import HashingEmbeddingAdapter
 from freeman.memory.knowledgegraph import KGEdge, KGNode, KnowledgeGraph
 from freeman.memory.vectorstore import KGVectorStore
@@ -103,6 +103,30 @@ def test_pipeline_context_uses_lexical_semantics_without_vectorstore(tmp_path) -
     context = pipeline._get_context_nodes("drought water")
 
     assert [node.id for node in context] == ["a"]
+
+
+def test_semantic_query_tokenizes_cyrillic_text(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=False)
+    kg.add_node(
+        KGNode(
+            id="ru",
+            label="Предупреждение о прорыве красных",
+            content="Сигналы повышают вероятность прорыва красных на линии соприкосновения.",
+            confidence=0.8,
+        )
+    )
+    kg.add_node(
+        KGNode(
+            id="other",
+            label="Логистика синих",
+            content="Снабжение стабильно, новых предупреждений нет.",
+            confidence=0.8,
+        )
+    )
+
+    results = kg.semantic_query("вероятность прорыва красных", top_k=1)
+
+    assert [node.id for node in results] == ["ru"]
 
 
 def test_semantic_query_returns_empty_when_no_nodes_match(tmp_path) -> None:
@@ -430,6 +454,48 @@ def test_cli_query_reports_no_match_without_fallback(tmp_path, monkeypatch, caps
     assert output["count"] == 0
     assert output["matches"] == []
     assert output["no_match_reason"] == "no_runtime_evidence_matched"
+
+
+def test_cli_ask_accepts_console_mode_without_query() -> None:
+    args = build_parser().parse_args(["ask", "--config-path", "config.yaml"])
+
+    assert args.command == "ask"
+    assert args.query is None
+    assert args.interactive is False
+
+
+def test_run_ask_console_reads_until_exit(monkeypatch, capsys) -> None:
+    class _FakeAnswerEngine:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def answer(self, query: str, *, limit: int, chat_client):  # noqa: ANN001
+            self.queries.append(query)
+            assert limit == 2
+            assert chat_client is None
+            return {
+                "answer": "Answer text",
+                "count": 1,
+                "evidence": [
+                    {
+                        "label": "Node A",
+                        "kind": "kg_node",
+                        "score": 0.9,
+                    }
+                ],
+            }
+
+    engine = _FakeAnswerEngine()
+    inputs = iter(["first question", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    exit_code = _run_ask_console(engine, limit=2, chat_client=None, llm_error=None)
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert engine.queries == ["first question"]
+    assert "Answer text" in captured.out
+    assert "Node A" in captured.out
 
 
 def test_hashing_semantic_query_rejects_embedding_only_noise(tmp_path) -> None:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "freeman"
-version = "3.1.2"
+version = "3.3.1"
 description = "Domain-agnostic world simulator for LLM agents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,9 +35,11 @@ benchmark = [
 ]
 dev = ["pytest>=8.0"]
 mcp = ["mcp>=1.27"]
+redis = ["redis>=5.0"]
 
 [project.scripts]
 freeman = "freeman.interface.cli:main"
+freeman-hive = "freeman.runtime.hive_runtime:main"
 freeman-mcp = "freeman.mcp.server:main"
 
 [tool.setuptools]

@@ -22,8 +22,10 @@ from freeman.agent.costmodel import (
 from freeman.agent.analysispipeline import AnalysisPipeline
 from freeman.agent.consciousness import ConsciousState
 from freeman.agent.forecastregistry import Forecast, ForecastRegistry
+from freeman.core.scorer import score_outcomes
+from freeman.core.types import Policy
 from freeman.core.world import WorldState
-from freeman.game.runner import SimConfig
+from freeman.game.runner import GameRunner, SimConfig
 from freeman.interface.factory import (
     build_chat_client,
     build_embedding_adapter,
@@ -235,7 +237,7 @@ def load_runtime_artifacts(config_path: str | Path | None = None) -> RuntimeArti
 
 def _semantic_tokens(text: str) -> List[str]:
     normalized = str(text).lower().replace("_", " ")
-    return re.findall(r"[a-z0-9]+", normalized)
+    return re.findall(r"[a-zа-яё0-9]+", normalized)
 
 
 def _semantic_ngrams(tokens: Sequence[str], *, size: int) -> set[str]:
@@ -426,6 +428,8 @@ class RuntimeQueryEngine:
             return []
         evidence: list[RuntimeEvidence] = []
         for forecast in registry.all():
+            metadata = dict(forecast.metadata or {})
+            parameter_vector = dict(metadata.get("parameter_vector", {}) or {})
             analysis_node_id = str(forecast.metadata.get("analysis_node_id", "")).strip()
             boost = 0.25 if analysis_node_id and analysis_node_id in matched_node_ids else 0.0
             document = json.dumps(
@@ -465,7 +469,11 @@ class RuntimeQueryEngine:
                 RuntimeEvidence(
                     kind="forecast",
                     item_id=str(forecast.forecast_id),
-                    label=f"Forecast {forecast.forecast_id}",
+                    label=str(
+                        parameter_vector.get("label_ru")
+                        or metadata.get("label_ru")
+                        or f"Forecast {forecast.forecast_id}"
+                    ),
                     score=score,
                     payload=payload,
                 )
@@ -486,6 +494,7 @@ class RuntimeQueryEngine:
             target_node = self.artifacts.knowledge_graph.get_node(edge.target, lazy_embed=False)
             source_label = source_node.label if source_node is not None else edge.source
             target_label = target_node.label if target_node is not None else edge.target
+            relation_label = str(edge.metadata.get("relation_ru") or edge.relation_type)
             boost = 0.0
             if edge.source in matched_node_ids or edge.target in matched_node_ids:
                 boost += 0.2
@@ -493,6 +502,7 @@ class RuntimeQueryEngine:
                 {
                     "edge_id": edge.id,
                     "relation_type": edge.relation_type,
+                    "relation_label": relation_label,
                     "source_id": edge.source,
                     "source_label": source_label,
                     "target_id": edge.target,
@@ -521,11 +531,13 @@ class RuntimeQueryEngine:
             payload = edge.snapshot()
             payload["source_label"] = source_label
             payload["target_label"] = target_label
+            payload["source_content"] = source_node.content if source_node is not None else ""
+            payload["target_content"] = target_node.content if target_node is not None else ""
             evidence.append(
                 RuntimeEvidence(
                     kind="causal_edge",
                     item_id=str(edge.id),
-                    label=f"{source_label} {edge.relation_type} {target_label}",
+                    label=f"{source_label} {relation_label} {target_label}",
                     score=score,
                     payload=payload,
                 )
@@ -630,7 +642,10 @@ class RuntimeAnswerEngine:
             )
             return payload
 
-        context_items = [self._answer_context_item(item) for item in result.evidence[: min(max(limit, 1), 8)]]
+        context_items = [
+            self._answer_context_item(item)
+            for item in self._answer_evidence_context(result.evidence, limit=min(max(limit, 1) + 3, 8))
+        ]
         messages = [
             {
                 "role": "system",
@@ -640,7 +655,8 @@ class RuntimeAnswerEngine:
                     "Do not describe the JSON structure, schema, or metadata mechanically. "
                     "Start with the direct answer in 1-2 sentences, then give up to 3 short evidence-backed points. "
                     "When useful, name concrete mechanisms such as outcomes, variables, thresholds, signal excerpts, or rationale. "
-                    "If the evidence is insufficient, say that explicitly."
+                    "If the evidence is insufficient, say that explicitly. "
+                    "Answer in the same language as the user's question; if the question is in Russian, answer in Russian."
                 ),
             },
             {
@@ -691,7 +707,159 @@ class RuntimeAnswerEngine:
             payload["budget"] = self._budget_summary()
         return payload
 
+    def answer_what_if(
+        self,
+        query_text: str,
+        *,
+        scenario_policies: Sequence[Policy | Dict[str, Any]],
+        baseline_policies: Sequence[Policy | Dict[str, Any]] | None = None,
+        max_steps: int = 10,
+        seed: int | None = None,
+        limit: int = 10,
+        chat_client: Any | None = None,
+    ) -> dict[str, Any]:
+        """Answer a scenario question using the persisted world state as simulator input."""
+
+        result = self.query_engine.semantic_query(query_text, limit=limit)
+        payload = result.to_dict()
+        payload["budget"] = self._budget_summary()
+        world = self.artifacts.world_state
+        if world is None:
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": "persisted world_state is required for what-if analysis",
+                }
+            )
+            return payload
+
+        scenario_policy_objects = self._coerce_policies(scenario_policies)
+        if not scenario_policy_objects:
+            raise ValueError("scenario_policies must contain at least one policy.")
+        baseline_policy_objects = self._coerce_policies(baseline_policies or [])
+
+        budget_decision, approved_cost = self._what_if_budget_decision(query_text, max_steps=max_steps)
+        if budget_decision is not None and (not budget_decision.allowed or budget_decision.approved_mode == "WATCH"):
+            if self.artifacts.budget_ledger is not None:
+                self.artifacts.budget_ledger.record(
+                    task_type="what_if_generation",
+                    requested_mode="ANALYZE",
+                    decision=budget_decision,
+                    actual_cost=0.0,
+                    metadata={
+                        "query": query_text,
+                        "approved_estimated_cost": float(approved_cost),
+                        "max_steps": int(max_steps),
+                        "evidence_count": len(result.evidence),
+                    },
+                )
+                payload["budget"] = self._budget_summary()
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": f"budget gate blocked what-if analysis: {budget_decision.stop_reason or 'budget_policy'}",
+                }
+            )
+            return payload
+
+        runner = GameRunner(self._scenario_sim_config(world, max_steps=max_steps, seed=seed))
+        baseline_result = runner.run(world.clone(), baseline_policy_objects)
+        scenario_result = runner.run(world.clone(), scenario_policy_objects)
+        comparison = self._simulation_comparison(baseline_result.trajectory[-1], scenario_result.trajectory[-1])
+        payload.update(
+            {
+                "baseline_policies": [policy.snapshot() for policy in baseline_policy_objects],
+                "scenario_policies": [policy.snapshot() for policy in scenario_policy_objects],
+                "baseline_simulation": self._simulation_summary(baseline_result),
+                "scenario_simulation": self._simulation_summary(scenario_result),
+                "comparison": comparison,
+            }
+        )
+
+        if chat_client is None:
+            chat_client, llm_error = build_chat_client(self.artifacts.config)
+            if chat_client is None:
+                payload.update(
+                    {
+                        "answer": None,
+                        "answer_generated": False,
+                        "llm_error": llm_error or "llm provider is not configured",
+                    }
+                )
+                return payload
+
+        context_items = [self._answer_context_item(item) for item in result.evidence[: min(max(limit, 1), 8)]]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are Freeman's scenario answer engine. "
+                    "Use the baseline and scenario simulations as the primary calibration. "
+                    "Use the runtime evidence only to justify mechanisms or uncertainty. "
+                    "Answer the what-if question directly in 1-2 sentences, then give up to 4 short points. "
+                    "Distinguish simulated changes from current-state evidence, and state when the scenario impact is weak."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "query": query_text,
+                        "world_state": self._world_summary(),
+                        "baseline_simulation": payload["baseline_simulation"],
+                        "scenario_simulation": payload["scenario_simulation"],
+                        "comparison": comparison,
+                        "runtime_evidence": context_items,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        attempted_generation = False
+        try:
+            attempted_generation = True
+            answer = str(chat_client.chat_text(messages, temperature=0.1, max_tokens=900)).strip()
+            payload.update(
+                {
+                    "answer": answer,
+                    "answer_generated": True,
+                    "llm_error": None,
+                }
+            )
+        except Exception as exc:  # pragma: no cover - exercised only with live providers
+            payload.update(
+                {
+                    "answer": None,
+                    "answer_generated": False,
+                    "llm_error": str(exc),
+                }
+            )
+        if budget_decision is not None and self.artifacts.budget_ledger is not None:
+            self.artifacts.budget_ledger.record(
+                task_type="what_if_generation",
+                requested_mode="ANALYZE",
+                decision=budget_decision,
+                actual_cost=float(approved_cost if attempted_generation else 0.0),
+                metadata={
+                    "query": query_text,
+                    "approved_estimated_cost": float(approved_cost),
+                    "max_steps": int(max_steps),
+                    "evidence_count": len(result.evidence),
+                    "answer_generated": bool(payload.get("answer_generated")),
+                },
+            )
+            payload["budget"] = self._budget_summary()
+        return payload
+
     def _answer_budget_decision(self, query_text: str) -> tuple[Any | None, float]:
+        return self._budget_decision(query_text, sim_steps=0, task_prefix="answer")
+
+    def _what_if_budget_decision(self, query_text: str, *, max_steps: int) -> tuple[Any | None, float]:
+        return self._budget_decision(query_text, sim_steps=max(int(max_steps), 1) * 2, task_prefix="what_if")
+
+    def _budget_decision(self, query_text: str, *, sim_steps: int, task_prefix: str) -> tuple[Any | None, float]:
         if not self.artifacts.budget_tracking_enabled or self.artifacts.budget_ledger is None:
             return None, 0.0
         world = self.artifacts.world_state
@@ -703,9 +871,9 @@ class RuntimeAnswerEngine:
         def _estimate_for_mode(mode: str):
             idle_mode = str(mode or "WATCH").upper() == "WATCH"
             return self.artifacts.cost_model.estimate(
-                task_id=f"answer:{query_tokens}:{mode.lower()}",
+                task_id=f"{task_prefix}:{query_tokens}:{mode.lower()}",
                 llm_calls=0 if idle_mode else 1,
-                sim_steps=0,
+                sim_steps=0 if idle_mode else sim_steps,
                 actors=0 if idle_mode else actors,
                 resources=0 if idle_mode else resources,
                 domains=0 if idle_mode else domains,
@@ -754,6 +922,107 @@ class RuntimeAnswerEngine:
             "outcomes": sorted(world.outcomes),
         }
 
+    def _scenario_sim_config(self, world: WorldState, *, max_steps: int, seed: int | None) -> SimConfig:
+        base_config = _build_sim_config(self.artifacts.config)
+        base_config.max_steps = max(int(max_steps), 1)
+        base_config.seed = int(world.seed if seed is None else seed)
+        return base_config
+
+    def _coerce_policies(self, policies: Sequence[Policy | Dict[str, Any]]) -> list[Policy]:
+        return [
+            policy if isinstance(policy, Policy) else Policy.from_snapshot(dict(policy))
+            for policy in policies
+        ]
+
+    def _simulation_summary(self, result: Any) -> dict[str, Any]:
+        final_snapshot = dict(result.trajectory[-1])
+        return {
+            "domain_id": result.domain_id,
+            "steps_run": int(result.steps_run),
+            "confidence": float(result.confidence),
+            "converged": bool(result.converged),
+            "stop_reason": result.metadata.get("stop_reason"),
+            "final_outcome_probs": {
+                outcome_id: float(value) for outcome_id, value in dict(result.final_outcome_probs).items()
+            },
+            "dominant_outcome": self._dominant_outcome(result.final_outcome_probs),
+            "world_t": int(final_snapshot.get("t", 0)),
+            "runtime_step": int(final_snapshot.get("runtime_step", 0)),
+        }
+
+    def _simulation_comparison(
+        self,
+        baseline_snapshot: dict[str, Any],
+        scenario_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        baseline_probs = self._snapshot_outcome_probs(baseline_snapshot)
+        scenario_probs = self._snapshot_outcome_probs(scenario_snapshot)
+        outcome_ids = sorted(set(baseline_probs) | set(scenario_probs))
+        outcome_deltas = {
+            outcome_id: float(scenario_probs.get(outcome_id, 0.0) - baseline_probs.get(outcome_id, 0.0))
+            for outcome_id in outcome_ids
+        }
+        resource_deltas = []
+        baseline_resources = dict(baseline_snapshot.get("resources", {}))
+        scenario_resources = dict(scenario_snapshot.get("resources", {}))
+        for resource_id in sorted(set(baseline_resources) | set(scenario_resources)):
+            baseline_resource = dict(baseline_resources.get(resource_id, {}))
+            scenario_resource = dict(scenario_resources.get(resource_id, {}))
+            baseline_value = float(baseline_resource.get("value", 0.0))
+            scenario_value = float(scenario_resource.get("value", 0.0))
+            resource_deltas.append(
+                {
+                    "resource_id": resource_id,
+                    "baseline_value": baseline_value,
+                    "scenario_value": scenario_value,
+                    "delta": float(scenario_value - baseline_value),
+                }
+            )
+        resource_deltas.sort(key=lambda item: abs(float(item["delta"])), reverse=True)
+        return {
+            "baseline_dominant_outcome": self._dominant_outcome(baseline_probs),
+            "scenario_dominant_outcome": self._dominant_outcome(scenario_probs),
+            "outcome_probability_delta": outcome_deltas,
+            "top_resource_deltas": resource_deltas[:5],
+        }
+
+    @staticmethod
+    def _snapshot_outcome_probs(snapshot: dict[str, Any]) -> dict[str, float]:
+        world = WorldState.from_snapshot(snapshot)
+        return {
+            outcome_id: float(value)
+            for outcome_id, value in score_outcomes(world).items()
+        }
+
+    @staticmethod
+    def _dominant_outcome(outcome_probs: dict[str, float]) -> str | None:
+        if not outcome_probs:
+            return None
+        return max(outcome_probs.items(), key=lambda item: float(item[1]))[0]
+
+    @staticmethod
+    def _answer_evidence_context(evidence: Sequence[RuntimeEvidence], *, limit: int) -> list[RuntimeEvidence]:
+        """Prefer direct KG matches, then add the highest-scoring runtime evidence."""
+
+        selected: list[RuntimeEvidence] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(item: RuntimeEvidence) -> None:
+            if len(selected) >= limit:
+                return
+            key = (item.kind, item.item_id)
+            if key in seen:
+                return
+            selected.append(item)
+            seen.add(key)
+
+        for item in evidence:
+            if item.kind == "kg_node" and bool(item.payload.get("matched_directly")):
+                add(item)
+        for item in evidence:
+            add(item)
+        return selected
+
     def _answer_context_item(self, item: RuntimeEvidence) -> dict[str, Any]:
         payload = item.payload
         if item.kind == "forecast":
@@ -770,6 +1039,7 @@ class RuntimeAnswerEngine:
                 "label": item.label,
                 "score": float(item.score),
                 "outcome_id": payload.get("outcome_id"),
+                "outcome_label": parameter_vector.get("outcome_label_ru") or metadata.get("outcome_label_ru"),
                 "predicted_prob": payload.get("predicted_prob"),
                 "status": payload.get("status"),
                 "analysis_node_id": payload.get("analysis_node_id"),
@@ -784,7 +1054,7 @@ class RuntimeAnswerEngine:
                 "id": item.item_id,
                 "label": item.label,
                 "score": float(item.score),
-                "node_type": node.get("node_type"),
+                "node_type": metadata.get("node_type_ru") or node.get("node_type"),
                 "content": node.get("content"),
             }
             for key in (
@@ -800,16 +1070,21 @@ class RuntimeAnswerEngine:
                     summary[key] = metadata[key]
             return summary
         if item.kind == "causal_edge":
+            metadata = dict(payload.get("metadata", {}) or {})
             return {
                 "kind": item.kind,
                 "id": item.item_id,
                 "label": item.label,
                 "score": float(item.score),
-                "relation_type": payload.get("relation_type"),
+                "relation_type": metadata.get("relation_ru") or payload.get("relation_type"),
                 "source_label": payload.get("source_label"),
+                "source_content": payload.get("source_content"),
                 "target_label": payload.get("target_label"),
+                "target_content": payload.get("target_content"),
                 "confidence": payload.get("confidence"),
-                "metadata": payload.get("metadata", {}),
+                "delta_value": metadata.get("delta_value"),
+                "world_step": metadata.get("world_step"),
+                "runtime_step": metadata.get("runtime_step"),
             }
         if item.kind == "world_state":
             return {

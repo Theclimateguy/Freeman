@@ -31,6 +31,7 @@ from freeman.verifier.report import VerificationReport
 
 WORLD_REGISTRY: Dict[str, WorldState] = {}
 TRAJECTORY_REGISTRY: Dict[str, List[Dict[str, Any]]] = {}
+COMPILED_WORLD_REGISTRY_FILENAME = "compiled_worlds.json"
 
 
 @dataclass
@@ -120,6 +121,26 @@ def _read_json(path: Path, default: Any) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _compiled_world_registry_path(config_path: str | Path | None = None) -> Path:
+    config, resolved = _load_config(config_path)
+    runtime_cfg = dict(config.get("runtime", {}))
+    runtime_path = _resolve_path(resolved.parent, runtime_cfg.get("runtime_path"), "./data/runtime")
+    runtime_path.mkdir(parents=True, exist_ok=True)
+    return runtime_path / COMPILED_WORLD_REGISTRY_FILENAME
+
+
+def _load_compiled_world_registry(config_path: str | Path | None = None) -> tuple[dict[str, Any], Path]:
+    path = _compiled_world_registry_path(config_path)
+    payload = _read_json(path, {"worlds": {}})
+    payload["worlds"] = dict(payload.get("worlds", {}))
+    return payload, path
+
+
+def _save_compiled_world_registry(payload: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _snapshot_entries(snapshot_dir: Path) -> list[dict[str, Any]]:
     manifest_path = snapshot_dir / "manifest.jsonl"
     entries: list[dict[str, Any]] = []
@@ -202,10 +223,14 @@ def _node_snapshot(node: KGNode) -> dict[str, Any]:
     return payload
 
 
-def _next_world_id(domain_id: str) -> str:
+def _next_world_id(domain_id: str, *, config_path: str | Path | None = None) -> str:
     """Return a new in-memory world id."""
 
-    return f"{domain_id}:{len(WORLD_REGISTRY) + 1}"
+    persisted, _ = _load_compiled_world_registry(config_path)
+    prefix = f"{domain_id}:"
+    existing_ids = set(WORLD_REGISTRY) | set(persisted.get("worlds", {}))
+    count = sum(1 for world_id in existing_ids if str(world_id).startswith(prefix))
+    return f"{domain_id}:{count + 1}"
 
 
 def _coerce_policies(policies: Iterable[Policy | Dict[str, Any]]) -> List[Policy]:
@@ -214,14 +239,52 @@ def _coerce_policies(policies: Iterable[Policy | Dict[str, Any]]) -> List[Policy
     return [policy if isinstance(policy, Policy) else Policy.from_snapshot(policy) for policy in policies]
 
 
-def freeman_compile_domain(schema: Dict[str, Any]) -> Dict[str, Any]:
-    """Compile ``schema`` into a world and store it in the in-memory registry."""
+def _persist_compiled_world(
+    world_id: str,
+    *,
+    world: WorldState,
+    trajectory: list[dict[str, Any]],
+    config_path: str | Path | None = None,
+) -> None:
+    registry, path = _load_compiled_world_registry(config_path)
+    registry["worlds"][world_id] = {
+        "domain_id": world.domain_id,
+        "world": world.snapshot(),
+        "trajectory": trajectory,
+    }
+    _save_compiled_world_registry(registry, path)
+
+
+def _load_compiled_world(world_id: str, *, config_path: str | Path | None = None) -> tuple[WorldState, list[dict[str, Any]]]:
+    if world_id in WORLD_REGISTRY:
+        trajectory = TRAJECTORY_REGISTRY.get(world_id, [WORLD_REGISTRY[world_id].snapshot()])
+        return WORLD_REGISTRY[world_id], trajectory
+    registry, _ = _load_compiled_world_registry(config_path)
+    entry = dict(registry.get("worlds", {}).get(world_id, {}))
+    if not entry:
+        raise KeyError(f"Unknown world_id: {world_id}")
+    trajectory = list(entry.get("trajectory", []))
+    world_snapshot = dict(entry.get("world") or (trajectory[-1] if trajectory else {}))
+    if not world_snapshot:
+        raise KeyError(f"Compiled world entry for {world_id} is empty.")
+    world = WorldState.from_snapshot(world_snapshot)
+    WORLD_REGISTRY[world_id] = world
+    TRAJECTORY_REGISTRY[world_id] = trajectory or [world.snapshot()]
+    return world, TRAJECTORY_REGISTRY[world_id]
+
+
+def freeman_compile_domain(
+    schema: Dict[str, Any],
+    config_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Compile ``schema`` into a world and store it in memory plus runtime artifacts."""
 
     compiler = DomainCompiler()
     world = compiler.compile(schema)
-    world_id = _next_world_id(world.domain_id)
+    world_id = _next_world_id(world.domain_id, config_path=config_path)
     WORLD_REGISTRY[world_id] = world
     TRAJECTORY_REGISTRY[world_id] = [world.snapshot()]
+    _persist_compiled_world(world_id, world=world, trajectory=TRAJECTORY_REGISTRY[world_id], config_path=config_path)
     return {"world_id": world_id, "validation_result": {"valid": True, "domain_id": world.domain_id}}
 
 
@@ -230,33 +293,48 @@ def freeman_run_simulation(
     policies: Iterable[Policy | Dict[str, Any]],
     max_steps: int = 50,
     seed: int = 42,
+    config_path: str | Path | None = None,
 ) -> str:
     """Run a simulation for a compiled world and return serialized JSON."""
 
-    world = WORLD_REGISTRY[world_id].clone()
+    world = _load_compiled_world(world_id, config_path=config_path)[0].clone()
     world.seed = seed
     config = SimConfig(max_steps=max_steps, seed=seed)
     runner = GameRunner(config)
     result = runner.run(world, _coerce_policies(policies))
     TRAJECTORY_REGISTRY[world_id] = result.trajectory
     WORLD_REGISTRY[world_id] = WorldState.from_snapshot(result.trajectory[-1])
+    _persist_compiled_world(
+        world_id,
+        world=WORLD_REGISTRY[world_id],
+        trajectory=result.trajectory,
+        config_path=config_path,
+    )
     return result.to_json()
 
 
-def freeman_get_world_state(world_id: str, t: int = -1) -> Dict[str, Any]:
+def freeman_get_world_state(
+    world_id: str,
+    t: int = -1,
+    config_path: str | Path | None = None,
+) -> Dict[str, Any]:
     """Return a stored world snapshot, defaulting to the latest timestep."""
 
-    trajectory = TRAJECTORY_REGISTRY.get(world_id)
+    _, trajectory = _load_compiled_world(world_id, config_path=config_path)
     if trajectory:
         index = len(trajectory) - 1 if t == -1 else t
         return trajectory[index]
     return WORLD_REGISTRY[world_id].snapshot()
 
 
-def freeman_verify_domain(world_id: str, levels: Iterable[int] = (0, 1, 2)) -> Dict[str, Any]:
+def freeman_verify_domain(
+    world_id: str,
+    levels: Iterable[int] = (0, 1, 2),
+    config_path: str | Path | None = None,
+) -> Dict[str, Any]:
     """Run selected verification levels for a compiled world."""
 
-    world = WORLD_REGISTRY[world_id].clone()
+    world = _load_compiled_world(world_id, config_path=config_path)[0].clone()
     requested_levels = list(levels)
     violations = []
 
@@ -436,6 +514,33 @@ def freeman_answer_query(
     return RuntimeAnswerEngine(artifacts).answer(str(text), limit=max(int(limit), 1))
 
 
+def freeman_answer_what_if(
+    config_path: str = "config.yaml",
+    text: str = "",
+    policies: Iterable[Policy | Dict[str, Any]] | None = None,
+    baseline_policies: Iterable[Policy | Dict[str, Any]] | None = None,
+    max_steps: int = 10,
+    seed: int | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Answer a scenario question using the persisted world state plus runtime evidence."""
+
+    if not str(text).strip():
+        raise ValueError("text is required.")
+    scenario_policies = list(policies or [])
+    if not scenario_policies:
+        raise ValueError("policies must contain at least one policy.")
+    artifacts = _load_runtime_query_artifacts(config_path)
+    return RuntimeAnswerEngine(artifacts).answer_what_if(
+        str(text),
+        scenario_policies=scenario_policies,
+        baseline_policies=list(baseline_policies or []),
+        max_steps=max(int(max_steps), 1),
+        seed=None if seed is None else int(seed),
+        limit=max(int(limit), 1),
+    )
+
+
 def freeman_trace_relation_learning(
     config_path: str = "config.yaml",
     source: str = "",
@@ -524,6 +629,10 @@ FREEMAN_TOOLS = [
             "type": "object",
             "properties": {
                 "schema": {"type": "object", "description": "Domain schema JSON"},
+                "config_path": {
+                    "type": "string",
+                    "description": "Optional config path used to persist compiled worlds under the runtime directory.",
+                },
             },
             "required": ["schema"],
         },
@@ -538,6 +647,7 @@ FREEMAN_TOOLS = [
                 "policies": {"type": "array"},
                 "max_steps": {"type": "integer", "default": 50},
                 "seed": {"type": "integer", "default": 42},
+                "config_path": {"type": "string"},
             },
             "required": ["world_id", "policies"],
         },
@@ -550,6 +660,7 @@ FREEMAN_TOOLS = [
             "properties": {
                 "world_id": {"type": "string"},
                 "t": {"type": "integer", "default": -1},
+                "config_path": {"type": "string"},
             },
             "required": ["world_id"],
         },
@@ -562,6 +673,7 @@ FREEMAN_TOOLS = [
             "properties": {
                 "world_id": {"type": "string"},
                 "levels": {"type": "array", "items": {"type": "integer"}, "default": [0, 1, 2]},
+                "config_path": {"type": "string"},
             },
             "required": ["world_id"],
         },
@@ -671,6 +783,26 @@ FREEMAN_TOOLS = [
             "required": ["text"],
         },
     },
+    {
+        "name": "freeman_answer_what_if",
+        "description": (
+            "Answer a what-if question using the persisted world state as the simulation baseline, "
+            "then calibrate the answer with runtime evidence from the KG and forecasts."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "config_path": {"type": "string", "default": "config.yaml"},
+                "text": {"type": "string"},
+                "policies": {"type": "array", "description": "Scenario policy snapshots to apply."},
+                "baseline_policies": {"type": "array", "description": "Optional baseline policy snapshots."},
+                "max_steps": {"type": "integer", "default": 10},
+                "seed": {"type": "integer"},
+                "limit": {"type": "integer", "default": 10},
+            },
+            "required": ["text", "policies"],
+        },
+    },
 ]
 
 FREEMAN_TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
@@ -686,6 +818,7 @@ FREEMAN_TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "freeman_trace_relation_learning": freeman_trace_relation_learning,
     "freeman_query_runtime_context": freeman_query_runtime_context,
     "freeman_answer_query": freeman_answer_query,
+    "freeman_answer_what_if": freeman_answer_what_if,
 }
 
 
@@ -719,6 +852,7 @@ __all__ = [
     "freeman_trace_relation_learning",
     "freeman_query_runtime_context",
     "freeman_answer_query",
+    "freeman_answer_what_if",
     "invoke_tool",
     "resolve_tool",
 ]

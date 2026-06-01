@@ -173,6 +173,9 @@ class SignalTrigger:
     requested_mode: str = "WATCH"
     estimated_cost: float = 0.0
     budget_reason: str | None = None
+    conflict_score: float = 0.0
+    conflict_reason: str | None = None
+    conflicts_with: List[str] = field(default_factory=list)
 
 
 class ManualSignalSource:
@@ -332,6 +335,56 @@ class SignalIngestionEngine:
         )
         return float(np.clip(score, 0.0, 1.0))
 
+    def _signal_overlap(self, left: Signal, right: Signal) -> float:
+        left_topic = str(left.topic).strip().lower()
+        right_topic = str(right.topic).strip().lower()
+        topic_match = 1.0 if left_topic and left_topic == right_topic else 0.0
+        left_entities = {str(entity).strip().lower() for entity in left.entities if str(entity).strip()}
+        right_entities = {str(entity).strip().lower() for entity in right.entities if str(entity).strip()}
+        if left_entities or right_entities:
+            entity_overlap = len(left_entities & right_entities) / max(len(left_entities | right_entities), 1)
+        else:
+            entity_overlap = 0.0
+        return float(max(topic_match, entity_overlap))
+
+    def _pair_conflict_score(self, left: Signal, right: Signal) -> float:
+        overlap = self._signal_overlap(left, right)
+        if overlap <= 0.0:
+            return 0.0
+        left_sentiment = float(left.sentiment)
+        right_sentiment = float(right.sentiment)
+        if left_sentiment * right_sentiment >= -0.05:
+            return 0.0
+        sentiment_gap = min(abs(left_sentiment - right_sentiment) / 2.0, 1.0)
+        return float(np.clip(0.70 * sentiment_gap + 0.30 * overlap, 0.0, 1.0))
+
+    def _annotate_signal_conflicts(
+        self,
+        signals: Sequence[Signal],
+        triggers: Sequence[SignalTrigger],
+    ) -> None:
+        """Mark contradictory retained signals without suppressing either side."""
+
+        trigger_by_id = {trigger.signal_id: trigger for trigger in triggers}
+        def _annotate(trigger: SignalTrigger, other_signal: Signal, score: float) -> None:
+            trigger.conflict_score = max(float(trigger.conflict_score), score)
+            if other_signal.signal_id not in trigger.conflicts_with:
+                trigger.conflicts_with.append(other_signal.signal_id)
+            trigger.conflict_reason = "opposing_sentiment_same_topic_or_entity"
+            trigger.interest_score = float(np.clip(trigger.interest_score + 0.10 * score, 0.0, 1.0))
+
+        for left_index, left in enumerate(signals):
+            for right in signals[left_index + 1 :]:
+                score = self._pair_conflict_score(left, right)
+                if score <= 0.0:
+                    continue
+                left_trigger = trigger_by_id.get(left.signal_id)
+                right_trigger = trigger_by_id.get(right.signal_id)
+                if left_trigger is not None:
+                    _annotate(left_trigger, right, score)
+                if right_trigger is not None:
+                    _annotate(right_trigger, left, score)
+
     def _estimated_mode_cost(
         self,
         mode: str,
@@ -457,6 +510,7 @@ class SignalIngestionEngine:
                     ),
                 )
             )
+        self._annotate_signal_conflicts(retained_signals, triggers)
         self._apply_interest_budget(
             triggers,
             analysis_budget=analysis_budget,

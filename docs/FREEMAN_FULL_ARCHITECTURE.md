@@ -1,6 +1,6 @@
 # Freeman: полная архитектура агентно-симуляционной системы
 
-> Срез построен по текущему рабочему дереву ветки `main`. Документ описывает реализованное поведение кода, включая runtime, CLI, MCP/tools, LLM-bootstrap, симулятор, память, consciousness layer, connectors, исследовательские harness-сценарии и fallback-механизмы. Untracked локальные файлы не включались в архитектурную модель.
+> Срез построен по текущему рабочему дереву ветки `main` на `2026-06-01` для релиза `3.3.1`. Документ описывает реализованное поведение кода, включая hive runtime, CLI, MCP/tools, LLM-bootstrap, симулятор, память, consciousness layer, query/what-if surfaces, геослой и fallback-механизмы.
 
 > Единый интерактивный 3D-визуал архитектуры: [FREEMAN_ARCHITECTURE_3D.html](FREEMAN_ARCHITECTURE_3D.html).
 
@@ -9,7 +9,7 @@
 Freeman реализует дискретную агентно-симуляционную систему с долговременной памятью. Минимальное состояние runtime в момент `k`:
 
 $$
-R_k = (W_k, K_k, C_k, F_k, Q_k, U_k, B_k, L_k),
+R_k = (W_k, K_k, C_k, F_k, Q_k, U_k, B_k, L_k, S_k),
 $$
 
 где:
@@ -22,6 +22,7 @@ $$
 - `U_k` - unresolved obligations: forecast debt, conflict debt, anomaly debt.
 - `B_k` - budget ledger and cost policy.
 - `L_k` - append-only event log and checkpoints.
+- `S_k` - spatial topology carried in `W_k.metadata["spatial"]` and materialized into explicit actor relations before simulation.
 
 Внешний сигнал `x_k` и внутренний акт `u_k` задают переход:
 
@@ -59,6 +60,7 @@ flowchart TB
         LLM["LLM client: Ollama / DeepSeek / OpenAI"]
         ORCH["FreemanOrchestrator.compile_and_repair"]
         COMP["DomainCompiler"]
+        SPATIAL["initialize_spatial_relations"]
         INITRUN["AnalysisPipeline.run"]
     end
 
@@ -100,7 +102,7 @@ flowchart TB
     CFG --> Bootstrap
     SCHEMA --> COMP
     BRIEF --> LLM --> ORCH --> COMP
-    COMP --> INITRUN
+    COMP --> SPATIAL --> INITRUN
     INITRUN --> WORLD
     SRC --> POLL --> QUEUE --> INGEST --> BUDGET
     INGEST --> EST --> UPDATE
@@ -271,7 +273,21 @@ $$
 \text{schema} \mapsto W_0=(A,R,E,O,D,\rho,\mu),
 $$
 
-where actors/resources/relations/outcomes/causal edges are converted into dataclasses. Validation rejects unknown IDs, invalid evolution operators, invalid scoring keys, invalid DAG endpoints, invalid actor update rules and invalid exogenous inflows. If `metadata["spatial"]` contains an adjacency graph, compile-time materialization adds actor-level `spatial_neighbor` relations before the simulator sees the world.
+where actors/resources/relations/outcomes/causal edges are converted into dataclasses. Validation rejects unknown IDs, invalid evolution operators, invalid scoring keys, invalid DAG endpoints, invalid actor update rules and invalid exogenous inflows.
+
+If the schema carries top-level `spatial` metadata, compilation also runs
+`initialize_spatial_relations(world)`. For actor-region map
+`g:A\rightarrow G` and spatial adjacency matrix `W^{geo}`, Freeman materializes:
+
+$$
+(a_i,a_j)\in E_{\text{spatial}}
+\Longleftrightarrow
+W^{geo}_{g(a_i),g(a_j)} > 0,\quad a_i\ne a_j.
+$$
+
+The emitted relation type is `spatial_neighbor`. The initializer is idempotent
+and logs large-expansion warnings when region count or estimated actor-pair
+relations cross the configured thresholds.
 
 ### 5.2 Resource transition
 
@@ -469,7 +485,15 @@ flowchart TD
     Q --> R
 ```
 
-Schema-path repair is metadata-first and can auto-append weak causal edges inferred from semantic co-mentions. LLM-synthesize repair appends observed topics to the domain brief, deletes the package and rebuilds through `_bootstrap`; it preserves KG by default.
+Schema-path repair is metadata-first. It always records ontology topics, aliases, relation candidates, and a KG proposal node, but inferred causal edges are queued for review by default. Auto-append of weak causal edges from semantic co-mentions is only allowed when `auto_apply_relation_candidates: true` and confidence is above `auto_apply_min_confidence`. LLM-synthesize repair appends observed topics to the domain brief, deletes the package and rebuilds through `_bootstrap`; it preserves KG by default.
+
+The runtime layer exposes structural contracts in `freeman.runtime.contracts`:
+
+- `WorldStateContract`: executable world state with snapshot/clone semantics.
+- `KnowledgeGraphContract`: persistent memory read/write/search surface.
+- `ConsciousStateContract`: deterministic consciousness-state serialization boundary.
+
+`SignalIngestionEngine` also marks contradictory retained signals before budgeting. Same-topic/entity signals with opposing sentiment receive `conflict_score`, `conflict_reason`, and `conflicts_with`; ingestion does not discard either side, so downstream belief-conflict logic sees the contradiction explicitly. The stream runtime also checks the current signal against the pending queue so one-at-a-time processing does not hide near-term contradictions.
 
 ## 11. Budget governance
 
@@ -493,6 +517,7 @@ Fallbacks:
 - `freeman init`: writes default config and creates storage directories.
 - `freeman run`: explicit schema run if `schema_path` exists; otherwise returns config-first idle status.
 - `freeman ask`: runtime evidence retrieval + optional LLM answer generation.
+- `freeman what-if`: baseline/scenario rollout from persisted `world_state.json` + calibrated LLM answer.
 - `freeman query`: KG filters or semantic runtime query.
 - `freeman status`: KG/runtime/source/budget/storage status.
 - `freeman export-kg`: HTML, 3D HTML, JSON-LD, DOT.
@@ -503,7 +528,7 @@ Fallbacks:
 
 ### Tool API and MCP
 
-`freeman.api.tool_api` exposes in-memory compile/run/verify tools plus persistent daemon query tools. `freeman.mcp.server` builds an MCP server by converting JSON schemas into Python call signatures and routing calls through `invoke_tool`.
+`freeman.api.tool_api` exposes compile/run/verify tools backed by a persisted compiled-world registry under `runtime/compiled_worlds.json`, plus persistent daemon query tools and a scenario-answer surface. `freeman.mcp.server` builds an MCP server by converting JSON schemas into Python call signatures and routing calls through `invoke_tool`.
 
 ### REST API
 
@@ -538,9 +563,9 @@ Runtime source failures are non-fatal: `_run_poll` catches source exceptions, lo
 
 The codebase also contains experimental paths outside the main daemon loop:
 
+- `freeman.realworld.spatial_adapter`: optional GeoPandas/Shapely vector adapter for topology queries and KG export.
+- `freeman.domain.spatial.initialize_spatial_relations`: compile-time materialization from regional metadata into actor-level `spatial_neighbor` relations.
 - `freeman.realworld.manifold`: Manifold market snapshots, BBC/GDELT/NewsAPI/GNews historical news, market feature extraction, binary market schemas, Brier scores and experiment reports.
-- `freeman.realworld.spatial_adapter`: regional GeoPandas/Shapely adapter for GeoJSON/Shapefile data, spatial-region KG nodes and topology relations (`geo:borderedBy`, `geo:withinRegion`, `geo:intersects`).
-- `freeman.domain.spatial.initialize_spatial_relations`: reads `world.metadata["spatial"].adjacency` and materializes actor-level `spatial_neighbor` relations at compile time and before real-world simulation. See `docs/GEO_ANALYTICS.md`.
 - `freeman.realworld.test_a_preflight` and `test_a_experiment`: market filtering/stratification and focused test-A evaluation.
 - `freeman.realworld.test_c_cross_domain` and `causal_graph`: cross-domain causal tests and Paris causal graph test.
 - `freeman.causal.estimator`: optional causal ML edge-weight estimation with fallback estimators depending on available libraries and treatment type.
@@ -620,6 +645,8 @@ Default paths from `config.yaml`:
 | Ontology repair | repair request | schema overlay or LLM rebuild | updated package/world/KG proposal |
 | Runtime query | `freeman query --text` / tool API | load artifacts -> semantic query | evidence payload |
 | Runtime answer | `freeman ask` / `freeman_answer_query` | retrieval -> budget -> LLM answer | answer or explicit no-answer |
+| Runtime what-if | `freeman what-if` / `freeman_answer_what_if` | load persisted world -> baseline rollout + scenario rollout -> budget -> LLM answer | calibrated scenario answer |
+| Regional schema | `DomainCompiler.compile` | `spatial.adjacency` -> `initialize_spatial_relations` | actor-level `spatial_neighbor` relations |
 | Human override | CLI override/rerun/diff | patch world -> rerun -> diff | audit/diff payload |
 | MCP use | `freeman-mcp` | expose `FREEMAN_TOOLS` | external agents inspect runtime |
 | Realworld benchmark | `freeman.realworld.*` | fetch/transform market/news -> schema -> Freeman probability | experiment reports |
@@ -893,6 +920,9 @@ The following index is generated from source files. It uses each symbol's docstr
   - `SignalIngestionEngine.trigger_mode(self, mahalanobis_score, classification, *, anomaly_lambda=..., semantic_threshold=...)`: Map statistical and semantic triggers into WATCH / ANALYZE / DEEP_DIVE.
   - `SignalIngestionEngine.novelty_score(self, signal, *, signal_memory=...)`: Return a generic novelty score from signal recurrence, independent of domain.
   - `SignalIngestionEngine.interest_score(self, *, mahalanobis_score, classification, novelty, anomaly_lambda=...)`: Score how much compute attention a signal deserves, without filtering domains.
+  - `SignalIngestionEngine._signal_overlap(self, left, right)`: Compare topic/entity overlap for conflict marking.
+  - `SignalIngestionEngine._pair_conflict_score(self, left, right)`: Score opposing-sentiment same-topic/entity contradictions.
+  - `SignalIngestionEngine._annotate_signal_conflicts(self, signals, triggers)`: Add conflict metadata to retained triggers without dropping evidence.
   - `SignalIngestionEngine._estimated_mode_cost(self, mode, *, analyze_cost, deep_dive_cost)`: Estimated mode cost.
   - `SignalIngestionEngine._apply_interest_budget(self, triggers, *, analysis_budget, analyze_cost, deep_dive_cost)`: Downgrade expensive analysis modes by generic interest ranking, not by topic.
   - `SignalIngestionEngine.ingest(self, source, *, classifier=..., signal_memory=..., skip_duplicates_within_hours=..., anomaly_lambda=..., semantic_threshold=..., analysis_budget=..., analyze_cost=..., deep_dive_cost=...)`: Fetch, score, classify, and rank signals for compute attention.
@@ -911,18 +941,23 @@ The following index is generated from source files. It uses each symbol's docstr
 - `_build_sim_config(config)`: Build sim config.
 - `_load_runtime_artifacts(config_path=...)`: Load runtime artifacts.
 - `_read_json(path, default)`: Read json.
+- `_compiled_world_registry_path(config_path=...)`: Compiled world registry path.
+- `_load_compiled_world_registry(config_path=...)`: Load compiled world registry.
+- `_save_compiled_world_registry(payload, path)`: Save compiled world registry.
 - `_snapshot_entries(snapshot_dir)`: Snapshot entries.
 - `_contains(haystack, needle)`: Contains.
 - `_node_matches(knowledge_graph, node_id, query)`: Node matches.
 - `_edge_matches(knowledge_graph, edge, *, source=..., target=..., relation_type=...)`: Edge matches.
 - `_edge_dict(knowledge_graph, edge)`: Edge dict.
 - `_node_snapshot(node)`: Node snapshot.
-- `_next_world_id(domain_id)`: Return a new in-memory world id.
+- `_next_world_id(domain_id, *, config_path=...)`: Return a new world id across memory and persisted registry.
 - `_coerce_policies(policies)`: Convert policy-like inputs into ``Policy`` instances.
-- `freeman_compile_domain(schema)`: Compile ``schema`` into a world and store it in the in-memory registry.
-- `freeman_run_simulation(world_id, policies, max_steps=..., seed=...)`: Run a simulation for a compiled world and return serialized JSON.
-- `freeman_get_world_state(world_id, t=...)`: Return a stored world snapshot, defaulting to the latest timestep.
-- `freeman_verify_domain(world_id, levels=...)`: Run selected verification levels for a compiled world.
+- `_persist_compiled_world(world_id, *, world, trajectory, config_path=...)`: Persist one compiled world entry.
+- `_load_compiled_world(world_id, *, config_path=...)`: Load one compiled world from memory or runtime storage.
+- `freeman_compile_domain(schema, config_path=...)`: Compile ``schema`` into a world and store it in memory plus runtime artifacts.
+- `freeman_run_simulation(world_id, policies, max_steps=..., seed=..., config_path=...)`: Run a simulation for a compiled world and return serialized JSON.
+- `freeman_get_world_state(world_id, t=..., config_path=...)`: Return a stored world snapshot, defaulting to the latest timestep.
+- `freeman_verify_domain(world_id, levels=..., config_path=...)`: Run selected verification levels for a compiled world.
 - `freeman_get_runtime_summary(config_path=...)`: Return a compact summary of the persisted daemon state.
 - `freeman_query_forecasts(config_path=..., status=..., outcome_id=..., limit=...)`: Return saved forecasts for one runtime.
 - `freeman_explain_forecast(config_path=..., forecast_id=...)`: Return one structured causal explanation for a saved forecast.
@@ -930,6 +965,7 @@ The following index is generated from source files. It uses each symbol's docstr
 - `freeman_query_causal_edges(config_path=..., source=..., target=..., relation_type=..., limit=...)`: Return current KG causal edges, optionally filtered by source, target, or relation.
 - `freeman_query_runtime_context(config_path=..., text=..., limit=...)`: Return semantic runtime evidence across KG, forecasts, edges, and world state.
 - `freeman_answer_query(config_path=..., text=..., limit=...)`: Answer a question from persisted runtime evidence using the configured LLM.
+- `freeman_answer_what_if(config_path=..., text=..., policies=..., baseline_policies=..., max_steps=..., seed=..., limit=...)`: Answer a scenario question using the persisted world state plus runtime evidence.
 - `freeman_trace_relation_learning(config_path=..., source=..., target=..., relation_type=..., last_n_steps=...)`: Trace how a relation appears across recent KG snapshots.
 - `resolve_tool(name)`: Resolve a Freeman tool by name.
 - `invoke_tool(name, arguments=...)`: Invoke one Freeman tool by name.
@@ -1183,6 +1219,10 @@ The following index is generated from source files. It uses each symbol's docstr
   - `DomainCompiler._validate_schema(self, schema)`: Validate references, operator types, and score keys inside a domain schema.
   - `DomainCompiler._collect_valid_value_keys(self, resource_ids, actor_state_keys)`: Return all keys that may legally reference world values.
   - `DomainCompiler._validate_actor_update_rules(self, schema, actor_ids, valid_value_keys)`: Validate explicit actor update rules declared in the schema.
+
+### `freeman/domain/spatial.py`
+- `module`: Spatial metadata materialization for compiled worlds.
+- `initialize_spatial_relations(world)`: Read ``world.metadata["spatial"]`` and add idempotent actor ``spatial_neighbor`` relations from regional adjacency.
 
 ### `freeman/domain/registry.py`
 - `module`: Built-in domain profile registry.
@@ -1629,6 +1669,12 @@ The following index is generated from source files. It uses each symbol's docstr
 - `_build_kg(output_dir)`: Build kg.
 - `run_paris_causal_graph_test(*, backtest_csv, output_dir, deepseek_api_key_path=...)`: Run the structural causal-graph test around Paris-withdrawal.
 
+### `freeman/realworld/spatial_adapter.py`
+- `module`: Lightweight vector-geometry adapter for regional analytics.
+- `class SpatialAdapter`: Load regions, compute topology predicates and export spatial nodes/edges to KG.
+- `class SpatialRegion`: Region identifier, label and geometry metadata.
+- `class SpatialEdge`: Topology edge emitted from geometry predicates.
+
 ### `freeman/realworld/manifold.py`
 - `module`: Manifold-backed real-world experiment for Freeman.
 - `_now_utc()`: Now utc.
@@ -1786,6 +1832,12 @@ The following index is generated from source files. It uses each symbol's docstr
   - `KGSnapshotManager._prune_if_needed(self, manifest_path)`: Prune if needed.
 - `snapshot_manager_from_config(config, *, runtime_path, config_base)`: Snapshot manager from config.
 
+### `freeman/runtime/contracts.py`
+- `module`: Structural protocol contracts between core world, memory, and consciousness layers.
+- `class WorldStateContract`: Executable world state contract with `domain_id`, `t`, `runtime_step`, `snapshot()`, and `clone()`.
+- `class KnowledgeGraphContract`: Persistent memory read/write/search contract.
+- `class ConsciousStateContract`: Serializable deterministic consciousness-state contract.
+
 ### `freeman/runtime/queryengine.py`
 - `module`: Semantic runtime retrieval and answer synthesis over persisted artifacts.
 - `_merge_dicts(base, override)`: Merge dicts.
@@ -1818,9 +1870,18 @@ The following index is generated from source files. It uses each symbol's docstr
 - `class RuntimeAnswerEngine`: Generate answer text strictly from retrieved runtime evidence.
   - `RuntimeAnswerEngine.__init__(self, artifacts)`: Init.
   - `RuntimeAnswerEngine.answer(self, query_text, *, limit=..., chat_client=...)`: Answer.
+  - `RuntimeAnswerEngine.answer_what_if(self, query_text, *, scenario_policies, baseline_policies=..., max_steps=..., seed=..., limit=..., chat_client=...)`: Answer a what-if scenario from baseline/scenario rollouts plus runtime evidence.
   - `RuntimeAnswerEngine._answer_budget_decision(self, query_text)`: Answer budget decision.
+  - `RuntimeAnswerEngine._what_if_budget_decision(self, query_text, *, max_steps)`: Scenario budget decision.
+  - `RuntimeAnswerEngine._budget_decision(self, query_text, *, sim_steps, task_prefix)`: Shared budget gate.
   - `RuntimeAnswerEngine._budget_summary(self)`: Budget summary.
   - `RuntimeAnswerEngine._world_summary(self)`: World summary.
+  - `RuntimeAnswerEngine._scenario_sim_config(self, world, *, max_steps, seed)`: Build scenario sim config.
+  - `RuntimeAnswerEngine._coerce_policies(self, policies)`: Coerce policy snapshots.
+  - `RuntimeAnswerEngine._simulation_summary(self, result)`: Compact simulation summary.
+  - `RuntimeAnswerEngine._simulation_comparison(self, baseline_snapshot, scenario_snapshot)`: Scenario deltas.
+  - `RuntimeAnswerEngine._snapshot_outcome_probs(snapshot)`: Outcome probabilities for one snapshot.
+  - `RuntimeAnswerEngine._dominant_outcome(outcome_probs)`: Dominant outcome.
   - `RuntimeAnswerEngine._answer_context_item(self, item)`: Answer context item.
 
 ### `freeman/runtime/stream.py`
@@ -2229,5 +2290,5 @@ The following index is generated from source files. It uses each symbol's docstr
 
 - Generated symbol entries: `1229`.
 - Source roots: `freeman/`, `packages/freeman-connectors/freeman_connectors/`, `scripts/`.
-- Generated on: `2026-04-23`.
+- Generated on: `2026-06-01`.
 - Branch constraint observed by caller: `main`.

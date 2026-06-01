@@ -4,9 +4,9 @@ Freeman is an analytical agent for situations that change over time. You describ
 
 The point of Freeman is not "chatting about a topic". The point is to keep a structured world model, run repeatable scenario analysis, remember past cases, and give you an audit trail of what changed and why.
 
-Current release: `3.1.2`
+Current release: `3.3.1`
 
-Freeman `3.1` keeps the operational local-agent loop closed and replaces monolithic bootstrap with a structured ETL path:
+Freeman `3.3.1` brings the stabilized hive-mind runtime onto `main` and adds the regional geospatial layer:
 
 - continuous ingestion into a persistent world model
 - universal semantic retrieval over persisted runtime artifacts
@@ -14,8 +14,11 @@ Freeman `3.1` keeps the operational local-agent loop closed and replaces monolit
 - autonomous ontology repair for schema-backed runtimes
 - budget/cost governance with persisted runtime ledger
 - evidence-grounded `ask` / `query` against the saved daemon state
+- role-scoped hive-mind dispatch across `ingestor`, `repairer`, `planner`, `narrator`, and `verifier`
+- cooperative KG node locks, trail metadata, optional Redis lock backend, and per-role LLM policies
+- regional GeoPandas/Shapely adapter plus compile-time `spatial.adjacency -> spatial_neighbor` materialization
 
-License: Apache License 2.0. See [LICENSE](/Users/theclimateguy/Documents/science/Freeman/LICENSE).
+License: Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Why Use It
 
@@ -43,6 +46,8 @@ Typical fits:
 - Store analyses in a persistent knowledge graph.
 - Use universal semantic retrieval over that graph; ChromaDB is optional acceleration, not a requirement.
 - Answer questions against stored memory with `freeman ask`.
+- Run role-scoped hive-mind cycles with deterministic locks and optional LLM augmentation.
+- Turn regional adjacency metadata into actor-level spatial relations at compile time.
 - Track forecasts, conflicts, anomalies, and proactive events in the agent layer.
 - Export the knowledge graph as HTML, JSON-LD, DOT, or interactive 3D HTML.
 - Render graph evolution from ordered runtime snapshots as a standalone timeline viewer.
@@ -71,6 +76,7 @@ This makes Freeman useful for "stateful analysis": the system can accumulate pri
 Current operational path:
 
 - `python -m freeman.runtime.stream_runtime` is the single daemon-like runtime entrypoint.
+- `freeman-hive` / `python -m freeman.runtime.hive_runtime` runs the role dispatcher over the same KG/runtime state.
 - Domain behavior is supplied by `agent.sources`, `agent.bootstrap`, and the schema or natural-language brief, not by separate runtime modules.
 - The consciousness layer is deterministic and replayable; LLMs may translate state, but do not mutate it.
 - Runtime cost governance is now part of the operational path, not an external benchmark-only concern.
@@ -102,6 +108,12 @@ pip install ".[geo]"
 ```
 
 Regional analytics details: [docs/GEO_ANALYTICS.md](docs/GEO_ANALYTICS.md).
+
+Optional Redis lock backend for multi-process / cross-host hive workers:
+
+```bash
+pip install ".[redis]"
+```
 
 Development extras:
 
@@ -251,6 +263,35 @@ python -m freeman.runtime.stream_runtime \
   --resume \
   --model auto
 ```
+
+Run one hive-mind role-dispatch cycle over the configured KG/runtime state:
+
+```bash
+freeman-hive --config-path config.yaml --cycles 1
+```
+
+For production worker fan-out, use a lock backend in `agent_stack`:
+
+```yaml
+agent_stack:
+  enabled: true
+  lock_backend: "redis"
+  lock_redis_url: "redis://redis:6379/0"
+  lock_ttl_seconds: 120
+```
+
+Regional schema metadata is materialized during `DomainCompiler.compile()`:
+
+```json
+{
+  "spatial": {
+    "actor_regions": {"country_a": "REGION_A", "country_b": "REGION_B"},
+    "adjacency": [{"source": "REGION_A", "target": "REGION_B", "weight": 0.7}]
+  }
+}
+```
+
+The compiler emits idempotent `Relation(source_id, target_id, relation_type="spatial_neighbor")` records before simulation. See [docs/GEO_ANALYTICS.md](docs/GEO_ANALYTICS.md).
 
 The daemon runtime reads `agent.sources` from config, polls them on the configured interval, and processes a persistent pending queue between polls (plus ex-post forecast verification on each world update). Domain behavior now lives in config and schema/bootstrap inputs, not in separate runtime entrypoints.
 
@@ -408,7 +449,7 @@ If you are integrating Freeman into Python code rather than only using the CLI, 
 
 ## Operational Readiness
 
-For `3.0`, the remaining issues are no longer architecture blockers for local deployment/training. The loop is closed end-to-end:
+For `3.3.1`, the remaining issues are no longer architecture blockers for local deployment/training. The loop is closed end-to-end:
 
 - signal ingestion persists state and resumes cleanly
 - the world model can expand from anomaly pressure without human review for schema-backed runtimes
@@ -444,6 +485,9 @@ Actual operational docs:
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - API map: [docs/API_MAP.md](docs/API_MAP.md)
 - Consciousness design and invariants: [docs/CONSCIOUSNESS_ARCHITECTURE.md](docs/CONSCIOUSNESS_ARCHITECTURE.md)
+- Hive runtime: [docs/HIVE_RUNTIME.md](docs/HIVE_RUNTIME.md)
+- Regional analytics: [docs/GEO_ANALYTICS.md](docs/GEO_ANALYTICS.md)
+- Release 3.3.1: [docs/RELEASE_3_3_1.md](docs/RELEASE_3_3_1.md)
 
 Historical / legacy artifacts:
 
