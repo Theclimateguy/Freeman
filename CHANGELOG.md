@@ -8,6 +8,70 @@
 
 - No unreleased changes.
 
+## v3.4.0 - 2026-06-07
+
+Production infrastructure release focused on making Freeman operable as a
+long-running daemon with safer persistence, deployment, and observability.
+
+### Added
+
+- `stream_runtime` split into focused runtime modules:
+  `bootstrap`, `lifecycle`, `signal_loop`, and `query_handlers`.
+- Structured JSON logging with `run_id` / `correlation_id`, plus
+  `configure_logging(json_mode=...)` compatibility for callers that use the
+  intuitive alias.
+- Read-only health output through `freeman health` and the `freeman_health`
+  MCP tool.
+- Prometheus-compatible text metrics through `freeman metrics`.
+- Pluggable KnowledgeGraph persistence backends:
+  `memory.backend: json | sqlite`.
+- SQLite KG backend with indexed `nodes` and `edges` tables and transaction
+  rollback parity with the JSON backend.
+- KG transaction rollback around ontology repair.
+- LLM circuit breaker for configured chat providers.
+- Budget ledger `fsync` on append and live budget reporting in
+  `freeman status`.
+- Ingestion queue backpressure through `runtime.pending_queue_max_size`.
+- Hive runtime graceful `SIGINT` / `SIGTERM` shutdown.
+- Dockerfile and `docker-compose.yml` with Redis healthcheck and Freeman
+  healthcheck.
+- Fail-fast startup validation for budget, writable runtime/KG paths, memory
+  backend selection, and remote LLM API keys.
+
+### Changed
+
+- `freeman/runtime/stream_runtime.py` is now a small entrypoint; runtime
+  behavior lives in composable modules.
+- `realworld/test_a_experiment.py` -> `manifold_experiment.py`.
+- `realworld/test_a_preflight.py` -> `manifold_preflight.py`.
+- `realworld/test_c_cross_domain.py` -> `cross_domain_runner.py`.
+- `freeman/verifier/fixed_point.py` compatibility wrapper removed; import
+  `freeman.verifier.fixedpoint` directly.
+- Container startup now honors `FREEMAN_CONFIG` as the default runtime config.
+- Core package version bumped to `3.4.0`; `freeman-connectors` now targets
+  `freeman>=3.4.0,<4.0.0`.
+
+### Fixed
+
+- Direct `validate_config()` calls with partial configs no longer report a
+  false-positive budget error when `agent` is omitted.
+- `.dockerignore` no longer excludes every repository `*.jsonl` file, so
+  bundled fixtures can be included in Docker build contexts.
+- Compose startup now waits for Redis health when Redis is part of the stack.
+
+### Validation
+
+- `pytest` -> `307 passed`
+- `docker build -t freeman:local .` -> image
+  `sha256:699fb4d36ce224c4b4344bd53fe0e28e4ebf04d5c8333ce7f79565110d286207`
+  (`280276557` bytes).
+- Container smoke checks:
+  `freeman health --config /app/config.yaml`, `python -c "import freeman, freeman_connectors"`,
+  and `python -m freeman.runtime.stream_runtime --help`.
+- Compose smoke checks:
+  `docker compose config`, `docker compose run --rm --entrypoint freeman freeman health --config /app/config.yaml`,
+  `docker compose run --rm freeman --help`, and `docker compose up -d redis`.
+
 ## v3.3.1 - 2026-06-01
 
 Release focused on promoting the stabilized hive-mind runtime to `main` and

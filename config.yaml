@@ -80,8 +80,9 @@ sim:
   seed: 42
 
 memory:
-  backend: "networkx-json"
+  backend: "json" # json | sqlite
   json_path: "./data/kg_state.json"
+  sqlite_path: "./data/kg.db"
   vector_store:
     enabled: false
     backend: "chroma"

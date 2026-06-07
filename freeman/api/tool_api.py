@@ -25,6 +25,7 @@ from freeman.runtime.queryengine import (
     load_runtime_artifacts as _load_runtime_query_artifacts,
 )
 from freeman.runtime.checkpoint import CheckpointManager
+from freeman.runtime.health import health_from_config
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
 from freeman.verifier.report import VerificationReport
@@ -397,6 +398,12 @@ def freeman_get_runtime_summary(config_path: str = "config.yaml") -> dict[str, A
     }
 
 
+def freeman_health(config_path: str = "config.yaml") -> dict[str, Any]:
+    """Return Freeman daemon health/readiness state."""
+
+    return health_from_config(config_path).to_dict()
+
+
 def freeman_query_forecasts(
     config_path: str = "config.yaml",
     status: str | None = None,
@@ -693,6 +700,20 @@ FREEMAN_TOOLS = [
         },
     },
     {
+        "name": "freeman_health",
+        "description": "Return the Freeman daemon health/readiness state from persisted runtime artifacts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "config_path": {
+                    "type": "string",
+                    "default": "config.yaml",
+                    "description": "Path to the Freeman config that points at runtime artifacts.",
+                },
+            },
+        },
+    },
+    {
         "name": "freeman_query_forecasts",
         "description": "List saved runtime forecasts, filtered by status or outcome id.",
         "parameters": {
@@ -811,6 +832,7 @@ FREEMAN_TOOL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "freeman_get_world_state": freeman_get_world_state,
     "freeman_verify_domain": freeman_verify_domain,
     "freeman_get_runtime_summary": freeman_get_runtime_summary,
+    "freeman_health": freeman_health,
     "freeman_query_forecasts": freeman_query_forecasts,
     "freeman_explain_forecast": freeman_explain_forecast,
     "freeman_query_anomalies": freeman_query_anomalies,
@@ -845,6 +867,7 @@ __all__ = [
     "freeman_get_world_state",
     "freeman_verify_domain",
     "freeman_get_runtime_summary",
+    "freeman_health",
     "freeman_query_forecasts",
     "freeman_explain_forecast",
     "freeman_query_anomalies",

@@ -1,6 +1,6 @@
 # Freeman Architecture
 
-This document describes the compact operational architecture of Freeman `3.3.1`
+This document describes the compact operational architecture of Freeman `3.4.0`
 on `main`.
 
 ## Formal Runtime State

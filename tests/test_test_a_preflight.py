@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from freeman.realworld.test_a_preflight import (
+from freeman.realworld.manifold_preflight import (
     build_recommended_inclusion_list,
     classify_test_a_market,
     stratify_backtest_rows,

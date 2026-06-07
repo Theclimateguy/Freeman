@@ -4,6 +4,8 @@ from freeman.runtime.agent_runtime import AgentRuntime
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.contracts import ConsciousStateContract, KnowledgeGraphContract, WorldStateContract
 from freeman.runtime.event_log import EventLog
+from freeman.runtime.health import HealthState, get_health, health_from_config
+from freeman.runtime.metrics import MetricSample, collect_metrics, metrics_from_config, render_prometheus
 from freeman.runtime.stream import StreamCursorStore
 
 
@@ -35,9 +37,16 @@ __all__ = [
     "EventLog",
     "HiveMindRuntime",
     "HiveRuntimeConfig",
+    "HealthState",
     "KnowledgeGraphContract",
+    "MetricSample",
     "StreamCursorStore",
     "WorldStateContract",
     "build_hive_runtime_from_config",
+    "collect_metrics",
+    "get_health",
+    "health_from_config",
+    "metrics_from_config",
+    "render_prometheus",
     "stream_runtime_main",
 ]

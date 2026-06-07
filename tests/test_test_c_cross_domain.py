@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from freeman.realworld.manifold import freeman_probability_from_schema
-from freeman.realworld.test_c_cross_domain import CrossDomainTarget, build_cross_domain_schema
+from freeman.realworld.cross_domain_runner import CrossDomainTarget, build_cross_domain_schema
 from freeman.core.scorer import score_outcomes
 from freeman.core.types import ParameterVector
 from freeman.domain.compiler import DomainCompiler

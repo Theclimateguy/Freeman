@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
@@ -212,6 +213,8 @@ class BudgetLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry.snapshot(), ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         self.entries.append(entry)
         self.spent_usd += float(entry.actual_cost)
         return entry

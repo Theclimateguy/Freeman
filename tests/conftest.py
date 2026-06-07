@@ -11,10 +11,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = Path(__file__).resolve().parent
+CONNECTORS = ROOT / "packages" / "freeman-connectors"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
+if CONNECTORS.exists() and str(CONNECTORS) not in sys.path:
+    sys.path.insert(0, str(CONNECTORS))
 
 from freeman.domain.compiler import DomainCompiler
 

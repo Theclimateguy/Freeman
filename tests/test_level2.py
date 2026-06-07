@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from freeman.core.types import CausalEdge, Outcome, Resource
 from freeman.core.world import WorldState
-from freeman.verifier.fixed_point import find_fixed_point
+from freeman.verifier.fixedpoint import find_fixed_point
 from freeman.verifier.level2 import level2_check
 
 

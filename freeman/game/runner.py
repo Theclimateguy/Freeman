@@ -12,7 +12,7 @@ from freeman.core.types import Policy
 from freeman.core.world import WorldState
 from freeman.exceptions import HardStopException
 from freeman.game.result import SimResult
-from freeman.verifier.fixed_point import find_fixed_point
+from freeman.verifier.fixedpoint import find_fixed_point
 from freeman.verifier.level1 import level1_check
 from freeman.verifier.level2 import level2_check
 

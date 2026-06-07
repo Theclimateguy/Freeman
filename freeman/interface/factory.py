@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from freeman.llm.adapter import DeterministicEmbeddingAdapter, HashingEmbeddingAdapter
+from freeman.llm.circuit_breaker import wrap_chat_client
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.llm.ollama import OllamaChatClient, OllamaEmbeddingClient
 from freeman.llm.openai import OpenAIChatClient, OpenAIEmbeddingClient
@@ -24,6 +25,11 @@ def resolve_path(base: Path, candidate: str | None, default: str) -> Path:
 def resolve_memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
     memory_cfg = config.get("memory", {})
     return resolve_path(config_path.parent, memory_cfg.get("json_path"), "./data/kg_state.json")
+
+
+def resolve_memory_sqlite_path(config: dict[str, Any], *, config_path: Path) -> Path:
+    memory_cfg = config.get("memory", {})
+    return resolve_path(config_path.parent, memory_cfg.get("sqlite_path"), "./data/kg.db")
 
 
 def resolve_runtime_path(config: dict[str, Any], *, config_path: Path) -> Path:
@@ -104,41 +110,61 @@ def build_chat_client(config: dict[str, Any]) -> tuple[Any | None, str | None]:
     provider = str(llm_cfg.get("provider", "")).strip().lower()
     model = str(llm_cfg.get("model", "")).strip()
     base_url = str(llm_cfg.get("base_url", "")).strip()
+    configured_api_key = str(llm_cfg.get("api_key", "") or "").strip()
     timeout_seconds = float(llm_cfg.get("timeout_seconds", 90.0))
+    circuit_cfg = dict(llm_cfg.get("circuit_breaker", {}) or {})
+    circuit_enabled = bool(circuit_cfg.get("enabled", True))
+    failure_threshold = int(circuit_cfg.get("failure_threshold", 3))
+    reset_timeout = float(circuit_cfg.get("reset_timeout_seconds", 60.0))
     if provider in {"", "none"}:
         return None, "llm provider is not configured"
     if provider in {"openai", "openai-compatible", "openai_compatible"}:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        api_key = configured_api_key or os.getenv("OPENAI_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
         if not api_key:
             return None, "OPENAI_API_KEY or LLM_API_KEY is not set"
         return (
-            OpenAIChatClient(
-                api_key=api_key,
-                model=model or "gpt-4o-mini",
-                base_url=base_url or "https://api.openai.com/v1",
-                timeout_seconds=timeout_seconds,
+            wrap_chat_client(
+                OpenAIChatClient(
+                    api_key=api_key,
+                    model=model or "gpt-4o-mini",
+                    base_url=base_url or "https://api.openai.com/v1",
+                    timeout_seconds=timeout_seconds,
+                ),
+                enabled=circuit_enabled,
+                failure_threshold=failure_threshold,
+                reset_timeout=reset_timeout,
             ),
             None,
         )
     if provider == "deepseek":
-        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        api_key = configured_api_key or os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
         if not api_key:
             return None, "DEEPSEEK_API_KEY or LLM_API_KEY is not set"
         return (
-            DeepSeekChatClient(
-                api_key=api_key,
-                model=model or "deepseek-chat",
-                base_url=base_url or "https://api.deepseek.com",
-                timeout_seconds=timeout_seconds,
+            wrap_chat_client(
+                DeepSeekChatClient(
+                    api_key=api_key,
+                    model=model or "deepseek-chat",
+                    base_url=base_url or "https://api.deepseek.com",
+                    timeout_seconds=timeout_seconds,
+                ),
+                enabled=circuit_enabled,
+                failure_threshold=failure_threshold,
+                reset_timeout=reset_timeout,
             ),
             None,
         )
     if provider == "ollama":
         return (
-            OllamaChatClient(
-                model=model or "qwen2.5-coder:14b",
-                base_url=base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
-                timeout_seconds=timeout_seconds,
+            wrap_chat_client(
+                OllamaChatClient(
+                    model=model or "qwen2.5-coder:14b",
+                    base_url=base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434"),
+                    timeout_seconds=timeout_seconds,
+                ),
+                enabled=circuit_enabled,
+                failure_threshold=failure_threshold,
+                reset_timeout=reset_timeout,
             ),
             None,
         )
@@ -158,8 +184,11 @@ def build_knowledge_graph(
 ) -> KnowledgeGraph:
     """Instantiate a config-backed knowledge graph."""
 
+    memory_cfg = config.get("memory", {})
     return KnowledgeGraph(
         json_path=resolve_memory_json_path(config, config_path=config_path),
+        sqlite_path=resolve_memory_sqlite_path(config, config_path=config_path),
+        backend_name=str(memory_cfg.get("backend", "json")),
         auto_load=auto_load,
         auto_save=auto_save,
         llm_adapter=embedding_adapter,
@@ -176,6 +205,7 @@ __all__ = [
     "build_vectorstore",
     "resolve_event_log_path",
     "resolve_memory_json_path",
+    "resolve_memory_sqlite_path",
     "resolve_path",
     "resolve_runtime_path",
     "resolve_semantic_min_score",

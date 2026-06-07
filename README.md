@@ -4,15 +4,24 @@ Freeman is an analytical agent for situations that change over time. You describ
 
 The point of Freeman is not "chatting about a topic". The point is to keep a structured world model, run repeatable scenario analysis, remember past cases, and give you an audit trail of what changed and why.
 
-Current release: `3.3.1`
+Current release: `3.4.0`
 
-Freeman `3.3.1` brings the stabilized hive-mind runtime onto `main` and adds the regional geospatial layer:
+Freeman `3.4.0` is a production infrastructure release for long-running local
+daemon operation:
 
+- decomposed `stream_runtime` entrypoint with focused runtime modules
 - continuous ingestion into a persistent world model
 - universal semantic retrieval over persisted runtime artifacts
-- two-phase ETL bootstrap (`skeleton -> edges -> verifier`) for state-vector construction from domain briefs
-- autonomous ontology repair for schema-backed runtimes
-- budget/cost governance with persisted runtime ledger
+- health endpoint: `freeman health`
+- Prometheus-compatible metrics: `freeman metrics`
+- structured JSON logs with `run_id` / `correlation_id`
+- pluggable KG storage: JSON for development, SQLite for production
+- KG transaction rollback around ontology repair
+- LLM circuit breaker and fail-fast startup validation
+- budget/cost governance with persisted, fsynced runtime ledger
+- ingestion queue backpressure
+- graceful hive shutdown on `SIGINT` / `SIGTERM`
+- Dockerfile and Compose stack with Redis healthcheck
 - evidence-grounded `ask` / `query` against the saved daemon state
 - role-scoped hive-mind dispatch across `ingestor`, `repairer`, `planner`, `narrator`, and `verifier`
 - cooperative KG node locks, trail metadata, optional Redis lock backend, and per-role LLM policies
@@ -113,6 +122,22 @@ Optional Redis lock backend for multi-process / cross-host hive workers:
 
 ```bash
 pip install ".[redis]"
+```
+
+Production container:
+
+```bash
+docker build -t freeman:local .
+docker compose up
+```
+
+The image includes safe defaults from `config.yaml.example`. For real runs,
+mount your own config and data directory as `docker-compose.yml` does:
+
+```yaml
+volumes:
+  - ./data:/app/data
+  - ./config.yaml:/app/config.yaml:ro
 ```
 
 Development extras:
@@ -347,6 +372,8 @@ The current causal path uses three edge relations:
 Saved runtime state is also queryable without starting the daemon loop:
 
 ```bash
+python -m freeman.interface.cli health --config config.yaml
+python -m freeman.interface.cli metrics --config config.yaml
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query forecasts
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query explain --forecast-id <forecast_id>
 python -m freeman.runtime.stream_runtime --config-path config.yaml --query anomalies
@@ -361,8 +388,11 @@ If you want other agents to call Freeman as a stateful knowledge daemon, run the
 freeman-mcp --transport stdio
 ```
 
+For local source checkouts, prefer `python -m freeman.interface.cli ...` from the active virtualenv, or run `pip install -e .` in that environment before using the `freeman` console script. A globally installed `freeman` command may point at an older Python environment and miss local package modules.
+
 The MCP server exposes the in-memory simulation tools plus persistent runtime query tools:
 
+- `freeman_health`
 - `freeman_get_runtime_summary`
 - `freeman_query_forecasts`
 - `freeman_explain_forecast`
@@ -408,6 +438,13 @@ Runtime budget governance is now also first-class:
 - hard limits can downgrade `DEEP_DIVE -> ANALYZE -> WATCH` or stop execution
 - `freeman status` surfaces the live ledger summary from disk
 
+Runtime observability is read-only and safe to call from supervisors:
+
+- `freeman health --config config.yaml`: JSON readiness state
+- `freeman metrics --config config.yaml`: Prometheus text format
+- Docker healthcheck calls `freeman health --config /app/config.yaml`
+- Compose waits for Redis health before starting Freeman when Redis is in the stack
+
 The reconciler is also configurable through `memory.reconciler`:
 
 - `merge_threshold`: cosine-similarity threshold for semantic merge instead of eager claim splitting
@@ -429,6 +466,8 @@ This keeps the separation strict: `ConsciousState -> LLM -> external world`, nev
 - `freeman run`: compile a schema and run the full analysis pipeline.
 - `freeman ask`: retrieve relevant runtime evidence and, when an LLM is configured, answer a question from stored KG/forecast/causal/world context.
 - `freeman status`: inspect configured storage paths, current active-memory counts, and persisted budget ledger state.
+- `freeman health`: print read-only JSON readiness state for supervisors and healthchecks.
+- `freeman metrics`: print read-only Prometheus-compatible runtime metrics.
 - `freeman query`: query graph nodes directly; `--text` uses runtime semantic retrieval over KG + forecasts + causal edges + world state.
 - `freeman export-kg`: export the graph for inspection or downstream tooling.
 - `freeman reconcile`: merge one saved session log back into the long-term graph.
@@ -444,24 +483,29 @@ If you are integrating Freeman into Python code rather than only using the CLI, 
 - `freeman.agent.SignalIngestionEngine`: normalize incoming signals and decide whether they deserve attention.
 - `freeman.agent.ParameterEstimator`: ask an LLM to adjust an existing world when new evidence changes the regime.
 - `freeman.memory.KnowledgeGraph`: persistent graph memory with universal semantic retrieval, optional Chroma acceleration, and strict no-match behavior.
+- `freeman.memory.backends`: JSON and SQLite KG persistence backends.
 - `freeman.runtime.queryengine`: shared runtime semantic retrieval and answer synthesis over persisted runtime artifacts.
+- `freeman.runtime.metrics`: Prometheus-compatible read-only metrics over persisted runtime artifacts.
 - `freeman.agent.costmodel`: persisted budget ledger plus shared downgrade/stop policy across runtime tasks.
+- `freeman.verifier.Verifier`: structural and causal checks for world consistency.
 
 ## Operational Readiness
 
-For `3.3.1`, the remaining issues are no longer architecture blockers for local deployment/training. The loop is closed end-to-end:
+For `3.4.0`, production infrastructure blockers from the roadmap are closed for local daemon deployment:
 
 - signal ingestion persists state and resumes cleanly
 - the world model can expand from anomaly pressure without human review for schema-backed runtimes
 - runtime query/answer uses the same semantic retrieval layer as the CLI
 - budget/cost accounting is visible and enforced
+- health and metrics can be polled without starting the runtime loop
+- JSON and SQLite KG backends share round-trip and rollback parity tests
+- Docker and Compose smoke checks pass
 
 What remains is mostly tuning, not missing infrastructure:
 
 - budget coefficients may need calibration per provider or hardware profile
 - semantic thresholds may need per-domain tuning on very noisy streams
 - autonomous ontology induction is safest when new relations stay within an existing schema vocabulary
-- `freeman.verifier.Verifier`: structural and causal checks for world consistency.
 
 This advanced path is the right place if you want an agent that reacts to incoming news/data streams, updates its internal state, and keeps learning from prior forecast errors.
 
@@ -488,6 +532,7 @@ Actual operational docs:
 - Hive runtime: [docs/HIVE_RUNTIME.md](docs/HIVE_RUNTIME.md)
 - Regional analytics: [docs/GEO_ANALYTICS.md](docs/GEO_ANALYTICS.md)
 - Release 3.3.1: [docs/RELEASE_3_3_1.md](docs/RELEASE_3_3_1.md)
+- Release 3.4.0: [docs/RELEASE_3_4_0.md](docs/RELEASE_3_4_0.md)
 
 Historical / legacy artifacts:
 
@@ -502,7 +547,8 @@ Example assets:
 
 ## Notes
 
-- Default long-term memory is a JSON-backed NetworkX graph.
+- Default long-term memory is a JSON-backed NetworkX graph; set
+  `memory.backend: sqlite` for the SQLite production backend.
 - Semantic retrieval is optional and uses ChromaDB when installed with the `semantic` extra.
 - `freeman init` creates an empty agent workspace; it does not preload domain knowledge.
 - The core package is source-agnostic. If you need RSS, HTTP/JSON, HTML page, or arXiv ingestion, use `freeman-connectors`.

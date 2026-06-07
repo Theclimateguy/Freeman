@@ -22,19 +22,19 @@ from freeman.realworld.spatial_adapter import (
     SpatialRegion,
     SpatialRelation,
 )
-from freeman.realworld.test_a_preflight import (
+from freeman.realworld.manifold_preflight import (
     TestAMarketRow,
     build_recommended_inclusion_list,
     classify_test_a_market,
     run_test_a_preflight,
     stratify_backtest_rows,
 )
-from freeman.realworld.test_a_experiment import (
+from freeman.realworld.manifold_experiment import (
     filter_test_a_rows,
     load_market_ids,
     run_test_a_experiment,
 )
-from freeman.realworld.test_c_cross_domain import (
+from freeman.realworld.cross_domain_runner import (
     CrossDomainResult,
     CrossDomainTarget,
     build_cross_domain_schema,

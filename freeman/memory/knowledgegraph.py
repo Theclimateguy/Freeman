@@ -1,7 +1,9 @@
-"""Knowledge graph with a NetworkX + JSON backend."""
+"""Knowledge graph with a NetworkX core and pluggable persistence backend."""
 
 from __future__ import annotations
 
+import copy
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
@@ -12,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Sequence
 import networkx as nx
 import yaml
 
+from freeman.memory.backends import JsonKGBackend, KGBackend, SqliteKGBackend
 from freeman.utils import deep_copy_jsonable, json_ready
 
 if TYPE_CHECKING:
@@ -59,6 +62,14 @@ def _default_json_path(config_path: str | Path | None = None) -> Path:
         base = Path(config_path).resolve().parent if config_path is not None else _repo_root()
         return candidate if candidate.is_absolute() else (base / candidate).resolve()
     return (_repo_root() / "runs" / "memory" / "knowledge_graph.json").resolve()
+
+
+def _resolve_config_path(config_path: str | Path | None, candidate: Any, default: str) -> Path:
+    target = Path(str(candidate or default)).expanduser()
+    if target.is_absolute():
+        return target.resolve()
+    base = Path(config_path).resolve().parent if config_path is not None else _repo_root()
+    return (base / target).resolve()
 
 
 def _normalize_trail_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -266,6 +277,9 @@ class KnowledgeGraph:
         self,
         *,
         json_path: str | Path | None = None,
+        sqlite_path: str | Path | None = None,
+        backend_name: str | None = None,
+        backend: KGBackend | None = None,
         config_path: str | Path | None = None,
         auto_load: bool = True,
         auto_save: bool = True,
@@ -274,16 +288,46 @@ class KnowledgeGraph:
         sync_vectorstore_on_load: bool = True,
         lock_backend: Any | None = None,
     ) -> None:
-        self.json_path = Path(json_path).resolve() if json_path is not None else _default_json_path(config_path)
+        memory_cfg = _memory_config(config_path)
+        configured_backend = str(backend_name or memory_cfg.get("backend", "json")).strip().lower()
+        if configured_backend in {"", "networkx-json"}:
+            configured_backend = "json"
+        if configured_backend not in {"json", "sqlite"}:
+            raise ValueError(f"Unsupported KG backend: {configured_backend}")
+        self.backend_name = configured_backend
+        self.json_path = Path(json_path).expanduser().resolve() if json_path is not None else _default_json_path(config_path)
+        self.sqlite_path = (
+            Path(sqlite_path).expanduser().resolve()
+            if sqlite_path is not None
+            else _resolve_config_path(config_path, memory_cfg.get("sqlite_path"), "./data/kg.db")
+        )
+        self.backend: KGBackend = backend or (
+            SqliteKGBackend(self.sqlite_path) if self.backend_name == "sqlite" else JsonKGBackend(self.json_path)
+        )
         self.auto_save = auto_save
         self.llm_adapter = llm_adapter
         self.vectorstore = vectorstore
         self.sync_vectorstore_on_load = bool(sync_vectorstore_on_load)
         self.lock_backend = lock_backend or self._default_lock_backend()
-        self.lock_namespace = str(self.json_path)
+        self.lock_namespace = str(self.sqlite_path if self.backend_name == "sqlite" else self.json_path)
         self.graph = nx.MultiDiGraph()
-        if auto_load and self.json_path.exists():
+        self._transaction_stack: list[tuple[nx.MultiDiGraph, set[Path | None]]] = []
+        self._transaction_save_targets: set[Path | None] = set()
+        if auto_load and self._backend_has_payload():
             self.load()
+
+    def _backend_path(self) -> Path:
+        """Return the path owned by the configured persistence backend."""
+
+        return self.sqlite_path if self.backend_name == "sqlite" else self.json_path
+
+    def _backend_has_payload(self) -> bool:
+        """Return whether the configured backend currently has persisted graph data."""
+
+        try:
+            return self.backend.node_count() > 0
+        except Exception:
+            return self._backend_path().exists()
 
     def add_node(self, node: KGNode) -> None:
         """Insert a node and embed it if an adapter is available."""
@@ -330,6 +374,29 @@ class KnowledgeGraph:
             edge.id = f"{edge.source}:{edge.relation_type}:{edge.target}:{self.graph.number_of_edges(edge.source, edge.target)}"
         self.graph.add_edge(edge.source, edge.target, key=edge.id, **edge.snapshot())
         self._maybe_save()
+
+    @contextmanager
+    def transaction(self):
+        """Rollback in-memory mutations if the transaction fails."""
+
+        self._transaction_stack.append((copy.deepcopy(self.graph), set(self._transaction_save_targets)))
+        with self.backend.transaction():
+            try:
+                yield self
+            except Exception:
+                snapshot_graph, snapshot_targets = self._transaction_stack.pop()
+                self.graph = snapshot_graph
+                self._transaction_save_targets = snapshot_targets
+                if self.vectorstore is not None and hasattr(self.vectorstore, "sync_from_kg"):
+                    self.vectorstore.sync_from_kg(self)
+                raise
+            else:
+                self._transaction_stack.pop()
+                if not self._transaction_stack and self._transaction_save_targets:
+                    targets = set(self._transaction_save_targets)
+                    self._transaction_save_targets.clear()
+                    for target in targets:
+                        self.save(target)
 
     def try_lock(self, node_id: str, agent_id: str, *, lock_ttl_seconds: float | None = None) -> bool:
         """Attempt to acquire a cooperative lock for one node."""
@@ -943,25 +1010,30 @@ class KnowledgeGraph:
         """Return a JSON-serializable graph payload."""
 
         return {
-            "backend": "networkx-json",
+            "backend": self.backend_name,
             "json_path": str(self.json_path),
+            "sqlite_path": str(self.sqlite_path) if self.backend_name == "sqlite" else None,
             "nodes": [node.snapshot() for node in self.nodes(lazy_embed=False)],
             "edges": [edge.snapshot() for edge in self.edges()],
         }
 
     def save(self, path: str | Path | None = None) -> Path:
-        """Persist the graph as JSON."""
+        """Persist the graph through the configured backend, or export JSON to ``path``."""
 
-        target = Path(path).resolve() if path is not None else self.json_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(self.to_payload(), indent=2, sort_keys=True), encoding="utf-8")
+        if self._transaction_stack:
+            self._transaction_save_targets.add(Path(path).expanduser().resolve() if path is not None else None)
+            return Path(path).expanduser().resolve() if path is not None else self._backend_path()
+        target = Path(path).expanduser().resolve() if path is not None else self._backend_path()
+        if path is None:
+            self.backend.save(self.to_payload())
+        else:
+            JsonKGBackend(target).save(self.to_payload())
         return target
 
     def load(self, path: str | Path | None = None) -> None:
-        """Load graph data from JSON."""
+        """Load graph data from the configured backend, or from an explicit JSON path."""
 
-        source = Path(path).resolve() if path is not None else self.json_path
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = JsonKGBackend(Path(path).expanduser().resolve()).load() if path is not None else self.backend.load()
         self.graph = nx.MultiDiGraph()
         for node_payload in payload.get("nodes", []):
             node = KGNode.from_snapshot(node_payload)
@@ -975,7 +1047,9 @@ class KnowledgeGraph:
     def export_json(self, path: str | Path | None = None) -> Path:
         """Export the graph as JSON."""
 
-        return self.save(path)
+        target = Path(path).expanduser().resolve() if path is not None else self.json_path
+        JsonKGBackend(target).save(self.to_payload())
+        return target
 
     def export_dot(self, path: str | Path | None = None) -> str | Path:
         """Export the graph as Graphviz DOT."""

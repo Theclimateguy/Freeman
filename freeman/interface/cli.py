@@ -21,6 +21,7 @@ from freeman.interface.factory import (
     build_vectorstore as _shared_build_vectorstore,
     resolve_event_log_path as _shared_event_log_path,
     resolve_memory_json_path as _shared_memory_json_path,
+    resolve_memory_sqlite_path as _shared_memory_sqlite_path,
     resolve_path as _shared_resolve_path,
     resolve_runtime_path as _shared_runtime_path,
 )
@@ -36,6 +37,8 @@ from freeman.memory.reconciler import Reconciler
 from freeman.memory.sessionlog import SessionLog
 from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
+from freeman.runtime.health import health_from_config
+from freeman.runtime.metrics import metrics_from_config
 from freeman.runtime.queryengine import RuntimeAnswerEngine, RuntimeQueryEngine, load_runtime_artifacts
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -80,8 +83,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "seed": 42,
     },
     "memory": {
-        "backend": "networkx-json",
+        "backend": "json",
         "json_path": "./data/kg_state.json",
+        "sqlite_path": "./data/kg.db",
         "vector_store": {
             "enabled": False,
             "backend": "chroma",
@@ -223,6 +227,10 @@ def _memory_json_path(config: dict[str, Any], *, config_path: Path) -> Path:
     return _shared_memory_json_path(config, config_path=config_path)
 
 
+def _memory_sqlite_path(config: dict[str, Any], *, config_path: Path) -> Path:
+    return _shared_memory_sqlite_path(config, config_path=config_path)
+
+
 def _runtime_path(config: dict[str, Any], *, config_path: Path) -> Path:
     return _shared_runtime_path(config, config_path=config_path)
 
@@ -263,7 +271,14 @@ def _bootstrap_storage(config: dict[str, Any], *, config_path: Path) -> dict[str
     """Create the empty KG and storage directories for a fresh agent."""
 
     memory_cfg = config.get("memory", {})
-    kg_path = _memory_json_path(config, config_path=config_path)
+    backend_name = str(memory_cfg.get("backend", "json") or "json").strip().lower()
+    if backend_name == "networkx-json":
+        backend_name = "json"
+    kg_path = (
+        _memory_sqlite_path(config, config_path=config_path)
+        if backend_name == "sqlite"
+        else _memory_json_path(config, config_path=config_path)
+    )
     session_log_path = _resolve_path(config_path.parent, memory_cfg.get("session_log_path"), "./data/sessions/")
     vector_cfg = memory_cfg.get("vector_store", {})
     vector_path = _resolve_path(config_path.parent, vector_cfg.get("path"), "./data/chroma_db")
@@ -276,7 +291,13 @@ def _bootstrap_storage(config: dict[str, Any], *, config_path: Path) -> dict[str
     }
     session_log_path.mkdir(parents=True, exist_ok=True)
     if not kg_path.exists():
-        knowledge_graph = KnowledgeGraph(json_path=kg_path, auto_load=False, auto_save=False)
+        knowledge_graph = KnowledgeGraph(
+            json_path=_memory_json_path(config, config_path=config_path),
+            sqlite_path=_memory_sqlite_path(config, config_path=config_path),
+            backend_name=backend_name,
+            auto_load=False,
+            auto_save=False,
+        )
         knowledge_graph.save()
         created["created"].append(str(kg_path))
     if vector_cfg.get("enabled", False):
@@ -506,6 +527,12 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status")
     _add_config_option(status_parser)
 
+    health_parser = subparsers.add_parser("health")
+    _add_config_option(health_parser)
+
+    metrics_parser = subparsers.add_parser("metrics")
+    _add_config_option(metrics_parser)
+
     query_parser = subparsers.add_parser("query")
     _add_config_option(query_parser)
     query_parser.add_argument("--text")
@@ -600,6 +627,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = _load_config(config_path)
+    if args.command == "health":
+        _print_json(health_from_config(config_path).to_dict())
+        return 0
+    if args.command == "metrics":
+        sys.stdout.write(metrics_from_config(config_path))
+        return 0
+
     storage = _bootstrap_storage(config, config_path=config_path)
     vectorstore = _build_vectorstore(config, config_path=config_path)
     needs_embeddings = (

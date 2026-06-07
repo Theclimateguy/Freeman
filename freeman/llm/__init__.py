@@ -1,6 +1,7 @@
 """LLM orchestration helpers for Freeman."""
 
 from freeman.llm.adapter import DeterministicEmbeddingAdapter, EmbeddingAdapter, HashingEmbeddingAdapter
+from freeman.llm.circuit_breaker import CircuitBreaker, CircuitBreakerChatClient, CircuitOpenError, wrap_chat_client
 from freeman.llm.deepseek import DeepSeekChatClient
 from freeman.llm.explanation_renderer import ExplanationRenderer
 from freeman.llm.identity_narrator import IdentityNarrator
@@ -9,6 +10,9 @@ from freeman.llm.openai import OpenAIChatClient, OpenAIEmbeddingClient
 
 __all__ = [
     "DeepSeekChatClient",
+    "CircuitBreaker",
+    "CircuitBreakerChatClient",
+    "CircuitOpenError",
     "DeterministicEmbeddingAdapter",
     "EmbeddingAdapter",
     "ExplanationRenderer",
@@ -21,6 +25,7 @@ __all__ = [
     "OllamaEmbeddingClient",
     "OpenAIEmbeddingClient",
     "DeepSeekFreemanOrchestrator",
+    "wrap_chat_client",
 ]
 
 

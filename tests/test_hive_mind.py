@@ -387,6 +387,32 @@ def test_hive_runtime_respects_role_revisit_limit(tmp_path) -> None:
     assert report.skipped["role_revisit_limit"] >= 1
 
 
+def test_hive_runtime_graceful_stop_checkpoints_partial_run(tmp_path) -> None:
+    kg = KnowledgeGraph(json_path=tmp_path / "kg.json", auto_load=False, auto_save=True)
+    kg.add_node(KGNode(id="claim:raw", label="Raw claim", content="Unprocessed external signal.", confidence=0.8))
+    runtime = HiveMindRuntime(
+        state=_state(kg),
+        knowledge_graph=kg,
+        runtime_path=tmp_path,
+        config=HiveRuntimeConfig(runtime_id="test-hive-stop", llm_enabled=False),
+    )
+    original_process = runtime._process_node
+
+    def _stop_after_first(role, node):  # noqa: ANN001
+        action = original_process(role, node)
+        runtime.request_stop()
+        return action
+
+    runtime._process_node = _stop_after_first  # type: ignore[method-assign]
+
+    report = runtime.run(cycles=5)
+
+    assert report.cycles == 1
+    assert len(report.actions) == 1
+    assert runtime.stop_requested is True
+    assert (tmp_path / "hive_checkpoint.json").exists()
+
+
 def test_hive_runtime_uses_role_scoped_llm_when_enabled(tmp_path) -> None:
     class FakeChatClient:
         model = "fake-qwen"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from freeman.realworld.manifold import ManifoldBacktestResult, MarketFeatures
-from freeman.realworld.test_a_experiment import filter_test_a_rows, load_market_ids
+from freeman.realworld.manifold_experiment import filter_test_a_rows, load_market_ids
 
 
 def _result(*, market_id: str, edge: float | None, article_count: int, with_news_brier: float | None) -> ManifoldBacktestResult:

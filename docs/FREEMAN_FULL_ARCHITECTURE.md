@@ -1,6 +1,6 @@
 # Freeman: полная архитектура агентно-симуляционной системы
 
-> Срез построен по текущему рабочему дереву ветки `main` на `2026-06-01` для релиза `3.3.1`. Документ описывает реализованное поведение кода, включая hive runtime, CLI, MCP/tools, LLM-bootstrap, симулятор, память, consciousness layer, query/what-if surfaces, геослой и fallback-механизмы.
+> Срез построен по текущему рабочему дереву ветки `main` на `2026-06-07` для релиза `3.4.0`. Документ описывает реализованное поведение кода, включая hive runtime, CLI, MCP/tools, LLM-bootstrap, симулятор, память, consciousness layer, query/what-if surfaces, геослой и fallback-механизмы.
 
 > Единый интерактивный 3D-визуал архитектуры: [FREEMAN_ARCHITECTURE_3D.html](FREEMAN_ARCHITECTURE_3D.html).
 

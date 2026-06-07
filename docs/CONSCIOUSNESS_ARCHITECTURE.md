@@ -1,7 +1,7 @@
 # Consciousness Architecture for Freeman
 
 This document describes the deterministic consciousness layer used on `main` in
-Freeman `3.3.1`: `SelfModelGraph`, `ConsciousState`, `ConsciousnessEngine`,
+Freeman `3.4.0`: `SelfModelGraph`, `ConsciousState`, `ConsciousnessEngine`,
 `IdleScheduler`, `IdentityNarrator`, `ExplanationRenderer`, and their
 persistence hooks.
 

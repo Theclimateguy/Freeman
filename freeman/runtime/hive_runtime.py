@@ -6,9 +6,11 @@ import argparse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
+import signal
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
@@ -32,6 +34,8 @@ from freeman.runtime.checkpoint import CheckpointManager
 from freeman.runtime.event_log import EventLog
 from freeman.runtime.lock_backend import FileSystemLockBackend, InMemoryLockBackend, RedisLockBackend
 from freeman.utils import deep_copy_jsonable
+
+LOGGER = logging.getLogger("freeman.runtime.hive")
 
 HIVE_ROLE_ORDER: tuple[AgentRole, ...] = ("ingestor", "repairer", "planner", "narrator", "verifier")
 ROLE_OUTPUT_TRAIL: dict[AgentRole, TrailType] = {
@@ -339,18 +343,28 @@ class HiveMindRuntime:
         self.checkpoint_path = Path(checkpoint_path or self.runtime_path / "hive_checkpoint.json").resolve()
         self.event_log = event_log or EventLog(self.runtime_path / "hive_event_log.jsonl")
         self._skipped: dict[str, int] = {}
+        self.stop_requested = False
+
+    def request_stop(self) -> None:
+        """Ask the runtime to stop after the current action/cycle boundary."""
+
+        self.stop_requested = True
 
     def run(self, *, cycles: int = 1) -> HiveRuntimeReport:
         """Run one or more deterministic role-dispatch cycles."""
 
         actions: list[HiveAction] = []
         cycles = max(int(cycles), 0)
+        cycles_completed = 0
         for _ in range(cycles):
+            if self.stop_requested:
+                break
             actions.extend(self.run_cycle(remaining_actions=self.config.max_actions_per_cycle))
+            cycles_completed += 1
         self._checkpoint()
         return HiveRuntimeReport(
             runtime_id=self.config.runtime_id,
-            cycles=cycles,
+            cycles=cycles_completed,
             actions=actions,
             skipped=dict(self._skipped),
             checkpoint_path=str(self.checkpoint_path),
@@ -366,10 +380,14 @@ class HiveMindRuntime:
         max_actions = self.config.max_actions_per_cycle if remaining_actions is None else max(int(remaining_actions), 0)
         actions: list[HiveAction] = []
         for role in self.config.role_order:
+            if self.stop_requested:
+                break
             if len(actions) >= max_actions:
                 break
             frontier = self.frontier_for_role(role)
             for node in frontier:
+                if self.stop_requested:
+                    break
                 if len(actions) >= max_actions:
                     break
                 action = self._process_node(role, node)
@@ -717,6 +735,24 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _install_stop_handlers(runtime: HiveMindRuntime) -> tuple[Any, Any]:
+    def _request_stop(signum, frame):  # noqa: ANN001
+        del frame
+        LOGGER.info("Signal %s received, finishing current hive action/cycle", signum)
+        runtime.request_stop()
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+    return previous_sigint, previous_sigterm
+
+
+def _restore_stop_handlers(previous_sigint: Any, previous_sigterm: Any) -> None:
+    signal.signal(signal.SIGINT, previous_sigint)
+    signal.signal(signal.SIGTERM, previous_sigterm)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -735,7 +771,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             llm_temperature=runtime.config.llm_temperature,
             llm_max_tokens=runtime.config.llm_max_tokens,
         )
-    report = runtime.run(cycles=args.cycles)
+    previous_sigint, previous_sigterm = _install_stop_handlers(runtime)
+    try:
+        report = runtime.run(cycles=args.cycles)
+    finally:
+        _restore_stop_handlers(previous_sigint, previous_sigterm)
     print(json.dumps(report.snapshot(), indent=2, sort_keys=True, ensure_ascii=False))
     return 0
 
